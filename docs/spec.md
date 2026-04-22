@@ -10,6 +10,8 @@ A personal TypeScript CLI that turns Linear issue/project edits into a local pul
 
 One sentence: stateless CLI (Bun runtime) → `@linear/sdk` → markdown + YAML cache under `~/.leebop/cache/<repo-hash>/`. No daemon, no webhooks, no MCP server. Pull is on-demand; CAS via `updatedAt` catches races at push time.
 
+**Core assumption:** the calling agent has filesystem edit primitives (Read/Write/Edit). The whole design rests on materializing Linear state as files so the agent uses its existing text-editing vocabulary instead of a Linear-specific tool surface. If the target agent class is tool-call-only (no filesystem), the shape changes — most likely a thin MCP server wrapping the same verbs and returning content inline. Today (Claude Code and similar coding agents) this assumption holds cleanly; name it explicitly so the condition under which leebop's shape would need to change is visible. See §10.8 for the JSON-output escape hatch that partially covers tool-call-only callers.
+
 ## 2. Motivation
 
 Recent bulk-edit session surfaced during project planning/outlining when agents drive `@schpet/linear-cli` directly:
@@ -233,7 +235,7 @@ Resolution: detect `cwd` → walk up for git root → look up by repo path → f
 
 ## 8. Commands
 
-All commands respect `--team <KEY>` (default from config) and `--verbose`.
+All commands respect `--team <KEY>` (default from config), `--verbose`, and `--json` (structured output — see §10.8).
 
 ### 8.1 `leebop pull [IDS...] [--project NAME] [--project-id UUID] [--refresh]`
 Fetch entities into cache; write `description.md` + `metadata.yaml` atomically (temp file + rename).
@@ -390,9 +392,13 @@ All writes go via temp-file + `rename`. No partial writes visible to a reader.
 
 ### 10.7 CAS edge cases
 - `updatedAt` bumps on any field edit → false-positive conflicts possible if someone edits an unrelated field between pull and push. Accepted — safer to over-refuse than clobber.
+- CAS is **entity-level, not field-level**. Linear's API does not expose per-field version tokens, so there's no way to say "only abort if *this* field changed remotely." Over-refusal is the safe failure mode; tighten if/when Linear ships per-field versioning.
 - `--force` is the escape hatch.
 
-### 10.8 What NOT to build
+### 10.8 JSON output mode
+Every read command (`pull` summary, `status`, `diff`) accepts `--json` for structured output. Default is human-readable; `--json` emits a stable schema suitable for programmatic composition — other tools, scripts, or tool-call-only agents that can't round-trip through the filesystem. Write commands (`push`) respect `--json` by emitting per-entity result objects in place of the human summary. Keep the schema narrow and versioned (`{ "schema_version": 1, ... }`) — stability matters more than richness.
+
+### 10.9 What NOT to build
 - No cache-format schema migrations. If format changes, nuke cache and re-pull.
 - No offline queue. Push failure = re-run.
 - No watch mode / autopush. Explicit action only.
@@ -403,7 +409,7 @@ All writes go via temp-file + `rename`. No partial writes visible to a reader.
 - **Comment write-path** — commenting from local files feels awkward; `linear issue comment add` is fine for now. Add if repeatedly useful.
 - **Slash commands** — one-liners under `~/.claude/commands/` (`/leebop-pull`, `/leebop-push`, `/leebop-lint`). Add after CLI interface settles.
 - **Git pre-commit hook** for leebop's own repo — dogfood the linter on its own fixtures.
-- **Issue templates** for new-issue creation.
+- **Bulk issue creation (`leebop new`)** — closes the "new issue" side of the workflow (edit side is covered by pull/push). `leebop new --from template.md --count N` or `leebop new --from issues.yaml` for batch import. Reuses the same markdown + YAML file format as the cache so templates can be drafted and reviewed before push. Deferred to Phase 4+.
 
 ## 12. Open questions
 

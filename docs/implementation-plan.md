@@ -55,6 +55,7 @@ Ship-blocker. Issues only, no projects, no linter.
 - `leebop pull` — single, list, range (`TEAM-101..TEAM-109`)
 - `leebop push` — with `--dry-run`, `--force`, CAS via `updatedAt`
 - `leebop status`
+- `--json` flag on read commands (`pull` summary, `status`) — structured output with `schema_version: 1`; retrofitting later is uglier than building in
 
 ### Build order (strict)
 1. `config.ts` + `sdk.ts` + `cache.ts` — foundations
@@ -114,7 +115,8 @@ Ship-blocker. Issues only, no projects, no linter.
 
 ## Phase 4 — Polish (optional)
 
-- [ ] `leebop diff <ID>` — unified diff vs live remote
+- [ ] `leebop diff <ID>` — unified diff vs live remote (with `--json` output)
+- [ ] `leebop new --from <template|yaml>` — template-driven issue creation (bulk and single), reusing the cache file format
 - [ ] Slash commands in `~/.claude/commands/`: `/leebop-pull`, `/leebop-push`, `/leebop-lint`
 - [ ] `SKILL.md` at `~/.claude/skills/leebop/SKILL.md`
 - [ ] Short-alias CLIs (`lp pull` or `leebop-pull` symlinks) if ergonomics demand
