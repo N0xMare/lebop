@@ -1,7 +1,7 @@
 # leebop — spec
 
 **Status:** design, pre-implementation
-**Kind:** personal tool
+**Kind:** dev tool for agentic linear users
 **Layout:** source lives in this repo; runtime state in `~/.leebop/`
 
 ## 1. What this is
@@ -12,7 +12,7 @@ One sentence: stateless CLI (Bun runtime) → `@linear/sdk` → markdown + YAML 
 
 ## 2. Motivation
 
-A recent bulk-edit session surfaced concrete pain when agents drive `@schpet/linear-cli` directly:
+Recent bulk-edit session surfaced during project planning/outlining when agents drive `@schpet/linear-cli` directly:
 
 | Pain | Cost |
 |---|---|
