@@ -15,8 +15,10 @@ import { registerSet } from "./commands/set.ts";
 import { registerShow } from "./commands/show.ts";
 import { registerStatus } from "./commands/status.ts";
 import { registerTeams } from "./commands/teams.ts";
+import { preprocessSetArgv } from "./lib/argvPrep.ts";
 
-export async function run(argv: string[]): Promise<void> {
+export async function run(rawArgv: string[]): Promise<void> {
+  const argv = preprocessSetArgv(rawArgv);
   const program = new Command();
 
   program
