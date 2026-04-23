@@ -1,151 +1,270 @@
 # leebop
 
-Agentic Linear CLI. Pull → edit → push loop for bulk changes, plus single-shot verbs (`comment`, `set`), discovery (`list`, `projects`, `teams`), and a GraphQL escape hatch (`raw`). Designed so coding agents can drive Linear as efficiently as they drive their filesystem.
+**Agentic Linear CLI.** Read, write, and plan Linear projects from your shell or an AI agent, without leaving your editor. Treats Linear issues as markdown files you can edit, diff, and apply — the same way you already work with code.
 
-Think: git, for Linear.
+Two shapes:
 
-## Install
+- **Ad-hoc ops** — `list`, `show`, `set`, `comment`, `new`, `archive`, `pull` / `edit` / `push`, `diff`, `raw` GraphQL escape hatch.
+- **Declarative planning** — author a project + its issues + their relationships as a directory of markdown files, then `leebop plan apply` realizes the whole graph in Linear in one idempotent pass.
 
-### Prerequisites
+Think: `git`, but for Linear.
 
-- [Bun](https://bun.sh) `>= 1.1` — `curl -fsSL https://bun.sh/install | bash`
-- A Linear personal API key (create at **Settings → API** in Linear)
+---
 
-### From this repo
+## Quick start
 
 ```sh
+# 1. Install Bun if you don't have it
+curl -fsSL https://bun.sh/install | bash
+
+# 2. Clone + install leebop
 git clone git@github.com:N0xMare/leebop.git
 cd leebop
 bun install
-bun link    # registers `leebop` under Bun's global bin (~/.bun/bin)
+bun link
+ln -sf "$HOME/.bun/bin/leebop" /opt/homebrew/bin/leebop   # macOS; /usr/local/bin on Linux
+
+# 3. Authenticate with a Linear Personal API Key (Settings → API in Linear)
+leebop auth login
+
+# 4. Try it
+leebop teams
+leebop list --assignee me --state-type started --limit 10
 ```
 
-### Make `leebop` discoverable on PATH
+Per-user config lives at `~/.leebop/config.yaml`; auth at `~/.leebop/auth.json` (mode 0600); local cache at `~/.leebop/cache/<repo-hash>/`. **Your repo working tree stays pristine — all runtime state is in `~/.leebop/`.**
 
-`bun link` puts the binary in `~/.bun/bin`, which may not be on your shell's PATH (and, crucially, isn't on the PATH inherited by subprocesses spawned by tools like Claude Code). Two options:
+---
 
-**Option A — shell PATH (interactive terminals only):**
-```sh
-echo 'export PATH="$HOME/.bun/bin:$PATH"' >> ~/.zprofile   # or ~/.bashrc / ~/.profile
-```
-Then restart the shell (and any parent tools, e.g. Claude Code, so they inherit the new PATH).
+## Mental model: pick the right verb for what you want to do
 
-**Option B — symlink into a system-wide PATH dir (recommended for agent use):**
-```sh
-ln -sf "$HOME/.bun/bin/leebop" /opt/homebrew/bin/leebop   # macOS w/ Homebrew
-# or on Linux:
-# sudo ln -sf "$HOME/.bun/bin/leebop" /usr/local/bin/leebop
-```
-This makes `leebop` immediately visible to any process whose PATH already includes `/opt/homebrew/bin` or `/usr/local/bin` — which is basically everything, including agents started before you edited your shell config.
-
-### Authenticate
+### Discover
 
 ```sh
-leebop auth login                # paste a PAK interactively (input hidden)
-# or
-leebop auth login --from-schpet  # import from @schpet/linear-cli if installed
-# or
-leebop auth login --token-file ./my-pak.txt
+leebop teams
+leebop projects [--team KEY] [--state STATE]
+leebop list --assignee me --state-type started
+leebop list --project "Relayer Hardening" --label type:feature
 ```
 
-Credentials land at `~/.leebop/auth.json` (mode 0600).
+### Read one issue
 
-### Wire up Claude Code integration (skill + slash commands)
+```sh
+leebop show UE-321                 # print inline, no cache write — the right "just show me this"
+leebop show UE-321 --json          # structured output for programmatic use
+```
 
-leebop ships its agent-facing assets — `SKILL.md` plus three slash commands (`/leebop-pull`, `/leebop-push`, `/leebop-lint`) — under `claude/` in this repo. Run the installer once to symlink them into `~/.claude/`:
+### Edit one field on one issue (fast, no cache round-trip)
+
+```sh
+leebop set state UE-321 "In Progress"
+leebop set priority UE-321 urgent                 # name or 0..4
+leebop set labels UE-321 +urgent -area:backend    # delta syntax
+leebop set assignee UE-321 @me
+leebop set links UE-321 +blocks:UE-322 +related:UE-323   # 5 link kinds
+leebop comment UE-321 --body "LGTM"
+```
+
+### Edit a body (multi-line description / project content)
+
+```sh
+leebop pull UE-321..UE-329                         # or space-separated list, or single id
+# ... edit files under ~/.leebop/cache/<hash>/issues/UE-321/description.md ...
+leebop status                                      # git-like: see what's modified
+leebop push --dry-run                              # preview mutations
+leebop push                                        # apply (CAS-protected; --force to bypass)
+```
+
+`leebop push` runs the linter first — warnings print to stderr, `--strict` blocks. After success the cache stays clean immediately, no `--refresh` needed.
+
+### Create or archive issues ad-hoc
+
+```sh
+leebop new --title "Chain-aware gas pricing" \
+           --project "Relayer Hardening" \
+           --state Backlog \
+           --priority high \
+           --label type:feature \
+           --description "Use eth_feeHistory to size initial bids."
+
+leebop archive UE-321 UE-322                       # reversible from the Linear UI
+```
+
+### Plan a whole initiative declaratively (the hero workflow)
+
+Author the plan in markdown on disk:
+
+```
+plans/rpc-failover/
+├── _project.md            # name / team / description / body
+├── epic.md                # top-level issue (can have sub-issues via `parent:`)
+├── design.md              # has `parent: epic` → renders as a sub-issue in Linear
+├── impl.md                # same
+└── bench.md               # links, labels, priorities, estimates
+```
+
+Each `*.md` file has YAML frontmatter for structured fields and markdown body for the description:
+
+```markdown
+---
+title: "Design failover priority algorithm"
+state: Backlog
+priority: high
+estimate: 3                # points (optional)
+labels: [type:feature]
+parent: epic               # slug of another file, or bare UE-XXX
+blocks: [impl]             # local slug OR external UE-XXX
+related: [UE-250]
+---
+
+Approach doc. Multi-RPC failover selection rules, …
+```
+
+Then realize it in Linear:
+
+```sh
+leebop plan validate plans/rpc-failover          # parse + resolve refs; no Linear writes
+leebop plan lint     plans/rpc-failover --fix    # catch markdown-renderer gotchas first
+leebop plan apply    plans/rpc-failover --dry-run   # preview
+leebop plan apply    plans/rpc-failover             # create project + issues + links; writes linear_id back
+leebop plan diff     plans/rpc-failover             # local-vs-remote drift after changes
+leebop plan pull     plans/rpc-failover --force     # overwrite local with remote
+leebop plan pull     plans/rpc-failover --include-new  # also import remote-only issues
+```
+
+Re-apply is idempotent — unchanged files stay unchanged. Parents get created before children (topological). Slug links auto-rewrite to `UE-XXX` once issues exist. Relations (`blocks` / `blocked_by` / `related` / `duplicates` / `duplicated_by`) honor Linear's single-record-per-pair semantics.
+
+See [`docs/plan-spec.md`](docs/plan-spec.md) for the full frontmatter schema, apply semantics, and edge cases.
+
+### Diff + escape hatch
+
+```sh
+leebop diff UE-321                                  # unified diff of local cache vs live remote
+leebop raw 'query { viewer { id email } }'          # any GraphQL leebop doesn't wrap
+echo '{"id":"UE-321"}' | leebop raw 'query($id:String!){issue(id:$id){title}}' --variables-json -
+```
+
+### Lint local markdown against Linear's renderer
+
+```sh
+leebop lint                                       # scans ~/.leebop/cache/<hash>/ by default
+leebop lint path/to/some.md --fix                 # explicit paths; --fix applies safe rewrites
+leebop lint --strict                              # exit non-zero on warnings (pre-commit gate)
+```
+
+Rules catch Linear's markdown landmines (table-cell `1.` breaking rows, `text\n---` silently becoming a setext H2, etc.) plus optional repo-scoped rules (bracketed issue refs, path rewrites, custom regex formats) driven by per-repo config.
+
+---
+
+## Team collaboration — important hazard
+
+Plan files are git-tracked **source of truth**, but `linear_id:` is written back into each file by `plan apply`. If two teammates both run `plan apply` on the same plan directory **before the writeback commits land in git**, you get **duplicate issues in Linear** (each apply creates fresh ones with no shared identifier).
+
+**Workflow for shared plans:**
+
+1. One person ("first-applier") runs `leebop plan apply <dir>`.
+2. **Immediately** commit the writeback (`git add <plan-dir>` → commit → push).
+3. Everyone else pulls that commit **before** touching the plan.
+4. From then on, `apply` / `diff` / `pull` by anyone on the team targets the same Linear entities.
+
+If two people already applied in parallel: archive one set via `leebop archive <ids...>` + `leebop raw projectArchive`, then rewrite the plan files to reference the keepers' `linear_id:` values.
+
+---
+
+## Configuration
+
+`~/.leebop/config.yaml` is optional — `leebop` works with just auth. Config extends behavior per-repo:
+
+```yaml
+default_team: UE                               # used when no per-repo override matches
+workspaces:
+  UE:
+    url_prefix: https://linear.app/unlink-xyz  # needed by L004 (bracket issue refs)
+
+repos:
+  /Users/you/dev/some-repo:                    # absolute git-root path
+    team: UE                                   # team override for this repo
+    conventions:
+      bracket_issue_refs: true                 # L004 linter rule
+    path_rewrites:                             # R001 linter rule
+      - { from: "crates/", to: "protocol/backend/crates/" }
+    required_formats:                          # R002 linter rule — regex-based
+      - { pattern: '\bpr-(\d+)\b', suggest: '[#$1]', message: "Use [#N] form" }
+```
+
+Team metadata is cached at `~/.leebop/cache/<hash>/_team/<TEAM>.yaml` with a 1h TTL; auto-refreshes on name-resolution misses (e.g., a project you just created).
+
+---
+
+## Claude Code integration
+
+leebop ships a user-level **skill** plus three **slash commands** that teach Claude Code agents when and how to use the tool:
+
+| File | Role |
+|---|---|
+| `claude/skills/leebop/SKILL.md` | Invocation guide: verb-selection table, pull→edit→push loop, plan workflow, team-collaboration hazard, Linear quirks |
+| `claude/commands/leebop-pull.md` | `/leebop-pull` slash command |
+| `claude/commands/leebop-push.md` | `/leebop-push` slash command |
+| `claude/commands/leebop-lint.md` | `/leebop-lint` slash command |
+
+Install via symlinks (so `git pull` stays in sync with no re-install):
 
 ```sh
 ./bin/install-claude
 ```
 
-The script creates symlinks (not copies), so any update to `claude/skills/leebop/SKILL.md` or `claude/commands/leebop-*.md` in this repo is picked up by Claude Code immediately on the next session — no re-install after `git pull`. Restart Claude Code (or open a new session) the first time to load the skill into the matcher.
+Restart Claude Code or open a new session to pick up the skill.
 
-## How production CLIs handle install/PATH
+---
 
-leebop's install story (`bun link` + explicit symlink or PATH edit) is deliberately minimal for a personal tool. For reference, here's how the ecosystem solves "make this binary discoverable everywhere" at different scales:
+## Install details (PATH)
 
-| Pattern | Examples | How it works | Trade-offs |
-|---|---|---|---|
-| **Language package manager, global install** | `npm install -g <pkg>`, `pnpm add -g`, `cargo install`, `go install` | Each package manager owns a global bin dir that its installer added to PATH. Binary symlinks into that dir. | Zero config if user already uses the PM. Fails when the global bin dir isn't on subprocess PATH (exact issue we hit). |
-| **Homebrew formula / tap** | `brew install linear` (@schpet/linear-cli), `brew install gh`, `brew install ripgrep` | Formula managed centrally (homebrew-core) or via a user's tap. `brew link` creates the symlink into `/opt/homebrew/bin` (which is definitively on PATH). | Best UX on macOS. Requires maintaining a formula + versioning. Homebrew's own `/opt/homebrew/bin` is universally on PATH, so subprocess discoverability is free. |
-| **Install script** | `curl -fsSL bun.sh/install \| bash`, rustup, nvm, Deno, pnpm, fnm | Script downloads the right binary for the host arch, places it in `$HOME/.local/bin` or similar, edits shell rc files to add to PATH. | Full control over install UX. Can prompt, detect shell, offer both system-wide and user-only modes. Not self-updating unless script does it. |
-| **Standalone single-binary release** | Most Go/Rust CLIs on GitHub Releases | User downloads, `chmod +x`, moves to a PATH dir themselves. Often paired with an install script. | Simplest for maintainers. Requires users to know what PATH is. |
-| **Platform package managers** | `apt install`, `dnf install`, `winget install`, `scoop install` | Distro/platform-managed. Lands in conventional system PATH locations. | Best UX when available. High maintenance overhead for maintainers (packaging per-distro). |
+`bun link` places the binary at `~/.bun/bin/leebop`, which is only on the PATH of interactive shells — **not** subprocesses spawned by agents like Claude Code. Two options:
 
-### What leebop does today
-
-Today's install = `bun link` + manual symlink (Option B above). It's the minimum viable install for a personal tool that's not yet distributed via Homebrew or a script.
-
-### What leebop could do next
-
-In rough order of effort:
-
-1. **Install script** (`curl -fsSL .../install.sh | bash`): detects bun, runs `bun install`/`bun link`, creates the `/opt/homebrew/bin` or `/usr/local/bin` symlink, optionally edits shell rc. ~50 lines of bash. Covers the "one-liner" use case.
-2. **Homebrew tap** (`brew tap cmace/leebop && brew install leebop`): requires a formula repo and tagged releases. Best UX on macOS. Moderate maintenance.
-3. **`bun install -g` via npm registry**: publishing to npm would let users `bun install -g leebop`. Easy, but relies on Bun (or npm) global-bin-on-PATH — which was the problem for us.
-4. **Single-binary release via `bun build --compile`**: ship a native executable per arch. Removes the Bun runtime dependency. Useful if leebop ever needs to run in environments where Bun isn't installed.
-
-Deferred until there's a second user.
-
-## Usage
-
+**Option A — symlink into a universally-on-PATH directory (recommended):**
 ```sh
-# discovery
-leebop teams
-leebop projects [--team KEY] [--state STATE]
-leebop list --assignee me --state-type started --limit 20
-
-# read a single issue inline (no cache write)
-leebop show UE-321
-
-# bulk pull → edit → push
-leebop pull UE-321..UE-329                    # range
-leebop pull --project "Relay Worker Refactor" # project + children
-leebop pull UE-321 --to ./work/                # export to a custom dir
-# ... edit the markdown files under ~/.leebop/cache/<hash>/issues/... ...
-leebop status                                  # see what's modified
-leebop push --dry-run                          # preview mutations
-leebop push                                    # apply
-
-# single-shot edits (no cache round-trip)
-leebop comment UE-321 --body "LGTM"
-leebop set state UE-321 "In Progress"
-leebop set priority UE-321 urgent
-leebop set labels UE-321 +urgent -area:backend      # delta syntax
-leebop set assignee UE-321 @me
-
-# GraphQL escape hatch — anything leebop doesn't wrap directly
-leebop raw 'query { viewer { id email } }'
-echo '{"id":"UE-321"}' | leebop raw 'query($id:String!){issue(id:$id){title}}' --variables-json -
-
-# declarative: author a project + issues + links as a dir of markdown files,
-# then realize the whole graph in Linear in one pass
-leebop plan validate path/to/plan-dir
-leebop plan lint     path/to/plan-dir --fix             # pre-apply markdown cleanup
-leebop plan apply    path/to/plan-dir --dry-run         # preview
-leebop plan apply    path/to/plan-dir                   # create / update idempotently
-leebop plan diff     path/to/plan-dir                   # local-vs-remote drift (incl. relations)
-leebop plan pull     path/to/plan-dir --include-new     # overwrite local with remote; import orphans
-
-# single-issue diff vs live remote (like git diff)
-leebop diff UE-321
+ln -sf "$HOME/.bun/bin/leebop" /opt/homebrew/bin/leebop   # macOS w/ Homebrew
+# or on Linux:
+# sudo ln -sf "$HOME/.bun/bin/leebop" /usr/local/bin/leebop
 ```
 
-See `leebop <command> --help` for per-verb details, and `docs/plan-spec.md` for the plan format + apply semantics.
+**Option B — shell-PATH only (interactive terminals only):**
+```sh
+echo 'export PATH="$HOME/.bun/bin:$PATH"' >> ~/.zprofile
+# then restart your shell and any agent parent processes
+```
 
-## Why not just use `@schpet/linear-cli`?
+Option A is required if you want agents started BEFORE you edited your shell config to find `leebop`.
 
-leebop and `@schpet/linear-cli` are complementary:
+---
 
-- **Single-issue interactive use** — `@schpet/linear-cli` is great. Keep using it.
-- **Bulk / agentic use** — leebop. Batched reads, local edit, CAS-protected push, markdown-quirk linting (Phase 3), typed GraphQL escape hatch.
+## Why not just `@schpet/linear-cli`?
 
-See `docs/spec.md` for the full motivation, design decisions, and alternatives considered (local daemon, MCP server, webhook sync — all rejected for personal-scale use with reasoning).
+Complementary. They solve different problems:
+
+| | `@schpet/linear-cli` (`linear`) | `leebop` |
+|---|---|---|
+| Shape | Single-issue interactive CLI | Bulk + declarative + agentic |
+| Input | Flags for each field | Frontmatter + markdown files |
+| Round-trip | Per-command | Pull-edit-push, plan-diff-pull |
+| Mutation batching | Sequential CLI invocations | One call per plan or one multi-alias push |
+| CAS / staleness | None | `updatedAt` check; `--force` to bypass |
+| Markdown lint | None | 8 rules + repo-scoped config |
+| Declarative planning | Not a goal | Hero feature |
+
+Use schpet for interactive one-offs (`linear branch`, `linear issue start`, browser-open). Use leebop for any bulk or agent-driven work.
+
+See [`docs/spec.md`](docs/spec.md) for the full motivation, design decisions, and rejected alternatives (local daemon, MCP server, webhook sync — all rejected for personal-scale).
+
+---
 
 ## Design docs
 
-- [`docs/spec.md`](docs/spec.md) — stable design
-- [`docs/implementation-plan.md`](docs/implementation-plan.md) — living phase tracker
+- [`docs/spec.md`](docs/spec.md) — stable architecture, file formats, prior-art facts.
+- [`docs/plan-spec.md`](docs/plan-spec.md) — declarative-planning design: frontmatter schema, apply semantics, idempotency rules.
+- [`docs/implementation-plan.md`](docs/implementation-plan.md) — living phase tracker with discovered quirks and progress log.
+
+---
 
 ## License
 

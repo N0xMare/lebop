@@ -115,8 +115,7 @@ src/
     ├── planApply.ts          # plan feature: topological realizer (project+issues+links)
     ├── planDiff.ts           # plan feature: local-vs-remote drift detection (incl. relations)
     ├── planPull.ts           # plan feature: overwrite local files with remote state
-    ├── prompt.ts             # hidden-input stdin prompt for auth login
-    └── notImplemented.ts     # stub helper for unshipped verbs
+    └── prompt.ts             # hidden-input stdin prompt for auth login
 ```
 
 Cache layout (under `~/.leebop/cache/<repo-hash>/`):
