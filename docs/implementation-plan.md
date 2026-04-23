@@ -12,7 +12,7 @@ Living document. Update as phases progress, quirks are discovered, and open ques
 
 | Phase | Status | Notes |
 |---|---|---|
-| 0. Bootstrap + native auth | ⬜ | source repo scaffolded with README + docs only |
+| 0. Bootstrap + native auth | 🟢 | scaffolded, dispatcher wired, `auth login/logout/whoami` shipped |
 | 1. MVP — the full agentic read/write surface | ⬜ | bulk round-trip + single-shot + discovery + raw escape hatch |
 | 2. Projects round-trip + issue linking | ⬜ | |
 | 3. Linter + auto-fix | ⬜ | |
@@ -25,31 +25,31 @@ Living document. Update as phases progress, quirks are discovered, and open ques
 Environment, scaffolding, and the auth layer. Auth is Phase 0 because every downstream command depends on it.
 
 ### Environment
-- [ ] Confirm `bun --version` works (install from https://bun.sh if missing). Fallback: `node ≥ 20` + `tsx`.
-- [ ] Confirm user can create a Linear personal API key at Settings → API (needed to test `auth login`)
-- [ ] Confirm the target Linear team + workspace are accessible via that PAK (a `viewer { teams }` probe)
+- [x] Confirm `bun --version` works — **Bun 1.3.13** (upgraded from 0.8.1)
+- [x] Confirm user can create a Linear personal API key at Settings → API
+- [x] Confirm the target Linear team + workspace are accessible — verified via `viewer` query during `auth login`
 
 ### Scaffolding
-- [ ] `bun init` in the leebop source repo
-- [ ] Add deps per `spec.md` §10.2
-- [ ] Strict `tsconfig.json` — `"strict": true`, `"noUncheckedIndexedAccess": true`, `"module": "NodeNext"`
-- [ ] `.gitignore`: `node_modules/`, `dist/`, `*.log`, `.env*`
-- [ ] Scaffold source tree per `spec.md` §5 — `src/cli.ts`, `src/commands/*`, `src/lib/*` (stubs OK at first)
-- [ ] `bin/leebop` shim + `package.json` `"bin": { "leebop": "./bin/leebop" }`
-- [ ] `bun link` and verify `leebop --help` runs from any cwd
-- [ ] Biome config — single command to lint + format
+- [x] `bun init`
+- [x] Add deps per `spec.md` §10.2 — `@linear/sdk@82`, `yaml`, `commander`, `diff@9`, `chalk`; dev: `typescript`, `vitest`, `@biomejs/biome`
+- [x] Strict `tsconfig.json` — bun default is already `strict` + `noUncheckedIndexedAccess`; `module: Preserve` / `moduleResolution: bundler` is correct for a bun-native app (NodeNext would apply only for the Node+tsx fallback)
+- [x] `.gitignore`
+- [x] Source tree per `spec.md` §5 — `src/cli.ts` dispatcher + command registration for all verbs; Phase 1+ commands stubbed via `notImplemented()` helper so they appear in `--help`
+- [x] `bin/leebop` shim + `package.json` `"bin": { "leebop": "./bin/leebop" }`
+- [x] `bun link` — symlinked at `~/.bun/bin/leebop`. **User TODO:** add `~/.bun/bin` to `PATH` for bare-name invocation
+- [x] Biome config — `bunx biome check [--write]` lints + formats
 
 ### Auth (native PAK)
-- [ ] `src/lib/auth.ts` — PAK persistence at `~/.leebop/auth.json` (0600), load/validate/delete
-- [ ] `src/commands/auth.ts` — `login` (interactive prompt + `--from-schpet` import), `logout`, `whoami [--refresh]`
-- [ ] `src/lib/sdk.ts` — `LinearClient` backed by stored PAK; clean 401 → "run `leebop auth login`" message
+- [x] `src/lib/auth.ts` — PAK persistence at `~/.leebop/auth.json` (0600), load/validate/delete; PAK (`lin_api_`) vs OAuth-bearer discrimination via `linearClientFromToken()`
+- [x] `src/commands/auth.ts` — `login` (hidden-input prompt + `--token` / `--token-file` / `--from-schpet`), `logout`, `whoami [--refresh] [--json]`
+- [x] `src/lib/sdk.ts` — `LinearClient` backed by stored PAK; clean 401 → "run `leebop auth login`" message; `handleAuthError()` helper
 
 ### Acceptance
-- [ ] `leebop --help` prints the subcommand list from any directory
-- [ ] `leebop auth login` with a fresh PAK validates against Linear and writes `~/.leebop/auth.json` with mode 0600
-- [ ] `leebop auth whoami` prints `{email, name, id}` from cache; `--refresh` re-validates and updates
-- [ ] `leebop auth login --from-schpet` imports the schpet-stored token (skip/soft-fail if schpet not installed)
-- [ ] `leebop auth logout` removes the file; subsequent commands emit the clean "run `leebop auth login`" error
+- [x] `leebop --help` prints the subcommand list (via `~/.bun/bin/leebop` — bare `leebop` works once user adds `~/.bun/bin` to PATH)
+- [x] `leebop auth login --from-schpet` validates against Linear and writes `~/.leebop/auth.json` with mode 0600 (dir 0700)
+- [x] `leebop auth whoami` prints `{email, name, id}`; `--refresh` re-validates; `--json` emits structured output
+- [x] `leebop auth logout` removes the file; subsequent commands emit clean "run `leebop auth login`" error
+- [ ] Interactive `leebop auth login` (no flags) with a pasted PAK — code path exists and typechecks; user-verified round-trip pending
 
 ---
 
@@ -197,6 +197,7 @@ Append dated entries as work happens. Keep entries terse — link commits / PRs.
 
 - **2026-04-22** — spec + implementation plan drafted. No code.
 - **2026-04-22** — revised scope: leebop owns the full agentic Linear surface (auth, discovery, bulk round-trip, single-shot edit, GraphQL escape hatch). Native PAK auth replaces shelling out to `@schpet/linear-cli`. Phase 1 estimate bumped from ~200 → ~450 lines. Comment-read moved from Phase 2 → Phase 1 (bundled with `pull`). Issue linking added to Phase 2.
+- **2026-04-22** — Phase 0 🟢 complete. Project scaffolded on Bun 1.3.13 with `@linear/sdk@82`, strict TS, biome. CLI dispatcher + all subcommand registrations wired; unimplemented commands stubbed via `notImplemented()` so `leebop --help` already shows the full surface. Native PAK auth shipped: `auth login/logout/whoami [--refresh] [--json]`, with `--from-schpet` migration and PAK-vs-OAuth token discrimination. End-to-end verified via `--from-schpet` import against Linear; `auth.json` persisted at mode 0600 (dir 0700). Interactive PAK-paste login codepath exists but not user-verified yet.
 
 ---
 

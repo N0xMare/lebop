@@ -1,0 +1,32 @@
+{
+  "name": "leebop",
+  "version": "0.1.0",
+  "description": "Agentic Linear CLI — pull/edit/push loop for coding agents",
+  "type": "module",
+  "bin": {
+    "leebop": "./bin/leebop"
+  },
+  "scripts": {
+    "check": "biome check .",
+    "format": "biome format --write .",
+    "lint": "biome lint .",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "engines": {
+    "bun": ">=1.1.0"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^1.9.4",
+    "@types/bun": "latest",
+    "typescript": "^5.7.0",
+    "vitest": "^2.1.0"
+  },
+  "dependencies": {
+    "@linear/sdk": "^82.1.0",
+    "chalk": "^5.4.0",
+    "commander": "^12.1.0",
+    "diff": "^9.0.0",
+    "yaml": "^2.6.0"
+  }
+}

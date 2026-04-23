@@ -1,0 +1,12 @@
+node_modules/
+dist/
+*.log
+.env*
+.DS_Store
+.vscode/
+.idea/
+
+# leebop runtime state lives in ~/.leebop/, never in the repo,
+# but ignore any stray local test-state files
+auth.json
+/cache/

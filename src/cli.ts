@@ -1,0 +1,50 @@
+import chalk from "chalk";
+import { Command } from "commander";
+import { registerAuth } from "./commands/auth.ts";
+import { registerComment } from "./commands/comment.ts";
+import { registerDiff } from "./commands/diff.ts";
+import { registerLint } from "./commands/lint.ts";
+import { registerList } from "./commands/list.ts";
+import { registerProjects } from "./commands/projects.ts";
+import { registerPull } from "./commands/pull.ts";
+import { registerPush } from "./commands/push.ts";
+import { registerRaw } from "./commands/raw.ts";
+import { registerSet } from "./commands/set.ts";
+import { registerStatus } from "./commands/status.ts";
+import { registerTeams } from "./commands/teams.ts";
+
+export async function run(argv: string[]): Promise<void> {
+  const program = new Command();
+
+  program
+    .name("leebop")
+    .description("agentic Linear CLI — pull/edit/push loop for coding agents")
+    .version("0.1.0")
+    .option("--verbose", "verbose output")
+    .showHelpAfterError();
+
+  registerAuth(program);
+
+  registerList(program);
+  registerProjects(program);
+  registerTeams(program);
+
+  registerPull(program);
+  registerPush(program);
+  registerStatus(program);
+  registerDiff(program);
+  registerLint(program);
+
+  registerComment(program);
+  registerSet(program);
+
+  registerRaw(program);
+
+  try {
+    await program.parseAsync(argv);
+  } catch (err) {
+    const msg = (err as Error).message ?? String(err);
+    process.stderr.write(`${chalk.red("error:")} ${msg}\n`);
+    process.exit(1);
+  }
+}
