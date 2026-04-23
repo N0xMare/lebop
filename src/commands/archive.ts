@@ -1,5 +1,6 @@
 import chalk from "chalk";
 import type { Command } from "commander";
+import { rewriteNotFound } from "../lib/errors.ts";
 import { expandIds } from "../lib/expand.ts";
 import { linear } from "../lib/sdk.ts";
 
@@ -33,11 +34,12 @@ export function registerArchive(program: Command): void {
           await client.client.rawRequest(ARCHIVE_MUTATION, { id: issue.id });
           results.push({ identifier: ident, status: "archived" });
         } catch (err) {
-          results.push({
-            identifier: ident,
-            status: "error",
-            error: (err as Error).message,
-          });
+          const translated = rewriteNotFound(err, ident);
+          if (translated.message.startsWith("not found:")) {
+            results.push({ identifier: ident, status: "not-found" });
+          } else {
+            results.push({ identifier: ident, status: "error", error: translated.message });
+          }
         }
       }
 

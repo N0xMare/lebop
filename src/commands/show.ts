@@ -1,6 +1,7 @@
 import chalk from "chalk";
 import type { Command } from "commander";
 import { buildComments, buildIssueMetadata } from "../lib/build.ts";
+import { rewriteNotFound } from "../lib/errors.ts";
 import { type FetchedIssue, buildPullIssuesQuery } from "../lib/pullQuery.ts";
 import { linear } from "../lib/sdk.ts";
 
@@ -14,15 +15,20 @@ export function registerShow(program: Command): void {
     .option("--json", "emit structured JSON instead of formatted output")
     .action(async (id: string, opts: { comments?: boolean; json?: boolean }) => {
       const withComments = opts.comments !== false;
-      const query = buildPullIssuesQuery([id.toUpperCase()], withComments, true);
+      const upperId = id.toUpperCase();
+      const query = buildPullIssuesQuery([upperId], withComments, true);
       const client = await linear();
-      const response = (await client.client.rawRequest(query)) as {
-        data: Record<string, FetchedIssue | null>;
-      };
+      let response: { data: Record<string, FetchedIssue | null> };
+      try {
+        response = (await client.client.rawRequest(query)) as {
+          data: Record<string, FetchedIssue | null>;
+        };
+      } catch (err) {
+        throw rewriteNotFound(err, upperId);
+      }
       const node = response.data.a0;
       if (!node) {
-        process.stderr.write(`${chalk.red("not found:")} ${id}\n`);
-        process.exit(1);
+        throw new Error(`not found: ${upperId}`);
       }
 
       if (opts.json) {

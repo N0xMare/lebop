@@ -20,6 +20,7 @@ import {
 } from "../lib/cache.ts";
 import { resolveConfig } from "../lib/config.ts";
 import { diffIssueMetadata, diffProjectMetadata } from "../lib/diff.ts";
+import { rewriteNotFound } from "../lib/errors.ts";
 import { expandIds } from "../lib/expand.ts";
 import {
   type FetchedIssue,
@@ -108,16 +109,23 @@ export function registerPull(program: Command): void {
 
       if (unique.length > 0) {
         const withComments = opts.comments !== false;
-        const query = buildPullIssuesQuery(unique, withComments);
-        const response = (await client.client.rawRequest(query)) as {
-          data: Record<string, FetchedIssue | null>;
-        };
+        const { data, errors: aliasErrors } = await rawRequestTolerant<FetchedIssue>(
+          client,
+          unique,
+          (ids) => buildPullIssuesQuery(ids, withComments),
+        );
         const fetched: FetchedIssue[] = [];
         for (let i = 0; i < unique.length; i++) {
           const id = unique[i];
-          const node = response.data[`a${i}`];
+          const node = data[`a${i}`];
           if (!node) {
-            if (id) errors.push({ identifier: id, error: "not found" });
+            if (id) {
+              const aliasErr = aliasErrors.find((e) => e.path?.[0] === `a${i}`);
+              const msg = aliasErr
+                ? rewriteNotFound(new Error(aliasErr.message), id).message
+                : `not found: ${id}`;
+              errors.push({ identifier: id, error: msg });
+            }
           } else {
             fetched.push(node);
           }
@@ -299,4 +307,50 @@ async function lookupProjectId(
 
 function hasLocalChanges(metadata: IssueMetadata, description: string): boolean {
   return diffIssueMetadata(metadata, description).length > 0;
+}
+
+interface AliasError {
+  message: string;
+  path?: string[];
+}
+
+/**
+ * Linear's SDK throws and discards `data` whenever ANY alias in a multi-alias query
+ * errors — successful aliases are lost. To honour spec §8.1 ("on per-entity error,
+ * report and continue"), try the multi-alias query first (one round-trip happy path);
+ * on error, fall back to per-id parallel single-alias queries so successes survive.
+ *
+ * Returns `data` keyed by `a0..aN-1` matching `identifiers` order, plus a per-alias
+ * `errors` list (with `path: [alias]`) for any failed lookups.
+ */
+async function rawRequestTolerant<T>(
+  client: Awaited<ReturnType<typeof linear>>,
+  identifiers: string[],
+  build: (ids: string[]) => string,
+): Promise<{ data: Record<string, T | null>; errors: AliasError[] }> {
+  try {
+    const r = (await client.client.rawRequest(build(identifiers))) as {
+      data: Record<string, T | null>;
+    };
+    return { data: r.data ?? {}, errors: [] };
+  } catch (err) {
+    // Per-id fallback: each request gets its own success/failure.
+    const settled = await Promise.allSettled(
+      identifiers.map(
+        (id) => client.client.rawRequest(build([id])) as Promise<{ data: { a0: T | null } }>,
+      ),
+    );
+    const data: Record<string, T | null> = {};
+    const errors: AliasError[] = [];
+    settled.forEach((s, i) => {
+      const alias = `a${i}`;
+      if (s.status === "fulfilled") {
+        data[alias] = s.value.data?.a0 ?? null;
+      } else {
+        data[alias] = null;
+        errors.push({ path: [alias], message: (s.reason as Error).message });
+      }
+    });
+    return { data, errors };
+  }
 }

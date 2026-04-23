@@ -20,6 +20,7 @@ import {
   resolveLabelIds,
   resolvePriority,
   resolveStateId,
+  withFreshMetadataOnMiss,
 } from "../lib/resolve.ts";
 import { linear } from "../lib/sdk.ts";
 
@@ -74,13 +75,10 @@ Examples:
       const issueSummary = await client.issue(id);
       if (!issueSummary) throw new Error(`issue not found: ${id}`);
 
-      const teamMetadata = await getTeamMetadata(config.repoHash, config.team);
-      const input = await buildInput(
-        field as Exclude<SupportedField, "links">,
-        value,
-        valueArgs,
-        issueSummary,
-        teamMetadata,
+      const input = await withFreshMetadataOnMiss(
+        (o) => getTeamMetadata(config.repoHash, config.team, o),
+        (md) =>
+          buildInput(field as Exclude<SupportedField, "links">, value, valueArgs, issueSummary, md),
       );
 
       const response = (await client.client.rawRequest(ISSUE_UPDATE_MUTATION, {

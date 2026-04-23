@@ -1,12 +1,15 @@
 import chalk from "chalk";
 import type { Command } from "commander";
+import type { TeamMetadata } from "../lib/cache.ts";
 import { resolveConfig } from "../lib/config.ts";
 import {
+  ResolveError,
   getTeamMetadata,
   resolveAssigneeId,
   resolveLabelIds,
   resolvePriority,
   resolveStateId,
+  withFreshMetadataOnMiss,
 } from "../lib/resolve.ts";
 import { linear } from "../lib/sdk.ts";
 
@@ -46,16 +49,20 @@ export function registerNew(program: Command): void {
     .option("--json", "emit structured result")
     .action(async (opts: NewOpts) => {
       const config = await resolveConfig({ teamOverride: opts.team });
-      const teamMetadata = await getTeamMetadata(config.repoHash, config.team);
-
       const description = await resolveDescription(opts);
-      const labelIds = opts.label?.length ? resolveLabelIds(teamMetadata, opts.label) : undefined;
-      const stateId = opts.state ? resolveStateId(teamMetadata, opts.state) : undefined;
       const priority = opts.priority !== undefined ? resolvePriority(opts.priority) : undefined;
-      const assigneeId = opts.assignee
-        ? await resolveAssigneeId(teamMetadata, opts.assignee)
-        : undefined;
-      const projectId = opts.projectId ?? resolveProjectId(teamMetadata, opts.project);
+
+      const { teamMetadata, labelIds, stateId, assigneeId, projectId } =
+        await withFreshMetadataOnMiss(
+          (o) => getTeamMetadata(config.repoHash, config.team, o),
+          async (md: TeamMetadata) => ({
+            teamMetadata: md,
+            labelIds: opts.label?.length ? resolveLabelIds(md, opts.label) : undefined,
+            stateId: opts.state ? resolveStateId(md, opts.state) : undefined,
+            assigneeId: opts.assignee ? await resolveAssigneeId(md, opts.assignee) : undefined,
+            projectId: opts.projectId ?? resolveProjectId(md, opts.project),
+          }),
+        );
 
       const input: Record<string, unknown> = {
         teamId: teamMetadata.team_id,
@@ -114,7 +121,7 @@ function resolveProjectId(
   );
   if (!match) {
     const names = teamMetadata.projects.map((p) => `"${p.name}"`).join(", ");
-    throw new Error(`unknown project "${projectName}". available: ${names}`);
+    throw new ResolveError(`unknown project "${projectName}". available: ${names}`);
   }
   return match.id;
 }

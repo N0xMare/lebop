@@ -8,6 +8,28 @@ import { linear } from "./sdk.ts";
 
 export class ResolveError extends Error {}
 
+/**
+ * Run `use(metadata)`; if it throws ResolveError (i.e. a name → UUID lookup missed),
+ * fetch fresh team metadata once with `refresh: true` and retry. This shields callers
+ * from the 1h TTL when leebop itself just created the project/label/state being looked
+ * up — without requiring every callsite to know about the staleness possibility.
+ */
+export async function withFreshMetadataOnMiss<T>(
+  fetch: (opts?: { refresh?: boolean }) => Promise<TeamMetadata>,
+  use: (metadata: TeamMetadata) => Promise<T>,
+): Promise<T> {
+  const metadata = await fetch();
+  try {
+    return await use(metadata);
+  } catch (err) {
+    if (err instanceof ResolveError) {
+      const fresh = await fetch({ refresh: true });
+      return use(fresh);
+    }
+    throw err;
+  }
+}
+
 export async function getTeamMetadata(
   repoHash: string,
   teamKey: string,
