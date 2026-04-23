@@ -48,8 +48,10 @@ export interface IssueUpdateInput {
   description?: string;
   stateId?: string;
   priority?: number;
+  estimate?: number | null;
   labelIds?: string[];
   assigneeId?: string | null;
+  parentId?: string | null;
 }
 
 export interface ProjectUpdateInput {

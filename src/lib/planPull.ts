@@ -229,6 +229,10 @@ function rewriteFrontmatterFromRemote(
   fm.title = remote.title;
   fm.state = remote.state.name;
   fm.priority = priorityName(remote.priority);
+  if (remote.estimate !== null && remote.estimate !== undefined) fm.estimate = remote.estimate;
+  else fm.estimate = undefined;
+  if (remote.parent) fm.parent = remote.parent.identifier;
+  else fm.parent = undefined;
   fm.labels = remote.labels.nodes.map((l) => labelNameById(teamMetadata, l.id) ?? l.name).sort();
   fm.assignee = remote.assignee?.email ?? null;
 

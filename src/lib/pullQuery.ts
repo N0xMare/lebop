@@ -5,6 +5,7 @@ export const ISSUE_FIELDS_FRAGMENT = /* GraphQL */ `
     title
     description
     priority
+    estimate
     url
     updatedAt
     state {
@@ -24,6 +25,10 @@ export const ISSUE_FIELDS_FRAGMENT = /* GraphQL */ `
     team {
       id
       key
+    }
+    parent {
+      id
+      identifier
     }
     labels {
       nodes {
@@ -128,12 +133,14 @@ export interface FetchedIssue {
   title: string;
   description: string | null;
   priority: number;
+  estimate: number | null;
   url: string;
   updatedAt: string;
   state: { id: string; name: string; type: string };
   assignee: { id: string; name: string; email: string } | null;
   project: { id: string; name: string } | null;
   team: { id: string; key: string };
+  parent: { id: string; identifier: string } | null;
   labels: { nodes: { id: string; name: string }[] };
   comments?: {
     nodes: {

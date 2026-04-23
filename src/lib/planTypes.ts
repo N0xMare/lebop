@@ -30,9 +30,12 @@ export interface IssueFrontmatter {
   linear_id?: string; // "UE-401"; written back after first apply
   state?: string;
   priority?: string | number;
+  estimate?: number; // Linear's estimate field (points / t-shirt size as a number)
   labels?: string[];
   assignee?: string | null;
   slug?: string; // explicit override; default = filename stem
+  /** parent issue — local slug or `UE-NN`. Creates Linear parent/sub-issue hierarchy. */
+  parent?: string;
   blocks?: string[];
   blocked_by?: string[];
   related?: string[];

@@ -55,11 +55,13 @@ Body: project's long-form content; optional.
 title: "Chain-aware initial gas pricing via eth_feeHistory"
 state: Backlog                       # state NAME (case-insensitive)
 priority: high                       # name (none|urgent|high|normal|low) or 0..4
+estimate: 3                          # Linear estimate (numeric points); optional
 labels:
   - type:feature
   - area:relayer
 assignee: justice@unlink.xyz         # email | name | @me | null
 linear_id: UE-401                    # written back by leebop after first apply
+parent: epic-multi-rpc               # optional; slug OR UE-### — creates sub-issue hierarchy
 
 blocks:                              # outgoing; list of slugs OR UE-### identifiers
   - 02-multi-rpc
@@ -79,8 +81,17 @@ This is the issue description — same renderer rules as `leebop pull`.
 ```
 
 Required: `title`.
-Optional: `state`, `priority`, `labels`, `assignee`, `linear_id`, all link fields.
+Optional: `state`, `priority`, `estimate`, `labels`, `assignee`, `linear_id`, `parent`, all link fields.
 Body: description; optional.
+
+**Parent / sub-issue semantics.** `parent:` takes one of:
+- A local slug from another issue file in the same plan directory — leebop resolves to the target's Linear identifier during apply (parent must be created first; topological ordering is handled automatically).
+- A bare `TEAM-NN` identifier — for parents that live in other projects or pre-exist outside the plan.
+- `null` / absent — no parent; top-level issue.
+
+Plan apply creates parents before children (topologically sorted). Validate refuses cycles in the parent chain. On pull, leebop discovers parent relationships from Linear and writes them back into the `parent:` field (as `UE-NN`).
+
+**Estimate.** A numeric value (typically 1/2/3/5/8 for Fibonacci points). Passed straight through to Linear's `estimate` field on create/update. Pull writes the server value back.
 
 Link type naming uses **snake_case** in YAML (`blocked_by`, `duplicated_by`) to match YAML idiom; maps 1:1 to `set links` kinds `blocked-by` / `duplicated-by`.
 
@@ -155,7 +166,10 @@ leebop plan validate <dir> [--team KEY] [--json]
 leebop plan apply    <dir> [--dry-run] [--strict] [--team KEY] [--json]
 leebop plan diff     <dir> [--team KEY] [--json]
 leebop plan pull     <dir> [--force] [--include-new] [--team KEY] [--json]
+leebop plan lint     <dir> [--fix] [--strict] [--team KEY] [--json]
 ```
+
+**`lint`** — walk every `.md` in the plan dir (issues + project) and run the linter (universal + repo-scoped rules per the loaded config). `--fix` applies safe autofixes in-place to the `.md` files; `--strict` exits non-zero if any warnings remain. Intended pre-apply sweep — cleaner than running `leebop lint path/*.md`.
 
 **`validate`** — parse + semantic checks (hits Linear for team metadata so it can verify label/state/assignee resolution). No Linear writes. Exit 1 on any validation error.
 

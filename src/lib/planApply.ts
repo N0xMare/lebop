@@ -1,7 +1,9 @@
+import { readFile } from "node:fs/promises";
 import { stringify as stringifyYaml } from "yaml";
 import { buildIssueMetadata, buildProjectMetadata } from "./build.ts";
 import type { TeamMetadata } from "./cache.ts";
 import { lintContent } from "./lint.ts";
+import { splitFrontmatter } from "./planParse.ts";
 import type { IssueFile, LinkKey, ParsedPlan, ProjectFile } from "./planTypes.ts";
 import { LINK_KEYS, LINK_KEY_TO_SET_LINKS_KIND } from "./planTypes.ts";
 import { type FetchedIssue, type FetchedProject, buildPullIssuesQuery } from "./pullQuery.ts";
@@ -185,6 +187,7 @@ async function upsertIssue(
   teamMetadata: TeamMetadata,
   projectLinearId: string | undefined,
   opts: ApplyOpts,
+  slugToId: Map<string, string>,
 ): Promise<ApplyIssueResult> {
   const fm = issue.frontmatter;
 
@@ -211,8 +214,13 @@ async function upsertIssue(
       if (projectLinearId) input.projectId = projectLinearId;
       if (fm.state) input.stateId = resolveStateId(teamMetadata, fm.state);
       if (fm.priority !== undefined) input.priority = resolvePriority(fm.priority);
+      if (fm.estimate !== undefined && fm.estimate !== null) input.estimate = fm.estimate;
       if (fm.labels?.length) input.labelIds = resolveLabelIds(teamMetadata, fm.labels);
       if (fm.assignee) input.assigneeId = await resolveAssigneeId(teamMetadata, fm.assignee);
+      if (fm.parent) {
+        const parentUuid = await resolveParentUuid(fm.parent, slugToId);
+        if (parentUuid) input.parentId = parentUuid;
+      }
 
       if (opts.dryRun) {
         return { slug: issue.slug, path: issue.path, status: "dry-run" };
@@ -224,7 +232,9 @@ async function upsertIssue(
       };
       const created = response.data.issueCreate.issue;
       fm.linear_id = created.identifier;
-      await writeFrontmatterBack(issue.path, fm, issue.body);
+      // Write the server-normalized description so re-apply doesn't see spurious
+      // drift (Linear may reflow markdown during create; mirrors the UPDATE path).
+      await writeFrontmatterBack(issue.path, fm, created.description ?? issue.body);
       return {
         slug: issue.slug,
         path: issue.path,
@@ -279,6 +289,23 @@ async function upsertIssue(
       if (remote.priority !== target) {
         input.priority = target;
         changed.push("priority");
+      }
+    }
+    if (fm.estimate !== undefined) {
+      const target = fm.estimate === null ? null : fm.estimate;
+      if ((remote.estimate ?? null) !== target) {
+        input.estimate = target;
+        changed.push("estimate");
+      }
+    }
+    if (fm.parent !== undefined) {
+      const targetUuid = fm.parent === null ? null : await resolveParentUuid(fm.parent, slugToId);
+      const remoteParentIdentifier = remote.parent?.identifier ?? null;
+      const wantParentIdentifier = typeof fm.parent === "string" ? fm.parent : null;
+      // Compare by identifier where possible (avoids an extra UUID fetch for unchanged case).
+      if (remoteParentIdentifier !== wantParentIdentifier) {
+        input.parentId = targetUuid;
+        changed.push("parent");
       }
     }
     if (fm.labels !== undefined) {
@@ -336,6 +363,29 @@ async function upsertIssue(
   }
 }
 
+/**
+ * Resolve a `parent:` frontmatter value to a Linear UUID. Accepts either a local slug
+ * (must be in `slugToId` — populated as sibling issues get created in topological order)
+ * or a bare `UE-NN` identifier (needs a one-off `client.issue()` lookup).
+ */
+async function resolveParentUuid(
+  parent: string,
+  slugToId: Map<string, string>,
+): Promise<string | null> {
+  // Slug in plan → take its just-created identifier → convert to UUID via another fetch.
+  // (linear_ids stored in slugToId are TEAM-NN identifiers, not UUIDs. Linear accepts
+  // both for issue(id:) lookups, but `parentId` specifically wants the UUID.)
+  const asSlug = slugToId.get(parent);
+  const identOrId = asSlug ?? parent;
+  try {
+    const client = await linear();
+    const issue = await client.issue(identOrId);
+    return issue?.id ?? null;
+  } catch {
+    return null;
+  }
+}
+
 // ---------- file writeback ----------
 
 async function writeFrontmatterBack(
@@ -374,8 +424,23 @@ async function rewriteLinkSlugs(plan: ParsedPlan): Promise<void> {
         mutated = true;
       }
     }
+    // Also rewrite `parent:` slug → linear_id if needed.
+    if (typeof issue.frontmatter.parent === "string") {
+      const resolved = slugToId.get(issue.frontmatter.parent);
+      if (resolved && resolved !== issue.frontmatter.parent) {
+        issue.frontmatter.parent = resolved;
+        mutated = true;
+      }
+    }
     if (mutated) {
-      await writeFrontmatterBack(issue.path, issue.frontmatter, issue.body);
+      // Re-read the current body from disk — upsertIssue may have written a
+      // server-normalized version that differs from the in-memory `issue.body` we
+      // parsed at the start. Using the stale one would overwrite Linear's normalized
+      // form and cause spurious drift on the next apply.
+      const raw = await readFile(issue.path, "utf8");
+      const { body } = splitFrontmatter(raw);
+      const currentBody = body.replace(/^\r?\n/, "");
+      await writeFrontmatterBack(issue.path, issue.frontmatter, currentBody);
     }
   }
 }
@@ -502,9 +567,19 @@ export async function applyPlan(
   const effectiveProjectId =
     projectLinearIdAtStart ?? plan.project.frontmatter.linear_id ?? projectResult.linearId;
 
+  // Topological order: parents created before children so parentId resolution works.
+  const ordered = topologicalSort(plan.issues);
+  // Slug → linear_id map, populated as we go so children can set parentId.
+  const slugToId = new Map<string, string>();
+  for (const i of plan.issues) {
+    if (i.frontmatter.linear_id) slugToId.set(i.slug, i.frontmatter.linear_id);
+  }
+
   const issues: ApplyIssueResult[] = [];
-  for (const issue of plan.issues) {
-    issues.push(await upsertIssue(issue, teamMetadata, effectiveProjectId, opts));
+  for (const issue of ordered) {
+    const result = await upsertIssue(issue, teamMetadata, effectiveProjectId, opts, slugToId);
+    issues.push(result);
+    if (result.linearId) slugToId.set(issue.slug, result.linearId);
   }
 
   // Rewrite slug → LinearID references in every issue file.
@@ -514,4 +589,34 @@ export async function applyPlan(
   const relations = await applyRelations(plan, opts);
 
   return { project: projectResult, issues, relations };
+}
+
+/**
+ * Return issues sorted so each parent precedes its children. Issues with no parent (or
+ * whose parent is external / outside the plan) come first in original order. Items with
+ * unresolvable parent refs fall through to end (apply will error, matching validator).
+ */
+function topologicalSort(issues: IssueFile[]): IssueFile[] {
+  const bySlug = new Map<string, IssueFile>();
+  for (const i of issues) bySlug.set(i.slug, i);
+
+  const visited = new Set<string>();
+  const result: IssueFile[] = [];
+
+  const visit = (issue: IssueFile, stack: Set<string>): void => {
+    if (visited.has(issue.slug)) return;
+    if (stack.has(issue.slug)) return; // cycle — validator already caught; skip silently
+    stack.add(issue.slug);
+    const p = typeof issue.frontmatter.parent === "string" ? issue.frontmatter.parent : undefined;
+    if (p && bySlug.has(p)) {
+      const parentIssue = bySlug.get(p);
+      if (parentIssue) visit(parentIssue, stack);
+    }
+    stack.delete(issue.slug);
+    visited.add(issue.slug);
+    result.push(issue);
+  };
+
+  for (const i of issues) visit(i, new Set());
+  return result;
 }

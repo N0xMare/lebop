@@ -95,6 +95,28 @@ export function validatePlan(
     });
   }
 
+  // ---------- 4b. parent reference resolution + cycle detection ----------
+  for (const issue of plan.issues) {
+    const p = issue.frontmatter.parent;
+    if (p === undefined || p === null) continue;
+    if (typeof p !== "string" || p.trim() === "") {
+      errors.push({ path: issue.path, message: "`parent:` must be a non-empty string" });
+      continue;
+    }
+    if (!isLinearId(p) && !slugs.has(p)) {
+      errors.push({
+        path: issue.path,
+        message: `\`parent: ${p}\` doesn't match any slug in this plan and isn't a Linear identifier`,
+      });
+    }
+  }
+  const parentCycles = findParentCycles(plan);
+  for (const cycle of parentCycles) {
+    errors.push({
+      message: `cycle in parent chain: ${cycle.join(" → ")} → ${cycle[0]}`,
+    });
+  }
+
   // ---------- 5. Duplicate-link side-effect warning ----------
   for (const issue of plan.issues) {
     const dup = (issue.frontmatter.duplicates as string[] | undefined) ?? [];
@@ -163,6 +185,49 @@ export function validatePlan(
   }
 
   return { errors, warnings };
+}
+
+/**
+ * Detect cycles in the `parent:` chain. Each issue has at most one parent, so this is a
+ * simpler walk than the blocks DAG — follow `parent` pointers until we either hit an
+ * external identifier, fall off the plan, or revisit a node (cycle).
+ */
+function findParentCycles(plan: ParsedPlan): string[][] {
+  const bySlug = new Map<string, string | undefined>();
+  for (const i of plan.issues)
+    bySlug.set(i.slug, typeof i.frontmatter.parent === "string" ? i.frontmatter.parent : undefined);
+
+  const cycles: string[][] = [];
+  const done = new Set<string>();
+  for (const [start] of bySlug) {
+    if (done.has(start)) continue;
+    const stack: string[] = [];
+    const seen = new Set<string>();
+    let node: string | undefined = start;
+    while (node) {
+      if (seen.has(node)) {
+        const idx = stack.indexOf(node);
+        if (idx !== -1) cycles.push(stack.slice(idx));
+        break;
+      }
+      seen.add(node);
+      stack.push(node);
+      if (!bySlug.has(node)) break; // external ref — ends the chain cleanly
+      node = bySlug.get(node);
+    }
+    for (const n of stack) done.add(n);
+  }
+  // Dedupe cycles (same cycle may be found from different starts).
+  const unique: string[][] = [];
+  const seen = new Set<string>();
+  for (const c of cycles) {
+    const key = [...c].sort().join("|");
+    if (!seen.has(key)) {
+      seen.add(key);
+      unique.push(c);
+    }
+  }
+  return unique;
 }
 
 /** Find cycles in the forward-edges implied by `blocks:` + inverses of `blocked_by:`. */

@@ -1,6 +1,11 @@
+import { existsSync } from "node:fs";
+import { readdir } from "node:fs/promises";
+import { join } from "node:path";
 import chalk from "chalk";
 import type { Command } from "commander";
+import { writeAtomic } from "../lib/cache.ts";
 import { resolveConfig } from "../lib/config.ts";
+import { applyFixesFixpoint, lintContent } from "../lib/lint.ts";
 import { applyPlan } from "../lib/planApply.ts";
 import { diffPlan } from "../lib/planDiff.ts";
 import type { PlanDiffResult } from "../lib/planDiff.ts";
@@ -8,6 +13,7 @@ import { parsePlan } from "../lib/planParse.ts";
 import { pullPlan } from "../lib/planPull.ts";
 import type { ParsedPlan } from "../lib/planTypes.ts";
 import { validatePlan } from "../lib/planValidate.ts";
+import type { Warning } from "../lib/quirks.ts";
 import { getTeamMetadata } from "../lib/resolve.ts";
 
 interface CommonOpts {
@@ -23,6 +29,11 @@ interface ApplyCmdOpts extends CommonOpts {
 interface PullCmdOpts extends CommonOpts {
   force?: boolean;
   includeNew?: boolean;
+}
+
+interface PlanLintOpts extends CommonOpts {
+  fix?: boolean;
+  strict?: boolean;
 }
 
 export function registerPlan(program: Command): void {
@@ -129,6 +140,101 @@ export function registerPlan(program: Command): void {
         printDiff(result);
       }
       if (result.has_drift) process.exitCode = 1;
+    });
+
+  plan
+    .command("lint <dir>")
+    .description("lint every issue body in a plan directory against repo-scoped rules")
+    .option("--team <key>", "override the resolved team")
+    .option("--fix", "apply safe autofixes in-place (writes back to the .md files)")
+    .option("--strict", "exit non-zero when any warning remains")
+    .option("--json", "emit structured result")
+    .action(async (dir: string, opts: PlanLintOpts) => {
+      const parsed = await parsePlan(dir);
+      const team = opts.team ?? parsed.project.frontmatter.team;
+      const config = await resolveConfig({ teamOverride: team });
+      const lintCtx = {
+        repoConfig: config.repoConfig,
+        workspaceUrlPrefix: config.workspaceUrlPrefix,
+      };
+
+      // Collect every `.md` file in the plan dir — the project file + every issue.
+      const entries = await readdir(parsed.dir, { withFileTypes: true });
+      const files = entries
+        .filter((e) => e.isFile() && e.name.endsWith(".md"))
+        .map((e) => join(parsed.dir, e.name));
+
+      const perFile: { path: string; warnings: Warning[]; fixedCount: number }[] = [];
+      for (const file of files) {
+        if (!existsSync(file)) continue;
+        const raw = await Bun.file(file).text();
+        // Extract body (after frontmatter) so lint sees only the markdown content.
+        const m = raw.match(/^﻿?---\r?\n[\s\S]*?\r?\n?---\r?\n?([\s\S]*)$/);
+        const body = (m?.[1] ?? raw).replace(/^\r?\n/, "");
+        const head = m ? raw.slice(0, raw.length - body.length) : "";
+        const { warnings } = lintContent(body, lintCtx);
+
+        let fixedCount = 0;
+        if (opts.fix && warnings.some((w) => w.fix)) {
+          const { content: fixedBody } = applyFixesFixpoint(body, lintCtx);
+          await writeAtomic(file, `${head}${fixedBody}`);
+          fixedCount = warnings.filter((w) => w.fix).length;
+        }
+        perFile.push({ path: file, warnings, fixedCount });
+      }
+
+      if (opts.json) {
+        process.stdout.write(
+          `${JSON.stringify(
+            {
+              schema_version: 1,
+              files: perFile.map((f) => ({
+                path: f.path,
+                warnings: f.warnings,
+                fixed: f.fixedCount,
+              })),
+            },
+            null,
+            2,
+          )}\n`,
+        );
+      } else {
+        let total = 0;
+        let fixed = 0;
+        for (const f of perFile) {
+          if (f.warnings.length === 0) continue;
+          process.stdout.write(`\n${chalk.bold(f.path)}\n`);
+          for (const w of f.warnings) {
+            const sev =
+              w.severity === "warn"
+                ? chalk.yellow("warn")
+                : w.severity === "error"
+                  ? chalk.red("error")
+                  : chalk.gray("info");
+            const hint = w.fix
+              ? opts.fix
+                ? chalk.green(" [fixed]")
+                : chalk.gray(" [--fix available]")
+              : "";
+            process.stdout.write(
+              `  ${chalk.dim(`L${w.line}:`)} ${sev} ${chalk.cyan(w.rule)} ${w.message}${hint}\n`,
+            );
+          }
+          total += f.warnings.length;
+          fixed += f.fixedCount;
+        }
+        process.stdout.write(
+          `\n${chalk.gray(
+            `${perFile.length} file(s) checked · ${total} warning(s)${opts.fix ? ` · ${fixed} fixed` : ""}\n`,
+          )}`,
+        );
+      }
+
+      const remaining = perFile.reduce(
+        (sum, f) => sum + (f.warnings.length - (opts.fix ? f.fixedCount : 0)),
+        0,
+      );
+      if (opts.strict && remaining > 0) process.exitCode = 1;
     });
 
   plan

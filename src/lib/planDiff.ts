@@ -246,6 +246,18 @@ async function diffIssue(
         fields.push({ field: "priority", local: localPrio, remote: remote.priority });
       }
     }
+    if (fm.estimate !== undefined) {
+      if ((remote.estimate ?? null) !== (fm.estimate ?? null)) {
+        fields.push({ field: "estimate", local: fm.estimate, remote: remote.estimate });
+      }
+    }
+    if (fm.parent !== undefined) {
+      const remoteParent = remote.parent?.identifier ?? null;
+      const localParent = typeof fm.parent === "string" ? fm.parent : null;
+      if (remoteParent !== localParent) {
+        fields.push({ field: "parent", local: localParent, remote: remoteParent });
+      }
+    }
     if (fm.labels) {
       const localIds = resolveLabelIds(teamMetadata, fm.labels).sort();
       const remoteIds = remote.labels.nodes.map((l) => l.id).sort();

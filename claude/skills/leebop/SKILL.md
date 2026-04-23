@@ -88,6 +88,41 @@ Pass variables via `--variables-json <file>` or `--variables-json -` (stdin).
 
 ---
 
+## Declarative project planning — `leebop plan`
+
+For "write the whole initiative in markdown, upload to Linear in one go" workflows:
+
+```
+plans/initiative-name/
+├── _project.md          # name/team/description/body
+├── epic-foo.md          # top-level issue (optional `parent:` for sub-issues)
+├── sub-foo-a.md         # has `parent: epic-foo` → nested under epic
+└── task-bar.md          # standalone
+```
+
+Issue frontmatter keys: `title`, `state`, `priority`, `estimate`, `labels[]`, `assignee`, `parent` (slug or `UE-###`), plus 5 link fields (`blocks`, `blocked_by`, `related`, `duplicates`, `duplicated_by`).
+
+Verbs:
+- `leebop plan validate <dir>` — parse + resolve refs, no Linear writes.
+- `leebop plan lint <dir> [--fix]` — run the linter on bodies (pre-apply sweep).
+- `leebop plan apply <dir> [--dry-run]` — realize in Linear; writes `linear_id:` back to each file.
+- `leebop plan diff <dir>` — show local-vs-remote drift (fields + body patch + relations).
+- `leebop plan pull <dir> [--force] [--include-new]` — bring remote state back into files; `--include-new` imports project issues not yet in the plan.
+
+Idempotent: re-applying a plan that matches Linear reports all `unchanged`. Slug references get rewritten to `UE-###` after first apply.
+
+## Team collaboration (critical hazard)
+
+Plan files are git-tracked **source of truth**, but `linear_id:` is written back by `apply`. If two teammates both run `apply` on the same plan directory **before the writeback commits land in git**, you get **duplicate issues in Linear** (each apply creates fresh issues with no shared identifier).
+
+**Workflow for shared plans:**
+1. One person ("first-applier") runs `leebop plan apply <dir>`.
+2. **Immediately** commit the writeback (`git add <plan-dir>` + commit + push).
+3. Everyone else pulls that commit BEFORE touching the plan.
+4. From then on, any apply/diff/pull targets the same Linear entities.
+
+If two people already applied in parallel: archive one set via `leebop archive <ids...>` + `leebop raw projectArchive`, then rewrite the plan files to reference the keepers' `linear_id:`s.
+
 ## When to NOT use leebop
 
 - Pure UI flows (browser-open, branch-name generation, interactive pickers) — `@schpet/linear-cli` (`linear`) is better for those.

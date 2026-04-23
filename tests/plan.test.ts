@@ -215,4 +215,56 @@ describe("validatePlan", () => {
     const warns = validatePlan(plan, null).warnings;
     expect(warns.some((w) => w.rule === "L006")).toBe(true);
   });
+
+  it("accepts valid parent reference (slug)", async () => {
+    dir = writePlanDir({
+      "_project.md": "---\nname: T\nteam: UE\n---\n\n",
+      "a.md": "---\ntitle: a\n---\n\n",
+      "b.md": "---\ntitle: b\nparent: a\n---\n\n",
+    });
+    const plan = await parsePlan(dir);
+    const errs = validatePlan(plan, null).errors;
+    expect(errs).toEqual([]);
+  });
+
+  it("accepts valid parent reference (external UE-NN)", async () => {
+    dir = writePlanDir({
+      "_project.md": "---\nname: T\nteam: UE\n---\n\n",
+      "a.md": "---\ntitle: a\nparent: UE-999\n---\n\n",
+    });
+    const plan = await parsePlan(dir);
+    const errs = validatePlan(plan, null).errors;
+    expect(errs).toEqual([]);
+  });
+
+  it("flags unknown parent slug", async () => {
+    dir = writePlanDir({
+      "_project.md": "---\nname: T\nteam: UE\n---\n\n",
+      "a.md": "---\ntitle: a\nparent: missing\n---\n\n",
+    });
+    const plan = await parsePlan(dir);
+    const errs = validatePlan(plan, null).errors;
+    expect(errs.some((e) => e.message.includes("parent: missing"))).toBe(true);
+  });
+
+  it("detects cycle in parent chain", async () => {
+    dir = writePlanDir({
+      "_project.md": "---\nname: T\nteam: UE\n---\n\n",
+      "a.md": "---\ntitle: a\nparent: b\n---\n\n",
+      "b.md": "---\ntitle: b\nparent: a\n---\n\n",
+    });
+    const plan = await parsePlan(dir);
+    const errs = validatePlan(plan, null).errors;
+    expect(errs.some((e) => e.message.includes("cycle in parent chain"))).toBe(true);
+  });
+
+  it("accepts estimate as a number", async () => {
+    dir = writePlanDir({
+      "_project.md": "---\nname: T\nteam: UE\n---\n\n",
+      "a.md": "---\ntitle: a\nestimate: 3\n---\n\n",
+    });
+    const plan = await parsePlan(dir);
+    expect(plan.issues[0]?.frontmatter.estimate).toBe(3);
+    expect(validatePlan(plan, null).errors).toEqual([]);
+  });
 });
