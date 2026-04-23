@@ -52,17 +52,45 @@ export const COMMENTS_FIELDS_FRAGMENT = /* GraphQL */ `
   }
 `;
 
+export const RELATIONS_FIELDS_FRAGMENT = /* GraphQL */ `
+  fragment RelationFields on Issue {
+    relations {
+      nodes {
+        id
+        type
+        relatedIssue { id identifier title }
+      }
+    }
+    inverseRelations {
+      nodes {
+        id
+        type
+        issue { id identifier title }
+      }
+    }
+  }
+`;
+
 /**
  * Linear's IssueFilter doesn't expose `identifier`, but `issue(id: ...)` accepts either
  * a UUID or a TEAM-NN identifier. Multi-alias query = one HTTP round-trip for N issues.
  */
-export function buildPullIssuesQuery(identifiers: string[], withComments: boolean): string {
+export function buildPullIssuesQuery(
+  identifiers: string[],
+  withComments: boolean,
+  withRelations = false,
+): string {
+  const fragments = ["...IssueFields"];
+  if (withComments) fragments.push("...CommentFields");
+  if (withRelations) fragments.push("...RelationFields");
+  const spread = fragments.join(" ");
+
   const aliases = identifiers
     .map((id, i) => {
       if (!/^[A-Z]+-\d+$/.test(id)) {
         throw new Error(`invalid issue identifier: ${id}`);
       }
-      return `  a${i}: issue(id: "${id}") { ...IssueFields${withComments ? " ...CommentFields" : ""} }`;
+      return `  a${i}: issue(id: "${id}") { ${spread} }`;
     })
     .join("\n");
   return `
@@ -71,6 +99,7 @@ export function buildPullIssuesQuery(identifiers: string[], withComments: boolea
     }
     ${ISSUE_FIELDS_FRAGMENT}
     ${withComments ? COMMENTS_FIELDS_FRAGMENT : ""}
+    ${withRelations ? RELATIONS_FIELDS_FRAGMENT : ""}
   `;
 }
 
@@ -113,6 +142,20 @@ export interface FetchedIssue {
       createdAt: string;
       updatedAt: string;
       user: { id: string; name: string; email: string } | null;
+    }[];
+  };
+  relations?: {
+    nodes: {
+      id: string;
+      type: "blocks" | "duplicate" | "related" | "similar";
+      relatedIssue: { id: string; identifier: string; title: string };
+    }[];
+  };
+  inverseRelations?: {
+    nodes: {
+      id: string;
+      type: "blocks" | "duplicate" | "related" | "similar";
+      issue: { id: string; identifier: string; title: string };
     }[];
   };
 }

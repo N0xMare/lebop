@@ -1,10 +1,12 @@
 import chalk from "chalk";
 import { Command } from "commander";
+import { registerArchive } from "./commands/archive.ts";
 import { registerAuth } from "./commands/auth.ts";
 import { registerComment } from "./commands/comment.ts";
 import { registerDiff } from "./commands/diff.ts";
 import { registerLint } from "./commands/lint.ts";
 import { registerList } from "./commands/list.ts";
+import { registerNew } from "./commands/new.ts";
 import { registerProjects } from "./commands/projects.ts";
 import { registerPull } from "./commands/pull.ts";
 import { registerPush } from "./commands/push.ts";
@@ -39,6 +41,9 @@ export async function run(argv: string[]): Promise<void> {
 
   registerComment(program);
   registerSet(program);
+
+  registerNew(program);
+  registerArchive(program);
 
   registerRaw(program);
 

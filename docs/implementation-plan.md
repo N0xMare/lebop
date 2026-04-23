@@ -9,8 +9,10 @@ Living document. Update as phases progress, quirks emerge, questions resolve. Pa
 ## TL;DR — where we are
 
 - **Phase 0 (bootstrap + auth):** 🟢 shipped.
-- **Phase 1 (MVP agentic read/write surface):** 🟢 shipped. All read + write paths verified end-to-end against real Linear against sentinel UE-351. `raw`-based create + archive also verified (via UE-352, now archived).
-- **Next concrete step:** start **Phase 2** (project push + `set links`). Prep: probe `issueRelationCreate` / `issueRelationDelete` shape via `leebop raw` before coding.
+- **Phase 1 (MVP agentic read/write surface):** 🟢 shipped.
+- **Phase 2 (issue linking):** 🟢 shipped — `leebop set links` with 5 directional kinds (`blocks | blocked-by | duplicates | duplicated-by | related`); `show` now folds outbound `relations` + inbound `inverseRelations`.
+- **Phase 2.5 (`leebop new` + `leebop archive`):** 🟢 shipped — promoted out of `raw` based on usage signal.
+- **Next concrete step:** decide on **Phase 2c** (project push live-verify) or jump to **Phase 3** (linter + auto-fix). Also pending: address UX wart where `leebop set links <id> -KIND:X` fails without `--` separator (same commander-options bug as `set labels`).
 
 If you're a new agent reading this, jump to **§ Resumption checklist** below.
 
@@ -22,9 +24,11 @@ If you're a new agent reading this, jump to **§ Resumption checklist** below.
 |---|---|---|
 | 0. Bootstrap + native auth | 🟢 | scaffolding, CLI dispatcher, native PAK auth (`leebop auth login/logout/whoami`) |
 | 1. MVP — agentic read/write surface | 🟢 | all verbs implemented and verified end-to-end against sentinel UE-351 + throwaway UE-352 (create/archive via `raw`). |
-| 2. Projects round-trip + issue linking | ⬜ | project pull already works (Phase 1); push and `set links` pending. |
+| 2. Issue linking (`set links`) + relations in `show` | 🟢 | `set links` shipped with 5-kind directional surface; `show` folds `relations + inverseRelations`. Live-verified via UE-355/UE-356 pair. Project push deferred (see 2c). |
+| 2.5 Issue lifecycle verbs (`new`, `archive`) | 🟢 | promoted from Phase 4/raw based on usage signal. Both verified live. |
+| 2c. Project push live-verify | ⬜ | code exists (Phase 1), not yet live-tested. Deferred until needed. |
 | 3. Linter + auto-fix | ⬜ | — |
-| 4. Polish | ⬜ | `leebop new`, slash commands, SKILL.md, git pre-commit, `leebop diff` remaining. (`show` promoted to Phase 1.) |
+| 4. Polish | ⬜ | slash commands, SKILL.md, git pre-commit, `leebop diff`. |
 
 Verified install / environment state on the development machine (as of last session):
 - **Bun 1.3.13** on macOS (darwin 24.6.0, arm64)
@@ -37,11 +41,11 @@ Verified install / environment state on the development machine (as of last sess
 
 ## Immediate next steps (in order)
 
-1. **Write vitest unit tests on pure libs** (`diff.ts`, `resolve.ts`, `expand.ts`, `config.ts`) — plan-mandated pre-Phase-2 coverage. No network, no sentinel needed.
-2. **Probe `issueRelationCreate` / `issueRelationDelete` via `leebop raw`** — confirm the mutation shape before coding `set links`.
-3. **Start Phase 2** (project push live-verify + `set links` delta syntax) — see **§ Phase 2** for scope. Sentinel for Phase 2 verification: UE-351 + UE-317 (existing) for relation targets, or create a throwaway pair via `raw issueCreate`.
+1. **UX fix: commander `-foo` token handling in `set labels` and `set links`.** Both currently fail when a `-KIND:...` token is the first positional — commander parses it as an unknown option. Workaround: `--` separator or prefix with a `+` token. Fix: preprocess argv in `registerSet` to shield `-TOKEN:...` patterns from commander. Small patch, high UX value.
+2. **Phase 2c — project push live-verify** (Phase 1 shipped the code; needs an actual live test via the cached Relay Worker Refactor project — content edit → push → re-pull → match). Deferred here because project push mutates project content, which is visible broadly.
+3. **Start Phase 3** (linter + auto-fix). Pre-Phase-3 nothing needed.
 
-Sentinel for any mutation-path verification going forward: **UE-351** (team UE, in Relayer Hardening, baseline documented in progress-log entry 2026-04-23).
+Sentinel for mutation-path verification going forward: **UE-351** (team UE, in Relayer Hardening). For Phase 2-style link/lifecycle tests, create throwaway `TEST:` pairs via `leebop new` and `leebop archive` them at the end.
 
 ---
 
@@ -72,14 +76,16 @@ src/
 │   ├── list.ts               # issue discovery by filter
 │   ├── projects.ts           # project listing
 │   ├── teams.ts              # team listing
-│   ├── show.ts               # read-only single-issue display (no cache side-effect)
+│   ├── show.ts               # read-only single-issue display + relations section
 │   ├── pull.ts               # cache materialization; --to for export-mode
 │   ├── push.ts               # CAS-guarded mutation; --dry-run
 │   ├── status.ts             # git-like diff against _server snapshot
 │   ├── diff.ts               # (stub) Phase 4
 │   ├── lint.ts               # (stub) Phase 3
 │   ├── comment.ts            # add a comment (direct mutation)
-│   ├── set.ts                # single-shot field mutations with name→UUID
+│   ├── set.ts                # single-shot field mutations — title/state/priority/assignee/labels/links
+│   ├── new.ts                # create a new issue (Phase 2.5)
+│   ├── archive.ts            # archive one or more issues (Phase 2.5)
 │   └── raw.ts                # GraphQL escape hatch
 └── lib/
     ├── paths.ts              # ~/.leebop/ path constants
@@ -92,8 +98,9 @@ src/
     ├── diff.ts               # field-level diff against _server snapshot
     ├── build.ts              # FetchedIssue → IssueMetadata + description (canonical build)
     ├── expand.ts             # ID range expansion (TEAM-101..TEAM-109)
-    ├── pullQuery.ts          # multi-alias issue query builder + fragment + types
+    ├── pullQuery.ts          # multi-alias issue query builder + fragments (incl. relations)
     ├── pushMutations.ts      # issueUpdate/projectUpdate + batched CAS query builder
+    ├── relations.ts          # issueRelationCreate/Delete + parseLinkToken (Phase 2)
     ├── prompt.ts             # hidden-input stdin prompt for auth login
     └── notImplemented.ts     # stub helper for unshipped verbs
 ```
@@ -348,6 +355,7 @@ Append-only. Most recent at bottom.
 - **2026-04-22** — Session close: Phase 1 paused awaiting sentinel-issue designation for mutation-path verification. All Phase 1 code shipped, all read paths verified. Implementation plan rewritten for clean resumption.
 - **2026-04-23** — **Phase 1 🟢 closed.** Sentinel UE-351 designated (Backlog / Relayer Hardening / unassigned / no labels / description `"test test tester mctester test"`). Full mutation battery executed end-to-end against real Linear: push roundtrip (description edit), comment add, `set priority/state/labels/assignee`, CAS conflict + `--force` bypass. All reverted to baseline. Also: throwaway UE-352 created via `leebop raw issueCreate` in Triage / `type:test` / Relayer Hardening, then archived via `leebop raw issueArchive` — validates `raw` for mutations (previously only query verified) and proves the create-path ahead of Phase 4's `leebop new`. **Corrections to plan**: CAS refusal triggers on tamper-**backward** of `_server.updated_at`, not forward (code: `push.ts:279`). **New quirk discovered**: `leebop set labels <id> -foo` alone fails because commander parses leading `-` as an option flag — workaround via `+` prefix first or `=` exact-replace. Logged under Discovered quirks.
 - **2026-04-23** — Pre-Phase-2 foundations. **Unit tests landed**: 4 files under `tests/` (`expand`, `diff`, `resolve`, `config`) covering pure libs; 51 tests pass in ~0.4s. tsc + biome green. **`issueRelation*` probe complete** — mutation shapes + enum values + idempotency semantics captured in § Phase 2. Headline finding: server-side idempotent create (same tuple → same UUID, no dup) and delete requires relation UUID (must look up before deleting via `-` delta). Also: surfaces design call to promote `leebop new` + `leebop archive` out of `raw` into first-class verbs (usage signal from this session's test workflow) — user input pending before committing to Phase 2.5 slot.
+- **2026-04-23** — **Phase 2 🟢 + Phase 2.5 🟢 shipped.** `leebop new` (create issue with `--title/--project/--state/--priority/--label/--assignee/--description(-file|--stdin)`), `leebop archive <id...>`, and `leebop set links <id> +/-KIND:TARGET` (5 kinds: `blocks | blocked-by | duplicates | duplicated-by | related`; `similar` intentionally in `raw` only). `show` now folds `relations + inverseRelations` into a `── links ──` section. Ships with 11 new unit tests for `parseLinkToken` (62 total, all green). **Live-verified** via TEST-C/TEST-D pair (UE-355 + UE-356 — both created via `leebop new`, linked in every directional variant, then archived via `leebop archive`). **Two significant Linear semantic quirks discovered during live-test, now logged**: (1) Linear enforces AT MOST ONE relation per issue pair — `+related:X` silently replaces any pre-existing `+blocks:X` or reverse-direction relation, which makes `+`/`-` delta semantics misleading when multiple deltas hit the same pair; (2) creating any `duplicate`-type relation may auto-move the involved issues to the `Duplicate` workflow state (type: `canceled`). Both documented under Discovered quirks. Same commander `-foo`-as-option bug hit `set links` as it did `set labels` — workaround: `--` separator or prefix with `+`. Logged as Immediate next step #1 for a UX fix.
 
 ---
 
@@ -363,9 +371,11 @@ Facts that cost time or were non-obvious on first encounter. **Don't rediscover 
 - **`issueUpdate.input.labelIds` REPLACES**, it doesn't merge. `push` fetches the current label set, computes the target set client-side, and submits the full replacement. `set labels` uses `+/-` delta syntax to hide this from the user.
 - **Linear's `viewer.name` may equal their email** (observed: `justice@unlink.xyz` is both `name` and `email`). Don't assume `name` is distinct from `email`.
 - **`issueRelationCreate` is server-side idempotent** at the `(issueId, relatedIssueId, type)` tuple. Running the same create twice returns the existing relation UUID, doesn't duplicate. `issueRelationDelete` takes the relation UUID (not the issue pair) — for a delta like `-blocks:UE-X`, you must first query `issue.relations.nodes` to find the matching relation and its UUID.
-- **`IssueRelationType` includes `similar`** in addition to the `blocks | related | duplicate` documented in spec §Phase 2 scope. Likely unused in practice; `set links` can omit it from the surface unless user wants it.
+- **Linear enforces AT MOST ONE relation per issue pair.** Adding `+related:UE-X` when `+blocks:UE-X` already exists **silently replaces** it — `issueRelationCreate` returns `success: true` but the prior relation is gone. Same for reversing direction: `+blocked-by:UE-X` replaces a pre-existing `+blocks:UE-X`. This makes the `+/-` delta semantics in `set links` misleading when multiple deltas target the same other-issue — each `+` against the same pair overwrites. Agents should either (a) target different issues per delta, or (b) accept that the last `+KIND:X` against a given pair wins.
+- **Creating a `duplicate`-type relation can trigger auto-state-changes on the involved issues** to the `Duplicate` workflow state (type: `canceled`). Observed empirically: after a chain of `+duplicates:X → +duplicated-by:X` on the same pair (triggering a replacement), both the subject and target ended up in `Duplicate` state. The trigger is probably Linear's internal "mark as duplicate" workflow, not a pure GraphQL mutation. **Warn users** (or just document) that `set links +duplicates:X` or `+duplicated-by:X` may move the issue out of its current workflow state.
+- **`IssueRelationType` includes `similar`** in addition to the `blocks | related | duplicate` documented in spec §Phase 2 scope. `set links` deliberately omits it from the surface — use `leebop raw` if ever needed.
 - **`issueCreate` input requires `teamId` as UUID** (not the key like "UE"). Resolve via cached team metadata. Same pattern as `stateId`, `labelIds`, `assigneeId`, `projectId`.
-- **`issueArchive(id: String!)` takes the issue UUID** (not identifier). `{ success }` response.
+- **`issueArchive(id: String!)` takes the issue UUID** (not identifier). `{ success }` response. Archive is reversible from the Linear UI — treat as safe.
 
 ### Tooling / environment
 - **`bun link` doesn't put binaries on the PATH agents inherit.** `~/.bun/bin` is an interactive-shell-only PATH addition. Subagents (and Claude Code itself) inherit the PATH of the process that started them. Fix: symlink the `bun link`-ed bin into `/opt/homebrew/bin` (macOS) or `/usr/local/bin` (Linux) — those dirs are universally on PATH. Documented as a required install step in `README.md`.

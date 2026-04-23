@@ -4,8 +4,15 @@ import { buildIssueMetadata } from "../lib/build.ts";
 import { readIssue, writeIssue } from "../lib/cache.ts";
 import type { TeamMetadata } from "../lib/cache.ts";
 import { resolveConfig } from "../lib/config.ts";
-import type { FetchedIssue } from "../lib/pullQuery.ts";
+import { type FetchedIssue, buildPullIssuesQuery } from "../lib/pullQuery.ts";
 import { ISSUE_UPDATE_MUTATION, type IssueUpdateInput } from "../lib/pushMutations.ts";
+import {
+  type LinkDelta,
+  createLink,
+  deleteLink,
+  findLink,
+  parseLinkToken,
+} from "../lib/relations.ts";
 import {
   getTeamMetadata,
   resolveAssigneeId,
@@ -16,14 +23,14 @@ import {
 } from "../lib/resolve.ts";
 import { linear } from "../lib/sdk.ts";
 
-const SUPPORTED_FIELDS = ["title", "state", "priority", "assignee", "labels"] as const;
+const SUPPORTED_FIELDS = ["title", "state", "priority", "assignee", "labels", "links"] as const;
 type SupportedField = (typeof SUPPORTED_FIELDS)[number];
 const UNSUPPORTED_FIELDS = new Set(["description", "content"]);
 
 export function registerSet(program: Command): void {
   program
     .command("set <field> <id> <value...>")
-    .description("single-shot point edit (title | state | priority | assignee | labels)")
+    .description("single-shot point edit (title | state | priority | assignee | labels | links)")
     .option("--team <key>", "override the resolved team")
     .option("--json", "emit structured result")
     .addHelpText(
@@ -37,6 +44,9 @@ Examples:
   leebop set labels TEAM-101 +urgent -area:backend
   leebop set labels TEAM-101 =area:backend,bug  (exact replacement)
   leebop set title TEAM-101 "new title here"
+  leebop set links TEAM-101 +blocks:TEAM-102 -related:TEAM-103
+    supported kinds: blocks | blocked-by | duplicates | duplicated-by | related
+    (use \`leebop raw\` for \`similar\`)
 `,
     )
     .action(async (field: string, id: string, valueArgs: string[], opts: SetOpts) => {
@@ -47,6 +57,11 @@ Examples:
       }
       if (!SUPPORTED_FIELDS.includes(field as SupportedField)) {
         throw new Error(`unknown field "${field}". supported: ${SUPPORTED_FIELDS.join(", ")}`);
+      }
+
+      if (field === "links") {
+        await handleLinks(id, valueArgs, opts);
+        return;
       }
 
       const value = valueArgs.join(" ");
@@ -61,7 +76,7 @@ Examples:
 
       const teamMetadata = await getTeamMetadata(config.repoHash, config.team);
       const input = await buildInput(
-        field as SupportedField,
+        field as Exclude<SupportedField, "links">,
         value,
         valueArgs,
         issueSummary,
@@ -111,7 +126,7 @@ interface SetOpts {
 }
 
 async function buildInput(
-  field: SupportedField,
+  field: Exclude<SupportedField, "links">,
   value: string,
   valueArgs: string[],
   issue: Awaited<ReturnType<Awaited<ReturnType<typeof linear>>["issue"]>>,
@@ -136,7 +151,6 @@ async function resolveLabelsInput(
   issue: Awaited<ReturnType<Awaited<ReturnType<typeof linear>>["issue"]>>,
   teamMetadata: TeamMetadata,
 ): Promise<string[]> {
-  // Exact-replace form: `=foo,bar` (single token with `=` prefix)
   if (tokens.length === 1 && tokens[0]?.startsWith("=")) {
     const names = tokens[0]
       .slice(1)
@@ -146,7 +160,6 @@ async function resolveLabelsInput(
     return resolveLabelIds(teamMetadata, names);
   }
 
-  // Delta form: `+foo -bar ...`
   const current = await issue.labels();
   const currentIds = new Set(current.nodes.map((l) => l.id));
 
@@ -164,4 +177,101 @@ async function resolveLabelsInput(
   }
 
   return Array.from(currentIds);
+}
+
+interface LinkResult {
+  op: "+" | "-";
+  kind: string;
+  target: string;
+  status: "created" | "deleted" | "already-absent" | "error";
+  relationId?: string;
+  error?: string;
+}
+
+async function handleLinks(id: string, valueArgs: string[], opts: SetOpts): Promise<void> {
+  if (valueArgs.length === 0) {
+    throw new Error("`set links` requires at least one +KIND:ID or -KIND:ID token");
+  }
+
+  const deltas: LinkDelta[] = valueArgs.map(parseLinkToken);
+  const config = await resolveConfig({ teamOverride: opts.team });
+  const client = await linear();
+
+  const selfIssue = await client.issue(id);
+  if (!selfIssue) throw new Error(`issue not found: ${id}`);
+  const selfUuid = selfIssue.id;
+  const selfIdentifier = selfIssue.identifier;
+
+  // Resolve each target identifier → UUID in parallel.
+  const uniqueTargets = Array.from(new Set(deltas.map((d) => d.target)));
+  const targetMap = new Map<string, string>();
+  await Promise.all(
+    uniqueTargets.map(async (ident) => {
+      const issue = await client.issue(ident);
+      if (!issue) throw new Error(`link target not found: ${ident}`);
+      targetMap.set(ident, issue.id);
+    }),
+  );
+
+  const results: LinkResult[] = [];
+  for (const d of deltas) {
+    const targetUuid = targetMap.get(d.target);
+    if (!targetUuid) {
+      results.push({ ...d, status: "error", error: "target UUID missing" });
+      continue;
+    }
+    try {
+      if (d.op === "+") {
+        const { id: relId } = await createLink(selfUuid, targetUuid, d.kind);
+        results.push({ ...d, status: "created", relationId: relId });
+      } else {
+        const relId = await findLink(selfIdentifier, d.target, d.kind);
+        if (!relId) {
+          results.push({ ...d, status: "already-absent" });
+        } else {
+          await deleteLink(relId);
+          results.push({ ...d, status: "deleted", relationId: relId });
+        }
+      }
+    } catch (err) {
+      results.push({ ...d, status: "error", error: (err as Error).message });
+    }
+  }
+
+  // Refresh cache snapshot if this issue was cached — relation mutations bump updatedAt.
+  const cached = await readIssue(config.repoHash, id);
+  if (cached) {
+    const refreshQuery = buildPullIssuesQuery([selfIdentifier], false);
+    const refresh = (await client.client.rawRequest(refreshQuery)) as {
+      data: Record<string, FetchedIssue | null>;
+    };
+    const fresh = refresh.data.a0;
+    if (fresh) {
+      const rebuilt = buildIssueMetadata(fresh);
+      await writeIssue(config.repoHash, rebuilt.metadata, fresh.description ?? "");
+    }
+  }
+
+  if (opts.json) {
+    process.stdout.write(
+      `${JSON.stringify({ schema_version: 1, identifier: selfIdentifier, results }, null, 2)}\n`,
+    );
+  } else {
+    for (const r of results) {
+      const icon =
+        r.status === "error"
+          ? chalk.red("✗")
+          : r.status === "already-absent"
+            ? chalk.gray("·")
+            : chalk.green("✓");
+      const label = `${r.op}${r.kind}:${r.target}`;
+      const note =
+        r.status === "error" ? ` ${chalk.red(r.error ?? "")}` : ` ${chalk.gray(r.status)}`;
+      process.stdout.write(`${icon} ${chalk.bold(selfIdentifier)} ${label}${note}\n`);
+    }
+  }
+
+  if (results.some((r) => r.status === "error")) {
+    process.exitCode = 1;
+  }
 }

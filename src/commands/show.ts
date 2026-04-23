@@ -14,7 +14,7 @@ export function registerShow(program: Command): void {
     .option("--json", "emit structured JSON instead of formatted output")
     .action(async (id: string, opts: { comments?: boolean; json?: boolean }) => {
       const withComments = opts.comments !== false;
-      const query = buildPullIssuesQuery([id.toUpperCase()], withComments);
+      const query = buildPullIssuesQuery([id.toUpperCase()], withComments, true);
       const client = await linear();
       const response = (await client.client.rawRequest(query)) as {
         data: Record<string, FetchedIssue | null>;
@@ -28,6 +28,7 @@ export function registerShow(program: Command): void {
       if (opts.json) {
         const { metadata, description } = buildIssueMetadata(node);
         const commentList = withComments ? buildComments(node) : [];
+        const relations = buildRelationSummary(node);
         process.stdout.write(
           `${JSON.stringify(
             {
@@ -35,6 +36,7 @@ export function registerShow(program: Command): void {
               metadata,
               description,
               comments: commentList,
+              relations,
             },
             null,
             2,
@@ -72,6 +74,22 @@ function printHuman(issue: FetchedIssue): void {
     process.stdout.write(`\n${chalk.gray("(no description)")}\n`);
   }
 
+  const outbound = issue.relations?.nodes ?? [];
+  const inbound = issue.inverseRelations?.nodes ?? [];
+  if (outbound.length > 0 || inbound.length > 0) {
+    process.stdout.write(`\n${chalk.gray("── links ──")}\n`);
+    for (const r of outbound) {
+      process.stdout.write(
+        `${chalk.gray("→")} ${chalk.cyan(r.type)} ${chalk.bold(r.relatedIssue.identifier)} ${chalk.gray(r.relatedIssue.title)}\n`,
+      );
+    }
+    for (const r of inbound) {
+      process.stdout.write(
+        `${chalk.gray("←")} ${chalk.cyan(r.type)} ${chalk.bold(r.issue.identifier)} ${chalk.gray(r.issue.title)}\n`,
+      );
+    }
+  }
+
   const comments = issue.comments?.nodes ?? [];
   if (comments.length > 0) {
     process.stdout.write(`\n${chalk.gray(`── comments (${comments.length}) ──`)}\n`);
@@ -80,4 +98,24 @@ function printHuman(issue: FetchedIssue): void {
       process.stdout.write(`\n${chalk.dim(c.createdAt)}  ${chalk.bold(who)}\n${c.body}\n`);
     }
   }
+}
+
+function buildRelationSummary(issue: FetchedIssue): {
+  outbound: { id: string; type: string; identifier: string; title: string }[];
+  inbound: { id: string; type: string; identifier: string; title: string }[];
+} {
+  return {
+    outbound: (issue.relations?.nodes ?? []).map((r) => ({
+      id: r.id,
+      type: r.type,
+      identifier: r.relatedIssue.identifier,
+      title: r.relatedIssue.title,
+    })),
+    inbound: (issue.inverseRelations?.nodes ?? []).map((r) => ({
+      id: r.id,
+      type: r.type,
+      identifier: r.issue.identifier,
+      title: r.issue.title,
+    })),
+  };
 }
