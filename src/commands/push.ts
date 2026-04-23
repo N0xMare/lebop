@@ -19,6 +19,7 @@ import {
   diffProjectMetadata,
 } from "../lib/diff.ts";
 import { expandIds } from "../lib/expand.ts";
+import { lintContent } from "../lib/lint.ts";
 import type { FetchedIssue, FetchedProject } from "../lib/pullQuery.ts";
 import {
   ISSUE_UPDATE_MUTATION,
@@ -39,6 +40,7 @@ interface PushOpts {
   team?: string;
   dryRun?: boolean;
   force?: boolean;
+  strict?: boolean;
   json?: boolean;
 }
 
@@ -63,9 +65,10 @@ type Plan = IssuePlan | ProjectPlan;
 interface PushResult {
   target: string;
   kind: "issue" | "project";
-  status: "pushed" | "stale" | "error" | "dry-run" | "no-changes";
+  status: "pushed" | "stale" | "error" | "dry-run" | "no-changes" | "lint-blocked";
   fields?: string[];
   error?: string;
+  warnings?: { rule: string; severity: string; message: string; line: number }[];
 }
 
 export function registerPush(program: Command): void {
@@ -75,6 +78,7 @@ export function registerPush(program: Command): void {
     .option("--team <key>", "override the resolved team")
     .option("--dry-run", "print diff and mutations; no API calls")
     .option("--force", "skip CAS staleness check (dangerous)")
+    .option("--strict", "block push on any lint warning")
     .option("--json", "emit structured per-entity result records")
     .action(async (ids: string[], opts: PushOpts) => {
       const config = await resolveConfig({ teamOverride: opts.team });
@@ -119,6 +123,29 @@ export function registerPush(program: Command): void {
               status: "error",
               fields: plan.changes.map((c) => c.field),
               error: (err as Error).message,
+            });
+            continue;
+          }
+
+          // Lint the description if it's part of the change set; warn always, block on --strict.
+          const descChanged = plan.changes.some((c) => c.field === "description");
+          const lintWarnings = descChanged ? lintContent(plan.description).warnings : [];
+          if (lintWarnings.length > 0 && !opts.json) {
+            printLintWarnings(plan.identifier, lintWarnings, Boolean(opts.strict));
+          }
+          if (opts.strict && lintWarnings.length > 0) {
+            results.push({
+              target: plan.identifier,
+              kind: "issue",
+              status: "lint-blocked",
+              fields: plan.changes.map((c) => c.field),
+              warnings: lintWarnings.map((w) => ({
+                rule: w.rule,
+                severity: w.severity,
+                message: w.message,
+                line: w.line,
+              })),
+              error: `${lintWarnings.length} lint warning(s) — fix or run without --strict`,
             });
             continue;
           }
@@ -169,6 +196,30 @@ export function registerPush(program: Command): void {
         const client = await linear();
         for (const plan of projectPlans) {
           const input = buildProjectUpdateInput(plan);
+
+          // Lint project content if it changed; warn always, block on --strict.
+          const contentChanged = plan.changes.some((c) => c.field === "content");
+          const lintWarnings = contentChanged ? lintContent(plan.content).warnings : [];
+          if (lintWarnings.length > 0 && !opts.json) {
+            printLintWarnings(`project/${plan.metadata.name}`, lintWarnings, Boolean(opts.strict));
+          }
+          if (opts.strict && lintWarnings.length > 0) {
+            results.push({
+              target: plan.metadata.name,
+              kind: "project",
+              status: "lint-blocked",
+              fields: plan.changes.map((c) => c.field),
+              warnings: lintWarnings.map((w) => ({
+                rule: w.rule,
+                severity: w.severity,
+                message: w.message,
+                line: w.line,
+              })),
+              error: `${lintWarnings.length} lint warning(s) — fix or run without --strict`,
+            });
+            continue;
+          }
+
           if (opts.dryRun) {
             results.push({
               target: plan.metadata.name,
@@ -217,7 +268,11 @@ export function registerPush(program: Command): void {
         printSummary(results, opts.dryRun === true);
       }
 
-      if (results.some((r) => r.status === "error" || r.status === "stale")) {
+      if (
+        results.some(
+          (r) => r.status === "error" || r.status === "stale" || r.status === "lint-blocked",
+        )
+      ) {
         process.exitCode = 1;
       }
     });
@@ -375,6 +430,18 @@ function formatValue(value: unknown): string {
   return String(value);
 }
 
+function printLintWarnings(
+  label: string,
+  warnings: { rule: string; severity: string; message: string; line: number }[],
+  strict: boolean,
+): void {
+  const verb = strict ? chalk.red("blocking") : chalk.yellow("lint");
+  process.stderr.write(`${verb} ${chalk.bold(label)}\n`);
+  for (const w of warnings) {
+    process.stderr.write(`  ${chalk.dim(`L${w.line}:`)} ${chalk.cyan(w.rule)} ${w.message}\n`);
+  }
+}
+
 function printSummary(results: PushResult[], dryRun: boolean): void {
   for (const r of results) {
     const label = `${r.kind === "issue" ? r.target : `project/${r.target}`}`;
@@ -386,6 +453,8 @@ function printSummary(results: PushResult[], dryRun: boolean): void {
       // already printed per-entity above
     } else if (r.status === "stale") {
       process.stdout.write(`${chalk.yellow("!")} ${label}  stale: ${r.error}\n`);
+    } else if (r.status === "lint-blocked") {
+      process.stdout.write(`${chalk.red("✗")} ${label}  ${r.error}\n`);
     } else if (r.status === "error") {
       process.stdout.write(`${chalk.red("✗")} ${label}  ${r.error}\n`);
     }
