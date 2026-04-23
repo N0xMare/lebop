@@ -8,11 +8,9 @@ Living document. Update as phases progress, quirks emerge, questions resolve. Pa
 
 ## TL;DR — where we are
 
-- **Phase 0 (bootstrap + auth):** 🟢 shipped.
-- **Phase 1 (MVP agentic read/write surface):** 🟢 shipped.
-- **Phase 2 (issue linking):** 🟢 shipped — `leebop set links` with 5 directional kinds (`blocks | blocked-by | duplicates | duplicated-by | related`); `show` now folds outbound `relations` + inbound `inverseRelations`.
-- **Phase 2.5 (`leebop new` + `leebop archive`):** 🟢 shipped — promoted out of `raw` based on usage signal.
-- **Next concrete step:** decide on **Phase 2c** (project push live-verify) or jump to **Phase 3** (linter + auto-fix). Also pending: address UX wart where `leebop set links <id> -KIND:X` fails without `--` separator (same commander-options bug as `set labels`).
+- **Phase 0–2.5:** 🟢 shipped and verified (see table).
+- **Phase 2c (project push live-verify):** 🟢 shipped. Verified against `leebop sandbox` project. Latent bug found and fixed: `push.ts` was writing `plan.{description,content}` back to cache but computing `_server.{description,description_hash,content_hash}` from the server response — Linear's markdown re-render made those diverge permanently, leaving `status` stuck showing "modified" until `--refresh`. Fix: write `updated.description` / `updated.content` from the mutation response (so on-disk matches server-normalized form).
+- **Next concrete step:** **Phase 3** (linter + auto-fix). Specific rules to encode first: (a) warning when `text\n---` becomes an H2 setext heading on push — empirically observed in sandbox regression; (b) the L001–L005 rule catalog from spec §9.1.
 
 If you're a new agent reading this, jump to **§ Resumption checklist** below.
 
@@ -24,9 +22,9 @@ If you're a new agent reading this, jump to **§ Resumption checklist** below.
 |---|---|---|
 | 0. Bootstrap + native auth | 🟢 | scaffolding, CLI dispatcher, native PAK auth (`leebop auth login/logout/whoami`) |
 | 1. MVP — agentic read/write surface | 🟢 | all verbs implemented and verified end-to-end against sentinel UE-351 + throwaway UE-352 (create/archive via `raw`). |
-| 2. Issue linking (`set links`) + relations in `show` | 🟢 | `set links` shipped with 5-kind directional surface; `show` folds `relations + inverseRelations`. Live-verified via UE-355/UE-356 pair. Project push deferred (see 2c). |
+| 2. Issue linking (`set links`) + relations in `show` | 🟢 | `set links` shipped with 5-kind directional surface; `show` folds `relations + inverseRelations`. Live-verified via UE-355/UE-356 pair. |
 | 2.5 Issue lifecycle verbs (`new`, `archive`) | 🟢 | promoted from Phase 4/raw based on usage signal. Both verified live. |
-| 2c. Project push live-verify | ⬜ | code exists (Phase 1), not yet live-tested. Deferred until needed. |
+| 2c. Project push live-verify | 🟢 | verified against `leebop sandbox` project (UUID `88377408-3d52-49f8-87c3-0d0f550cc9df`); latent post-push cache-hash-drift bug discovered and fixed. |
 | 3. Linter + auto-fix | ⬜ | — |
 | 4. Polish | ⬜ | slash commands, SKILL.md, git pre-commit, `leebop diff`. |
 
@@ -41,10 +39,10 @@ Verified install / environment state on the development machine (as of last sess
 
 ## Immediate next steps (in order)
 
-1. **Phase 2c — project push live-verify** (Phase 1 shipped the code; needs an actual live test via the cached Relay Worker Refactor project — content edit → push → re-pull → match). Deferred to date because project push mutates project content, which is visible broadly.
-2. **Start Phase 3** (linter + auto-fix). Pre-Phase-3 nothing needed.
+1. **Phase 3 — linter + auto-fix.** Rule catalog per spec §9.1 (L001–L005) plus a new L006 seeded by sandbox regression: `text\n---` silently becomes `## text` (setext H2) on push. Integrates with `leebop push` (`--strict` blocks on warnings).
+2. **UX: team-metadata TTL / fresh-project visibility.** After `leebop raw projectCreate` (and eventually `leebop project new`), `leebop new --project <name>` fails for up to 1h because team metadata is cached. Hot-invalidate after a project mutation, OR add `--refresh-metadata` / auto-refresh-on-project-not-found.
 
-Sentinel for mutation-path verification going forward: **UE-351** (team UE, in Relayer Hardening). For Phase 2-style link/lifecycle tests, create throwaway `TEST:` pairs via `leebop new` and `leebop archive` them at the end.
+**Mutation sandbox**: all live-test mutations now run inside the persistent **`leebop sandbox`** project (UUID `88377408-3d52-49f8-87c3-0d0f550cc9df`). Sentinel issues: **UE-359** (issue mutation) and **UE-360** (links partner). See `reference_leebop_sandbox.md` in auto-memory for baseline/reset instructions.
 
 ---
 
@@ -357,6 +355,7 @@ Append-only. Most recent at bottom.
 - **2026-04-23** — Pre-Phase-2 foundations. **Unit tests landed**: 4 files under `tests/` (`expand`, `diff`, `resolve`, `config`) covering pure libs; 51 tests pass in ~0.4s. tsc + biome green. **`issueRelation*` probe complete** — mutation shapes + enum values + idempotency semantics captured in § Phase 2. Headline finding: server-side idempotent create (same tuple → same UUID, no dup) and delete requires relation UUID (must look up before deleting via `-` delta). Also: surfaces design call to promote `leebop new` + `leebop archive` out of `raw` into first-class verbs (usage signal from this session's test workflow) — user input pending before committing to Phase 2.5 slot.
 - **2026-04-23** — **Phase 2 🟢 + Phase 2.5 🟢 shipped.** `leebop new` (create issue with `--title/--project/--state/--priority/--label/--assignee/--description(-file|--stdin)`), `leebop archive <id...>`, and `leebop set links <id> +/-KIND:TARGET` (5 kinds: `blocks | blocked-by | duplicates | duplicated-by | related`; `similar` intentionally in `raw` only). `show` now folds `relations + inverseRelations` into a `── links ──` section. Ships with 11 new unit tests for `parseLinkToken` (62 total, all green). **Live-verified** via TEST-C/TEST-D pair (UE-355 + UE-356 — both created via `leebop new`, linked in every directional variant, then archived via `leebop archive`). **Two significant Linear semantic quirks discovered during live-test, now logged**: (1) Linear enforces AT MOST ONE relation per issue pair — `+related:X` silently replaces any pre-existing `+blocks:X` or reverse-direction relation, which makes `+`/`-` delta semantics misleading when multiple deltas hit the same pair; (2) creating any `duplicate`-type relation may auto-move the involved issues to the `Duplicate` workflow state (type: `canceled`). Both documented under Discovered quirks. Same commander `-foo`-as-option bug hit `set links` as it did `set labels` — workaround: `--` separator or prefix with `+`. Logged as Immediate next step #1 for a UX fix.
 - **2026-04-23** — **UX fix: commander `-foo` bug in `set labels` + `set links` fully resolved.** `src/lib/argvPrep.ts::preprocessSetArgv` walks past `set FIELD ID` (accounting for `--team <val>`/`--team=val` and `--json`/`-h`/`--help`), then auto-inserts a `--` separator before the first unknown `-TOKEN` it encounters. Invariant: only touches `set` argv; leaves every other invocation alone; no-op if `--` already present. 14 new unit tests (76 total). **Live-verified** via TEST-E/TEST-F pair (UE-357 + UE-358, archived) — exercised single-negative (`-type:test`, `-blocks:UE-358`), mixed `+/-` sequences, `--json -blocks:…` co-existence, and explicit `--` back-compat. All five paths green. `leebop set labels UE-351 -type:test` and `leebop set links UE-355 -blocks:UE-356` now Just Work.
+- **2026-04-23** — **Persistent test sandbox + full regression + Phase 2c 🟢 + latent bug fix.** Created a dedicated `leebop sandbox` Linear project (UUID `88377408-3d52-49f8-87c3-0d0f550cc9df`) via `leebop raw projectCreate`, moved all mutation-path testing inside it (`feedback_no_real_linear_mutations.md` rewritten; `reference_leebop_sandbox.md` added). Populated with two persistent sentinels: **UE-359** (issue mutation regression) and **UE-360** (links partner). Ran full end-to-end regression: push roundtrip, comment, set (priority/state/labels/assignee), CAS-conflict + `--force`, all 5 `set links` directions, `show` link rendering both sides, project pull → edit content.md → push → re-pull. **Found and fixed a latent cache-hash-drift bug** in `src/commands/push.ts`: after issue/project update, we were writing `plan.{description,content}` (local pre-push) back to disk but setting `_server.{description_hash,content_hash}` from the server response — Linear's markdown renderer normalizes on push (adds blank lines around `---`; converts `text\n---` to `## text` setext H2), so the two diverged and `status` stayed stuck on "modified" until the user ran `--refresh`. Now we write the server's normalized form, so cache stays clean immediately after push. Two new Discovered quirks logged: (1) Linear markdown normalization behaviors with specific examples; (2) team-metadata 1h TTL makes `--project <name>` fail on freshly-created projects — UX improvement queued as Immediate next step #2.
 
 ---
 
@@ -377,6 +376,9 @@ Facts that cost time or were non-obvious on first encounter. **Don't rediscover 
 - **`IssueRelationType` includes `similar`** in addition to the `blocks | related | duplicate` documented in spec §Phase 2 scope. `set links` deliberately omits it from the surface — use `leebop raw` if ever needed.
 - **`issueCreate` input requires `teamId` as UUID** (not the key like "UE"). Resolve via cached team metadata. Same pattern as `stateId`, `labelIds`, `assigneeId`, `projectId`.
 - **`issueArchive(id: String!)` takes the issue UUID** (not identifier). `{ success }` response. Archive is reversible from the Linear UI — treat as safe.
+- **`projectCreate` requires `teamIds: [String!]!` and `name: String!`.** Everything else (description, content, statusId) is optional; state defaults to `backlog`. `statusId` replaced the older `state` enum — look up valid statuses via the `ProjectStatus` query if needed; absent statusId is fine for a backlog project.
+- **Linear re-renders markdown on every `issueUpdate` / `projectUpdate`.** Common normalizations observed: (a) blank lines inserted around `---` horizontal-rule dividers; (b) `text\n---\n...` reparsed as `## text` (setext H2 heading) — aggressive transformation of the leading line. `push.ts` now writes the server's normalized `description` / `content` to disk so `_server.*_hash` matches the file (earlier versions wrote the pre-push local version, leaving a permanent hash drift that kept `status` stuck on "modified" until `--refresh`).
+- **Team metadata has a 1h TTL** and doesn't auto-refresh when leebop itself creates new projects/labels/states. `leebop new --project <name>` for a brand-new project fails until TTL expires or the metadata is nudged (known UX issue — see Immediate next steps).
 
 ### Tooling / environment
 - **`bun link` doesn't put binaries on the PATH agents inherit.** `~/.bun/bin` is an interactive-shell-only PATH addition. Subagents (and Claude Code itself) inherit the PATH of the process that started them. Fix: symlink the `bun link`-ed bin into `/opt/homebrew/bin` (macOS) or `/usr/local/bin` (Linux) — those dirs are universally on PATH. Documented as a required install step in `README.md`.

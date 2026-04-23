@@ -142,9 +142,11 @@ export function registerPush(program: Command): void {
               input,
             })) as { data: { issueUpdate: { success: boolean; issue: FetchedIssue } } };
             const updated = response.data.issueUpdate.issue;
-            // refresh _server from the response so the next status is clean
+            // Linear re-renders markdown (blank lines around ---, etc.), so store the
+            // server's normalized description — otherwise `description_hash` diverges
+            // from the on-disk file and status stays "modified" forever.
             const rebuilt = buildIssueMetadata(updated);
-            await writeIssue(config.repoHash, rebuilt.metadata, plan.description);
+            await writeIssue(config.repoHash, rebuilt.metadata, updated.description ?? "");
             results.push({
               target: plan.identifier,
               kind: "issue",
@@ -185,8 +187,10 @@ export function registerPush(program: Command): void {
               data: { projectUpdate: { success: boolean; project: FetchedProject } };
             };
             const updated = response.data.projectUpdate.project;
+            // same re-render normalization applies to project content — write the server's
+            // version, not the local pre-push version, so content_hash matches on disk.
             const rebuilt = buildProjectMetadata(updated);
-            await writeProject(config.repoHash, rebuilt.metadata, plan.content);
+            await writeProject(config.repoHash, rebuilt.metadata, updated.content ?? "");
             results.push({
               target: plan.metadata.name,
               kind: "project",
