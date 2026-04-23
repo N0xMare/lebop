@@ -9,8 +9,8 @@ Living document. Update as phases progress, quirks emerge, questions resolve. Pa
 ## TL;DR — where we are
 
 - **Phase 0 (bootstrap + auth):** 🟢 shipped.
-- **Phase 1 (MVP agentic read/write surface):** 🟡 code-complete (~1,350 LOC), all read paths verified end-to-end against real Linear, all write paths verified via `--dry-run` only. **Mutation-path verification blocked pending user designation of a sentinel issue.**
-- **Next concrete step:** pick a sentinel issue (or dedicated test issue) in team `UE`, then run the three mutation tests in **§ Phase 1 acceptance — pending**.
+- **Phase 1 (MVP agentic read/write surface):** 🟢 shipped. All read + write paths verified end-to-end against real Linear against sentinel UE-351. `raw`-based create + archive also verified (via UE-352, now archived).
+- **Next concrete step:** start **Phase 2** (project push + `set links`). Prep: probe `issueRelationCreate` / `issueRelationDelete` shape via `leebop raw` before coding.
 
 If you're a new agent reading this, jump to **§ Resumption checklist** below.
 
@@ -21,7 +21,7 @@ If you're a new agent reading this, jump to **§ Resumption checklist** below.
 | Phase | Status | What's in / what's out |
 |---|---|---|
 | 0. Bootstrap + native auth | 🟢 | scaffolding, CLI dispatcher, native PAK auth (`leebop auth login/logout/whoami`) |
-| 1. MVP — agentic read/write surface | 🟡 | all verbs implemented; `show`, `pull --to`, path-on-success shipped. Reads + dry-runs verified. Mutations pending sentinel. |
+| 1. MVP — agentic read/write surface | 🟢 | all verbs implemented and verified end-to-end against sentinel UE-351 + throwaway UE-352 (create/archive via `raw`). |
 | 2. Projects round-trip + issue linking | ⬜ | project pull already works (Phase 1); push and `set links` pending. |
 | 3. Linter + auto-fix | ⬜ | — |
 | 4. Polish | ⬜ | `leebop new`, slash commands, SKILL.md, git pre-commit, `leebop diff` remaining. (`show` promoted to Phase 1.) |
@@ -37,12 +37,11 @@ Verified install / environment state on the development machine (as of last sess
 
 ## Immediate next steps (in order)
 
-1. **Designate a sentinel issue in UE** — an existing issue you're comfortable mutating, OR a new `TEST: leebop sentinel` issue. Record its identifier here and in a `.leebop-test-target.yaml` when the integration-test harness lands.
-2. **Run the three pending mutation tests** (see **§ Phase 1 acceptance — pending** below). Each takes seconds. Revert via `leebop pull <id> --refresh` after.
-3. **Flip the mutation checkboxes, close Phase 1.**
-4. **Start Phase 2** (projects round-trip + issue linking) — see **§ Phase 2** for scope.
+1. **Write vitest unit tests on pure libs** (`diff.ts`, `resolve.ts`, `expand.ts`, `config.ts`) — plan-mandated pre-Phase-2 coverage. No network, no sentinel needed.
+2. **Probe `issueRelationCreate` / `issueRelationDelete` via `leebop raw`** — confirm the mutation shape before coding `set links`.
+3. **Start Phase 2** (project push live-verify + `set links` delta syntax) — see **§ Phase 2** for scope. Sentinel for Phase 2 verification: UE-351 + UE-317 (existing) for relation targets, or create a throwaway pair via `raw issueCreate`.
 
-Everything else (tests, linter, polish) is downstream of closing Phase 1.
+Sentinel for any mutation-path verification going forward: **UE-351** (team UE, in Relayer Hardening, baseline documented in progress-log entry 2026-04-23).
 
 ---
 
@@ -208,19 +207,20 @@ Ship-blocker. Everything an agent needs to read/write Linear end-to-end, minus p
 **Refusals** (static guards, verified)
 - [x] `leebop set description <id> ...` refuses at parse time, points at pull→edit→push (tested)
 
-### Acceptance criteria — pending (sentinel issue required)
+### Acceptance criteria — verified against sentinel UE-351 (2026-04-23)
 
-Run these once a sentinel issue is designated. Each should complete in seconds; revert between runs with `leebop pull <sentinel> --refresh`.
+Sentinel baseline: state=Backlog, priority=0 (none), unassigned, labels=[], description="test test tester mctester test". Revert between runs with the set/push combo documented in progress-log.
 
-- [ ] **Real push round-trip:** edit sentinel's `description.md` locally → `leebop push` → re-pull → confirm the edit landed in Linear and `status` is clean
-- [ ] **Real comment:** `leebop comment <sentinel> --body "test via leebop $(date +%s)"` → verify the comment appears when re-pulled
-- [ ] **Real set:**
-  - [ ] `leebop set priority <sentinel> urgent` → verify via `show`
-  - [ ] `leebop set state <sentinel> "<a state name>"` → verify via `show`
-  - [ ] `leebop set labels <sentinel> +<known-label> -<known-label>` → verify via `show`
-  - [ ] `leebop set assignee <sentinel> @me` → verify via `show`
-- [ ] `leebop push --force` bypasses CAS (tamper `_server.updated_at` forward, `--force`, confirm it pushes anyway)
-- [ ] Interactive `leebop auth login` (no flags; hidden-input prompt) — `auth logout`, then `auth login`, paste a PAK manually
+- [x] **Real push round-trip:** edited `description.md` locally → `leebop push` → re-pull → remote matched local, `status` clean
+- [x] **Real comment:** `leebop comment UE-351 --body "test via leebop <ts>"` → re-pull surfaced the comment file under `issues/UE-351/comments/<uuid>.md`
+- [x] **Real set:**
+  - [x] `leebop set priority UE-351 urgent` → verified via `show`
+  - [x] `leebop set state UE-351 "In Progress"` → verified via `show`
+  - [x] `leebop set labels UE-351 +type:test` → verified via `show`; revert via `leebop set labels UE-351 =` (exact-empty replacement)
+  - [x] `leebop set assignee UE-351 @me` → verified via `show`; revert via `leebop set assignee UE-351 null`
+- [x] `leebop push --force` bypasses CAS — tamper `_server.updated_at` **backward** (not forward; plan wording was wrong — see `push.ts:279`: `remote.updatedAt > _server.updated_at` ⇒ stale). Plain `push` refused with exit=1; `push --force` succeeded.
+- [x] **Create + archive via `raw`:** `issueCreate` mutation produced UE-352 in Relayer Hardening / Triage with `type:test` label; `issueArchive` mutation returned `success=true`. Validates `raw` for mutations (previously only query was verified).
+- [ ] Interactive `leebop auth login` (no flags; hidden-input prompt) — codepath typechecks, **still user-verifiable-only**
 
 ### Deferred from Phase 1 (not yet implemented)
 - [ ] `leebop pull` space-separated list of IDs (tested range `UE-321..UE-329` and single; not `UE-321 UE-322 UE-323` — code supports it, untested in session)
@@ -316,6 +316,7 @@ Append-only. Most recent at bottom.
 - **2026-04-22** — Phase 1 🟡 code-complete (~1,350 lines). All verbs shipped. Read paths verified end-to-end against `UE` workspace + `Relay Worker Refactor` project. Discovered: `IssueFilter` doesn't expose `identifier` → use multi-alias GraphQL via `issue(id: "…")`. Multi-file cache design with `_server:` snapshot (incl. description hash) for cheap status diff. Team metadata cache with 1h TTL. Sentinel-issue mutation verification blocked pending user designation. Commit `7a77f4b`.
 - **2026-04-22** — Agent-UX smoke test. **Round 1 failed silently**: subagent couldn't find `leebop` on its PATH and fell back to `@schpet/linear-cli`. Root cause: `bun link` places bins in `~/.bun/bin`, which Claude Code subagents don't inherit even after the user edits `~/.zshrc`. **Fix:** symlink `~/.bun/bin/leebop → /opt/homebrew/bin/leebop` (sudo-free; universally on PATH). **Round 2 succeeded**: subagent discovered leebop via `--help`, pulled UE-322, produced correct summary. Two UX gaps surfaced and fixed: (1) `pull` didn't print where files landed → now prints full cache path; (2) no read-only "just show me this issue" verb → added `leebop show <id>`. Also added `leebop pull --to <dir>` export mode. README rewritten with install + comparative overview of production CLI install patterns. Commit `5c0c0ab`.
 - **2026-04-22** — Session close: Phase 1 paused awaiting sentinel-issue designation for mutation-path verification. All Phase 1 code shipped, all read paths verified. Implementation plan rewritten for clean resumption.
+- **2026-04-23** — **Phase 1 🟢 closed.** Sentinel UE-351 designated (Backlog / Relayer Hardening / unassigned / no labels / description `"test test tester mctester test"`). Full mutation battery executed end-to-end against real Linear: push roundtrip (description edit), comment add, `set priority/state/labels/assignee`, CAS conflict + `--force` bypass. All reverted to baseline. Also: throwaway UE-352 created via `leebop raw issueCreate` in Triage / `type:test` / Relayer Hardening, then archived via `leebop raw issueArchive` — validates `raw` for mutations (previously only query verified) and proves the create-path ahead of Phase 4's `leebop new`. **Corrections to plan**: CAS refusal triggers on tamper-**backward** of `_server.updated_at`, not forward (code: `push.ts:279`). **New quirk discovered**: `leebop set labels <id> -foo` alone fails because commander parses leading `-` as an option flag — workaround via `+` prefix first or `=` exact-replace. Logged under Discovered quirks. Next session: pre-Phase-2 vitest unit tests on pure libs, then `issueRelationCreate` probe, then Phase 2 (project push + `set links`).
 
 ---
 
@@ -333,6 +334,7 @@ Facts that cost time or were non-obvious on first encounter. **Don't rediscover 
 
 ### Tooling / environment
 - **`bun link` doesn't put binaries on the PATH agents inherit.** `~/.bun/bin` is an interactive-shell-only PATH addition. Subagents (and Claude Code itself) inherit the PATH of the process that started them. Fix: symlink the `bun link`-ed bin into `/opt/homebrew/bin` (macOS) or `/usr/local/bin` (Linux) — those dirs are universally on PATH. Documented as a required install step in `README.md`.
+- **Commander treats leading `-` as an option flag in variadic args.** `leebop set labels UE-351 -type:test` on its own fails with `error: unknown option '-type:test'` because the variadic `<value...>` still runs through the option parser. Workaround: (a) pair a `+` token before the `-` token (`+x -y`), or (b) use `=` exact-replace to clear labels wholesale. Worth a UX fix later: either reorder args after `--`, or preprocess argv in `registerSet` to shield `-foo` tokens from commander.
 - **Bun's default tsconfig uses `"module": "Preserve"` and `"moduleResolution": "bundler"`**, not `NodeNext`. That's correct for a bun-native app; NodeNext is what we'd use only for a Node+tsx fallback. Spec mentions NodeNext — that was generic TS advice, not mandatory.
 - **`client.client.rawRequest(query, variables)` is the public escape hatch** in `@linear/sdk`. `.client` is typed, `rawRequest` is typed. No `@ts-expect-error` needed.
 - **Biome's organizeImports is aggressive.** Put `type` imports separate from value imports; it'll reorder anyway. Acceptable; just run `bunx biome check --write` and commit.
@@ -370,7 +372,7 @@ If you're picking this up cold (new agent or returning developer):
 4. **Run `leebop --help`** to confirm the surface matches this doc. If a verb is missing or extra, this doc is stale — reconcile before coding.
 5. **Consult Source map** to find the right file for your task.
 6. **Consult Discovered quirks** before writing any Linear-touching code. Most costly bugs in prior sessions would have been avoided by reading this list first.
-7. **Pick the first ⬜ checkbox in the current phase.** Currently: **§ Phase 1 acceptance — pending** (sentinel mutation tests).
+7. **Pick the first ⬜ checkbox in the current phase.** Currently: **§ Phase 2** (project push live-verify + `set links`). Pre-Phase-2 test coverage is called out in **§ Test strategy**.
 8. **On any new quirk: append to Discovered quirks BEFORE fixing** so the knowledge survives the fix.
 9. **Before committing any code:** `bunx tsc --noEmit` + `bunx biome check src/` both green. `bunx biome check --write src/` to auto-fix formatting.
 10. **Commit convention:** present-tense subject lines, scope prefix (`feat:`, `docs:`, `fix:`). Include a short "why" in the body. Don't commit without running the tsc+biome gate.
