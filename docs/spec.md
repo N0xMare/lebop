@@ -6,9 +6,9 @@
 
 ## 1. What this is
 
-A personal TypeScript CLI that turns Linear issue/project edits into a local pull → edit → push loop for coding agents. Replaces the "shell out `linear issue update --description-file` N times, manually resolve label UUIDs, discover markdown quirks by breakage" workflow.
+A TypeScript CLI that gives coding agents a complete, efficient, correct interface to Linear. The hero use case is a local pull → edit → push loop for bulk edits. Around that, leebop also owns issue discovery, single-shot point edits, comments, and a GraphQL escape hatch — so agents don't need to context-switch to another tool for any baseline operation.
 
-One sentence: stateless CLI (Bun runtime) → `@linear/sdk` → markdown + YAML cache under `~/.leebop/cache/<repo-hash>/`. No daemon, no webhooks, no MCP server. Pull is on-demand; CAS via `updatedAt` catches races at push time.
+One sentence: stateless CLI (Bun runtime) → `@linear/sdk`, with markdown + YAML cache under `~/.leebop/cache/<repo-hash>/` for the bulk loop and direct mutations for single-shot. No daemon, no webhooks, no MCP server. Pull is on-demand; CAS via `updatedAt` catches races at push time.
 
 **Core assumption:** the calling agent has filesystem edit primitives (Read/Write/Edit). The whole design rests on materializing Linear state as files so the agent uses its existing text-editing vocabulary instead of a Linear-specific tool surface. If the target agent class is tool-call-only (no filesystem), the shape changes — most likely a thin MCP server wrapping the same verbs and returning content inline. Today (Claude Code and similar coding agents) this assumption holds cleanly; name it explicitly so the condition under which leebop's shape would need to change is visible. See §10.8 for the JSON-output escape hatch that partially covers tool-call-only callers.
 
@@ -30,14 +30,23 @@ Goal: collapse the agent workflow from "N round-trips per field" to "pull once �
 ## 3. Scope
 
 ### In scope
-- Per-user CLI `leebop` with subcommands: `pull`, `push`, `status`, `diff`, `lint`
+- Per-user CLI `leebop` with subcommands:
+  - **auth:** `auth login`, `auth logout`, `auth whoami`
+  - **discovery:** `list`, `projects`, `teams`
+  - **bulk round-trip:** `pull`, `push`, `status`, `diff`, `lint`
+  - **point edits:** `comment`, `set <field>`
+  - **escape hatch:** `raw <query>`
+  - **creation (Phase 4+):** `new`
+- Native authentication via Linear personal API key (PAK); no runtime dependency on `@schpet/linear-cli`
 - Local cache of Linear entities as editable markdown + YAML under `~/.leebop/cache/<repo-hash>/`
-- Issues: read/write `description`, `title`, `state`, `priority`, `labels`, `assignee`
-- Projects: read/write `content`, `description`, `state`
-- Comments: read only (v1)
+- Issues: read/write `description`, `title`, `state`, `priority`, `labels`, `assignee`; bundled comment read on `pull`
+- Projects: read/write `content`, `description`, `state`; project listing
+- Comments: read (bundled with `pull`) and write (`comment`); editing existing comments deferred
+- Issue linking (`blocks`, `related`, `duplicates`) via `set links` (Phase 2)
 - Per-repo config at `~/.leebop/config.yaml` (default team, path rewrites, conventions)
 - CAS via `updatedAt` — refuse push if remote changed since pull
 - Markdown linter encoding discovered Linear-renderer quirks
+- GraphQL escape hatch (`leebop raw`) so no Linear operation is hard-gated behind "leave the tool"
 - User-level Claude Code skill at `~/.claude/skills/leebop/SKILL.md`
 
 ### Out of scope
@@ -47,9 +56,9 @@ Goal: collapse the agent workflow from "N round-trips per field" to "pull once �
 - Local MCP server exposure (see §4)
 - Migrating content between Linear workspaces
 - UI — CLI + files only
-- Replacing `@schpet/linear-cli` for auth — we shell out to it for bootstrap token
-- Comment write-path in v1
+- Interactive/human-UX features of `@schpet/linear-cli` (browser-open, branch-name generation, interactive pickers); leebop complements it, does not replace it
 - Conflict merging — on `updatedAt` mismatch, abort and require explicit `leebop pull --refresh`
+- Destructive ops as first-class verbs (archive, delete) — use `leebop raw` deliberately
 
 ## 4. Alternatives rejected
 
@@ -75,17 +84,26 @@ leebop/                                    # this repo — source only
 ├── src/
 │   ├── cli.ts                             # dispatcher + subcommand routing
 │   ├── commands/
+│   │   ├── auth.ts                        # login / logout / whoami
 │   │   ├── pull.ts
 │   │   ├── push.ts
 │   │   ├── status.ts
 │   │   ├── diff.ts
-│   │   └── lint.ts
+│   │   ├── lint.ts
+│   │   ├── list.ts                        # issue search / filter
+│   │   ├── projects.ts                    # project listing
+│   │   ├── teams.ts                       # team listing
+│   │   ├── comment.ts                     # add comment
+│   │   ├── set.ts                         # single-shot point edit (state/priority/etc.)
+│   │   └── raw.ts                         # GraphQL escape hatch
 │   └── lib/
-│       ├── sdk.ts                         # @linear/sdk client + bootstrap auth
+│       ├── sdk.ts                         # @linear/sdk client + PAK-backed auth
+│       ├── auth.ts                        # PAK storage, validation, migration
 │       ├── cache.ts                       # read/write markdown + YAML
 │       ├── diff.ts                        # local ↔ remote field-level diffing
 │       ├── lint.ts                        # rule runner
 │       ├── quirks.ts                      # Linear renderer quirks (rules)
+│       ├── resolve.ts                     # name ↔ UUID (labels, states, assignees)
 │       ├── config.ts                      # per-repo config resolution
 │       └── types.ts                       # shared types
 ├── tests/
@@ -113,8 +131,19 @@ Principle: whatever repo the user's shell is in stays pristine. All tool runtime
 
 These are verified behaviors. Do not rediscover.
 
-### 6.1 Auth (v1 bootstrap)
-`@schpet/linear-cli` already handles OAuth. Get a bearer token via `linear auth token`. Pass it to `@linear/sdk`. Don't reimplement auth. If 401, surface a clean message pointing at `linear auth login`; don't try to reauth ourselves.
+### 6.1 Auth (native, personal API key)
+
+**v1:** leebop owns authentication end-to-end via Linear **personal API keys** (PAK). No runtime dependency on `@schpet/linear-cli`.
+
+Flow:
+1. `leebop auth login` prompts for a PAK (user pastes from Linear Settings → API). Optional `--from-schpet` imports the token currently stored by `@schpet/linear-cli` as a one-step migration.
+2. PAK is validated by calling `viewer { id name email }` before it's persisted; if the call fails, reject and don't write.
+3. Stored at `~/.leebop/auth.json` with `chmod 0600`. Shape: `{ "schema_version": 1, "token": "lin_api_...", "viewer": { "id": "...", "email": "...", "name": "..." }, "created_at": "..." }`.
+4. `leebop auth whoami` prints the cached viewer; re-validates against Linear if `--refresh` is passed.
+5. `leebop auth logout` deletes `~/.leebop/auth.json`.
+6. On 401 from any command, emit a clean message pointing at `leebop auth login`; do not attempt silent reauth.
+
+**Why PAK, not OAuth, for v1:** PAK avoids registering a public OAuth app, implementing PKCE, running a local callback server, and managing refresh tokens. Costs one visit to Linear Settings to generate a key. OAuth (including the actor=app variant for audit-trail separation) is the natural Phase 4+ upgrade when the friction shows up — see §11.
 
 ### 6.2 Linear markdown renderer quirks
 
@@ -237,14 +266,15 @@ Resolution: detect `cwd` → walk up for git root → look up by repo path → f
 
 All commands respect `--team <KEY>` (default from config), `--verbose`, and `--json` (structured output — see §10.8).
 
-### 8.1 `leebop pull [IDS...] [--project NAME] [--project-id UUID] [--refresh]`
-Fetch entities into cache; write `description.md` + `metadata.yaml` atomically (temp file + rename).
+### 8.1 `leebop pull [IDS...] [--project NAME] [--project-id UUID] [--refresh] [--no-comments]`
+Fetch entities into cache; write `description.md` + `metadata.yaml` atomically (temp file + rename). By default, **comments are fetched alongside** into `issues/<ID>/comments/<N>.md` as read-only files, because agents routinely need thread context to edit intelligently.
 
 - `leebop pull TEAM-101` — single
 - `leebop pull TEAM-101 TEAM-102 TEAM-103` — list
 - `leebop pull TEAM-101..TEAM-109` — inclusive range, same team
 - `leebop pull --project "Example Project"` — project + all its issues
 - `--refresh` — overwrite local even when unpushed edits exist (warn first)
+- `--no-comments` — skip comment fetching for speed
 
 Default behavior: if local has unpushed edits, refuse. On per-entity GraphQL error, report and continue with the rest.
 
@@ -294,6 +324,61 @@ Run linter rules against local markdown files (default: all `description.md` / `
 - `--strict` exits non-zero on any warning.
 - Split: universal Linear-quirk rules (in `src/lib/quirks.ts`) and repo-scoped rules (loaded from `config.yaml`).
 - `leebop push` runs lint first; `--strict` mode blocks the push on warnings.
+
+### 8.6 `leebop list [filters...] [--json]`
+Discover issues by filter. **No cache side-effect** — pure read. This is how agent sessions typically *start* (find the work, then pull it).
+
+Filters (all optional, composable):
+- `--project NAME` / `--project-id UUID`
+- `--state NAME` (`--state "In Progress"`) or `--state-type STATE_TYPE` (`backlog` | `unstarted` | `started` | `completed` | `cancelled`)
+- `--assignee me | EMAIL | NAME`
+- `--label NAME` (repeatable)
+- `--priority 0..4`
+- `--updated-since 7d` | ISO timestamp
+- `--limit N` (default 50)
+
+Default output: one line per issue, `IDENT  [STATE]  TITLE  (assignee)`. `--json` emits structured records.
+
+### 8.7 `leebop projects [--team KEY] [--state STATE] [--json]`
+List projects in the team. Default output: `NAME  [STATE]  <uuid>` one per line. `--json` for structured.
+
+### 8.8 `leebop teams [--json]`
+List teams in the workspace. Useful for seeding `config.yaml` and for discovering the correct team key.
+
+### 8.9 `leebop comment <ID> [--body "text" | --body-file FILE | -]`
+Add a comment to an issue. No cache round-trip — direct mutation.
+
+- `leebop comment TEAM-101 --body "LGTM"` — inline body
+- `leebop comment TEAM-101 --body-file notes.md` — from file (for multi-line markdown)
+- `leebop comment TEAM-101 -` — read body from stdin
+
+### 8.10 `leebop set <field> <ID> <value> [--json]`
+Single-shot point edit. Resolves names → UUIDs; uses fresh server-side `updatedAt` for CAS. No local-cache round-trip.
+
+Supported fields:
+- `title <ID> "new title"`
+- `state <ID> "In Progress"`
+- `priority <ID> urgent` (accepts `urgent|high|normal|low|none` or `0|1|2|3|4`)
+- `assignee <ID> <email|name|@me>`
+- `labels <ID> +foo -bar` — **delta syntax** (so the caller never has to manage the full replacement set themselves). `=foo,bar` forces exact replacement.
+- `links <ID> blocks:TEAM-102,related:TEAM-103,duplicates:TEAM-104` — **Phase 2**
+
+Refuses to run on fields where single-shot makes no sense (`description`, `content`) — those require `pull` → edit → `push`.
+
+### 8.11 `leebop raw <query> [--variables-json FILE | -] [--json]`
+GraphQL escape hatch. Executes an arbitrary query/mutation through the authenticated client and prints the response. The explicit-opt-in guardrail for edge-case Linear operations (cycles, archive, attachments, history, custom fields) that leebop doesn't model as first-class verbs.
+
+- `leebop raw "query { viewer { id email } }"`
+- `leebop raw "$(cat query.graphql)" --variables-json vars.json`
+- `leebop raw - --variables-json -` — query and variables both from stdin (separated by delimiter)
+
+Output is the raw JSON response. `--json` is the default; provided as a no-op flag for consistency with other commands.
+
+### 8.12 `leebop auth <login | logout | whoami [--refresh]> [--from-schpet]`
+See §6.1 for the full auth flow. Summary:
+- `leebop auth login` — prompt for PAK (or `--from-schpet` to import); validate against Linear; store at `~/.leebop/auth.json` (0600).
+- `leebop auth whoami` — print cached viewer; `--refresh` re-validates against Linear.
+- `leebop auth logout` — delete `~/.leebop/auth.json`.
 
 ## 9. Lint rule catalog
 
