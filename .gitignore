@@ -10,3 +10,8 @@ dist/
 # but ignore any stray local test-state files
 auth.json
 /cache/
+
+# Claude Code per-project local state (permissions allowlist, etc.) — user-local,
+# not for the repo. The tracked `claude/` (no dot) is the agent integration assets;
+# `.claude/` (with dot) is the harness's local config.
+.claude/

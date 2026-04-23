@@ -50,6 +50,16 @@ leebop auth login --token-file ./my-pak.txt
 
 Credentials land at `~/.leebop/auth.json` (mode 0600).
 
+### Wire up Claude Code integration (skill + slash commands)
+
+leebop ships its agent-facing assets — `SKILL.md` plus three slash commands (`/leebop-pull`, `/leebop-push`, `/leebop-lint`) — under `claude/` in this repo. Run the installer once to symlink them into `~/.claude/`:
+
+```sh
+./bin/install-claude
+```
+
+The script creates symlinks (not copies), so any update to `claude/skills/leebop/SKILL.md` or `claude/commands/leebop-*.md` in this repo is picked up by Claude Code immediately on the next session — no re-install after `git pull`. Restart Claude Code (or open a new session) the first time to load the skill into the matcher.
+
 ## How production CLIs handle install/PATH
 
 leebop's install story (`bun link` + explicit symlink or PATH edit) is deliberately minimal for a personal tool. For reference, here's how the ecosystem solves "make this binary discoverable everywhere" at different scales:
