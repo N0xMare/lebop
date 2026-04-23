@@ -250,7 +250,37 @@ Project pull already works from Phase 1 (`leebop pull --project`). What's left:
 
 **Estimated size:** ~120 additional lines.
 
-**Linking requires GraphQL we haven't touched yet:** `issueRelationCreate` / `issueRelationDelete`. The `IssueRelation` type in `@linear/sdk` has `type: "blocks"|"related"|"duplicate"`. Worth a quick probe via `leebop raw` before coding.
+**Linking GraphQL shape — verified via `leebop raw` probe (2026-04-23):**
+
+```graphql
+# CREATE — idempotent at the (issueId, relatedIssueId, type) tuple
+mutation ($input: IssueRelationCreateInput!) {
+  issueRelationCreate(input: $input) {
+    success
+    issueRelation { id type issue { identifier } relatedIssue { identifier } }
+  }
+}
+# input = { type: IssueRelationType!, issueId: String!, relatedIssueId: String! }
+# (id is optional; server generates)
+
+# DELETE — takes the relation's own UUID, not the issue pair
+mutation { issueRelationDelete(id: "<relation-uuid>") { success } }
+
+# READ — both outbound and inbound
+query { issue(id: "UE-351") {
+  relations { nodes { id type relatedIssue { identifier } } }          # outbound
+  inverseRelations { nodes { id type issue { identifier } } }          # inbound
+} }
+```
+
+`IssueRelationType` enum: `blocks | related | duplicate | similar` (note `similar` — undocumented in our spec, likely unused but exists).
+
+**Key design implications for `set links`:**
+- Create is server-side-idempotent: agents don't need to pre-check for existing relations before adding. `+blocks:UE-X` on an already-blocking issue is a no-op, not an error.
+- Delete requires the **relation UUID**, not the (source, target, type) tuple. `set links <id> -blocks:UE-X` implementation must:
+  1. Read `issue.relations.nodes` to find the relation UUID matching `(type=blocks, relatedIssue.identifier=UE-X)`
+  2. Call `issueRelationDelete(id: <found-uuid>)`
+- For displaying relations in `show`, fold `relations` (outbound) and `inverseRelations` (inbound) — an issue "blocked by" something shows up in `inverseRelations` as type `blocks`.
 
 ---
 
@@ -293,7 +323,7 @@ Project pull already works from Phase 1 (`leebop pull --project`). What's left:
 **Current reality:** zero tests written. Everything verified this session was interactive/manual.
 
 ### What to write first (before Phase 2)
-1. **Vitest unit tests** on pure functions — `diff.ts`, `resolve.ts`, `expand.ts`, `config.ts`. No network, no SDK. Fast.
+1. **Vitest unit tests** on pure functions — `diff.ts`, `resolve.ts`, `expand.ts`, `config.ts`. No network, no SDK. Fast. **🟢 Done 2026-04-23 — 51 tests across 4 files in `tests/`, all passing (~0.4s run).**
 2. **Integration test harness** against a real sentinel issue in `UE`:
    - `.leebop-test-target.yaml` at repo root names the team + sentinel ID
    - Tests gated on `LEEBOP_TEST_SENTINEL` env var (set to the identifier)
@@ -316,7 +346,8 @@ Append-only. Most recent at bottom.
 - **2026-04-22** — Phase 1 🟡 code-complete (~1,350 lines). All verbs shipped. Read paths verified end-to-end against `UE` workspace + `Relay Worker Refactor` project. Discovered: `IssueFilter` doesn't expose `identifier` → use multi-alias GraphQL via `issue(id: "…")`. Multi-file cache design with `_server:` snapshot (incl. description hash) for cheap status diff. Team metadata cache with 1h TTL. Sentinel-issue mutation verification blocked pending user designation. Commit `7a77f4b`.
 - **2026-04-22** — Agent-UX smoke test. **Round 1 failed silently**: subagent couldn't find `leebop` on its PATH and fell back to `@schpet/linear-cli`. Root cause: `bun link` places bins in `~/.bun/bin`, which Claude Code subagents don't inherit even after the user edits `~/.zshrc`. **Fix:** symlink `~/.bun/bin/leebop → /opt/homebrew/bin/leebop` (sudo-free; universally on PATH). **Round 2 succeeded**: subagent discovered leebop via `--help`, pulled UE-322, produced correct summary. Two UX gaps surfaced and fixed: (1) `pull` didn't print where files landed → now prints full cache path; (2) no read-only "just show me this issue" verb → added `leebop show <id>`. Also added `leebop pull --to <dir>` export mode. README rewritten with install + comparative overview of production CLI install patterns. Commit `5c0c0ab`.
 - **2026-04-22** — Session close: Phase 1 paused awaiting sentinel-issue designation for mutation-path verification. All Phase 1 code shipped, all read paths verified. Implementation plan rewritten for clean resumption.
-- **2026-04-23** — **Phase 1 🟢 closed.** Sentinel UE-351 designated (Backlog / Relayer Hardening / unassigned / no labels / description `"test test tester mctester test"`). Full mutation battery executed end-to-end against real Linear: push roundtrip (description edit), comment add, `set priority/state/labels/assignee`, CAS conflict + `--force` bypass. All reverted to baseline. Also: throwaway UE-352 created via `leebop raw issueCreate` in Triage / `type:test` / Relayer Hardening, then archived via `leebop raw issueArchive` — validates `raw` for mutations (previously only query verified) and proves the create-path ahead of Phase 4's `leebop new`. **Corrections to plan**: CAS refusal triggers on tamper-**backward** of `_server.updated_at`, not forward (code: `push.ts:279`). **New quirk discovered**: `leebop set labels <id> -foo` alone fails because commander parses leading `-` as an option flag — workaround via `+` prefix first or `=` exact-replace. Logged under Discovered quirks. Next session: pre-Phase-2 vitest unit tests on pure libs, then `issueRelationCreate` probe, then Phase 2 (project push + `set links`).
+- **2026-04-23** — **Phase 1 🟢 closed.** Sentinel UE-351 designated (Backlog / Relayer Hardening / unassigned / no labels / description `"test test tester mctester test"`). Full mutation battery executed end-to-end against real Linear: push roundtrip (description edit), comment add, `set priority/state/labels/assignee`, CAS conflict + `--force` bypass. All reverted to baseline. Also: throwaway UE-352 created via `leebop raw issueCreate` in Triage / `type:test` / Relayer Hardening, then archived via `leebop raw issueArchive` — validates `raw` for mutations (previously only query verified) and proves the create-path ahead of Phase 4's `leebop new`. **Corrections to plan**: CAS refusal triggers on tamper-**backward** of `_server.updated_at`, not forward (code: `push.ts:279`). **New quirk discovered**: `leebop set labels <id> -foo` alone fails because commander parses leading `-` as an option flag — workaround via `+` prefix first or `=` exact-replace. Logged under Discovered quirks.
+- **2026-04-23** — Pre-Phase-2 foundations. **Unit tests landed**: 4 files under `tests/` (`expand`, `diff`, `resolve`, `config`) covering pure libs; 51 tests pass in ~0.4s. tsc + biome green. **`issueRelation*` probe complete** — mutation shapes + enum values + idempotency semantics captured in § Phase 2. Headline finding: server-side idempotent create (same tuple → same UUID, no dup) and delete requires relation UUID (must look up before deleting via `-` delta). Also: surfaces design call to promote `leebop new` + `leebop archive` out of `raw` into first-class verbs (usage signal from this session's test workflow) — user input pending before committing to Phase 2.5 slot.
 
 ---
 
@@ -331,6 +362,10 @@ Facts that cost time or were non-obvious on first encounter. **Don't rediscover 
 - **`updatedAt` CAS is entity-level, not field-level.** Any edit bumps it, so CAS refusal can be a false positive when two users edited unrelated fields between pull and push. Accepted trade-off; `--force` is the escape. See spec §10.7.
 - **`issueUpdate.input.labelIds` REPLACES**, it doesn't merge. `push` fetches the current label set, computes the target set client-side, and submits the full replacement. `set labels` uses `+/-` delta syntax to hide this from the user.
 - **Linear's `viewer.name` may equal their email** (observed: `justice@unlink.xyz` is both `name` and `email`). Don't assume `name` is distinct from `email`.
+- **`issueRelationCreate` is server-side idempotent** at the `(issueId, relatedIssueId, type)` tuple. Running the same create twice returns the existing relation UUID, doesn't duplicate. `issueRelationDelete` takes the relation UUID (not the issue pair) — for a delta like `-blocks:UE-X`, you must first query `issue.relations.nodes` to find the matching relation and its UUID.
+- **`IssueRelationType` includes `similar`** in addition to the `blocks | related | duplicate` documented in spec §Phase 2 scope. Likely unused in practice; `set links` can omit it from the surface unless user wants it.
+- **`issueCreate` input requires `teamId` as UUID** (not the key like "UE"). Resolve via cached team metadata. Same pattern as `stateId`, `labelIds`, `assigneeId`, `projectId`.
+- **`issueArchive(id: String!)` takes the issue UUID** (not identifier). `{ success }` response.
 
 ### Tooling / environment
 - **`bun link` doesn't put binaries on the PATH agents inherit.** `~/.bun/bin` is an interactive-shell-only PATH addition. Subagents (and Claude Code itself) inherit the PATH of the process that started them. Fix: symlink the `bun link`-ed bin into `/opt/homebrew/bin` (macOS) or `/usr/local/bin` (Linux) — those dirs are universally on PATH. Documented as a required install step in `README.md`.
