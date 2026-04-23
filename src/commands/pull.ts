@@ -1,11 +1,19 @@
+import { mkdir } from "node:fs/promises";
+import { join, resolve as resolvePath } from "node:path";
 import chalk from "chalk";
 import type { Command } from "commander";
+import { stringify as stringifyYaml } from "yaml";
 import { buildComments, buildIssueMetadata, buildProjectMetadata } from "../lib/build.ts";
 import {
+  type CachedComment,
   type IssueMetadata,
+  type ProjectMetadata,
   clearComments,
+  issueDir,
+  projectDir,
   readIssue,
   readProject,
+  writeAtomic,
   writeComment,
   writeIssue,
   writeProject,
@@ -30,10 +38,15 @@ export function registerPull(program: Command): void {
     .option("--project-id <uuid>", "fetch by project UUID")
     .option("--refresh", "overwrite local cache even if it has unpushed edits")
     .option("--no-comments", "skip fetching comments")
+    .option(
+      "--to <dir>",
+      "write files to <dir>/<id>/ instead of the cache. export-only: `status` and `push` operate on the default cache only",
+    )
     .option("--json", "emit structured summary")
     .action(async (ids: string[], opts: PullOpts) => {
       const config = await resolveConfig({ teamOverride: opts.team });
       const client = await linear();
+      const destinationRoot = opts.to ? resolvePath(opts.to) : null;
 
       const issueIds = expandIds(ids);
       let projectPulled: { project: FetchedProject; added_issue_ids: string[] } | null = null;
@@ -62,7 +75,8 @@ export function registerPull(program: Command): void {
       }
 
       // Refuse to overwrite unpushed edits unless --refresh.
-      if (!opts.refresh) {
+      // Skipped when --to is given (export mode doesn't touch the cache).
+      if (!opts.refresh && !destinationRoot) {
         const conflicts: string[] = [];
         for (const id of issueIds) {
           const existing = await readIssue(config.repoHash, id);
@@ -89,7 +103,7 @@ export function registerPull(program: Command): void {
       }
 
       const unique = Array.from(new Set(issueIds));
-      const results: { identifier: string; comments: number }[] = [];
+      const results: { identifier: string; comments: number; path: string }[] = [];
       const errors: { identifier: string; error: string }[] = [];
 
       if (unique.length > 0) {
@@ -110,28 +124,47 @@ export function registerPull(program: Command): void {
         }
         for (const issue of fetched) {
           const { metadata, description } = buildIssueMetadata(issue);
-          await writeIssue(config.repoHash, metadata, description);
-          if (opts.comments !== false) {
-            await clearComments(config.repoHash, issue.identifier);
-            const comments = buildComments(issue);
-            for (const comment of comments) {
-              await writeComment(config.repoHash, issue.identifier, comment);
-            }
-            results.push({ identifier: issue.identifier, comments: comments.length });
-          } else {
-            results.push({ identifier: issue.identifier, comments: 0 });
-          }
+          const commentList = withComments ? buildComments(issue) : [];
+          const path = destinationRoot
+            ? await writeIssueExport(
+                destinationRoot,
+                issue.identifier,
+                metadata,
+                description,
+                commentList,
+              )
+            : await writeIssueToCache(
+                config.repoHash,
+                issue.identifier,
+                metadata,
+                description,
+                commentList,
+                withComments,
+              );
+          results.push({ identifier: issue.identifier, comments: commentList.length, path });
         }
       }
 
-      let projectResult: { id: string; name: string; issues: number } | null = null;
+      let projectResult: { id: string; name: string; issues: number; path: string } | null = null;
       if (projectPulled) {
         const { metadata, content } = buildProjectMetadata(projectPulled.project);
-        await writeProject(config.repoHash, metadata, content);
+        let path: string;
+        if (destinationRoot) {
+          path = await writeProjectExport(
+            destinationRoot,
+            projectPulled.project.id,
+            metadata,
+            content,
+          );
+        } else {
+          await writeProject(config.repoHash, metadata, content);
+          path = projectDir(config.repoHash, projectPulled.project.id);
+        }
         projectResult = {
           id: projectPulled.project.id,
           name: projectPulled.project.name,
           issues: projectPulled.added_issue_ids.length,
+          path,
         };
       }
 
@@ -142,6 +175,7 @@ export function registerPull(program: Command): void {
               schema_version: 1,
               team: config.team,
               repo_hash: config.repoHash,
+              mode: destinationRoot ? "export" : "cache",
               project: projectResult,
               issues: results,
               errors,
@@ -155,16 +189,24 @@ export function registerPull(program: Command): void {
 
       if (projectResult) {
         process.stdout.write(
-          `${chalk.green("✓")} pulled project ${chalk.bold(projectResult.name)} (${projectResult.issues} child issues)\n`,
+          `${chalk.green("✓")} pulled project ${chalk.bold(projectResult.name)} (${projectResult.issues} child issues) → ${chalk.cyan(projectResult.path)}\n`,
         );
       }
       for (const r of results) {
+        const commentSuffix = r.comments > 0 ? chalk.gray(` (${r.comments} comments)`) : "";
         process.stdout.write(
-          `${chalk.green("✓")} ${r.identifier}${r.comments > 0 ? chalk.gray(` (${r.comments} comments)`) : ""}\n`,
+          `${chalk.green("✓")} ${r.identifier}${commentSuffix} → ${chalk.cyan(r.path)}\n`,
         );
       }
       for (const e of errors) {
         process.stdout.write(`${chalk.red("✗")} ${e.identifier}: ${e.error}\n`);
+      }
+      if (destinationRoot) {
+        process.stdout.write(
+          chalk.gray(
+            `\nexport mode: \`leebop status\` and \`leebop push\` operate on the default cache only — edits here won't round-trip.\n`,
+          ),
+        );
       }
       if (errors.length > 0) process.exitCode = 1;
     });
@@ -176,7 +218,61 @@ interface PullOpts {
   projectId?: string;
   refresh?: boolean;
   comments?: boolean; // commander inverts --no-comments into comments=false
+  to?: string;
   json?: boolean;
+}
+
+async function writeIssueToCache(
+  repoHash: string,
+  identifier: string,
+  metadata: IssueMetadata,
+  description: string,
+  comments: CachedComment[],
+  withComments: boolean,
+): Promise<string> {
+  await writeIssue(repoHash, metadata, description);
+  if (withComments) {
+    await clearComments(repoHash, identifier);
+    for (const comment of comments) {
+      await writeComment(repoHash, identifier, comment);
+    }
+  }
+  return issueDir(repoHash, identifier);
+}
+
+async function writeIssueExport(
+  destinationRoot: string,
+  identifier: string,
+  metadata: IssueMetadata,
+  description: string,
+  comments: CachedComment[],
+): Promise<string> {
+  const dir = join(destinationRoot, identifier);
+  await mkdir(dir, { recursive: true });
+  await writeAtomic(join(dir, "description.md"), description);
+  await writeAtomic(join(dir, "metadata.yaml"), stringifyYaml(metadata, { lineWidth: 0 }));
+  if (comments.length > 0) {
+    const commentsDir = join(dir, "comments");
+    await mkdir(commentsDir, { recursive: true });
+    for (const c of comments) {
+      const text = `---\n${stringifyYaml(c.frontmatter)}---\n\n${c.body}\n`;
+      await writeAtomic(join(commentsDir, `${c.frontmatter.id}.md`), text);
+    }
+  }
+  return dir;
+}
+
+async function writeProjectExport(
+  destinationRoot: string,
+  projectId: string,
+  metadata: ProjectMetadata,
+  content: string,
+): Promise<string> {
+  const dir = join(destinationRoot, `project-${projectId}`);
+  await mkdir(dir, { recursive: true });
+  await writeAtomic(join(dir, "content.md"), content);
+  await writeAtomic(join(dir, "metadata.yaml"), stringifyYaml(metadata));
+  return dir;
 }
 
 async function lookupProjectId(

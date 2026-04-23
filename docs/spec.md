@@ -33,7 +33,8 @@ Goal: collapse the agent workflow from "N round-trips per field" to "pull once �
 - Per-user CLI `leebop` with subcommands:
   - **auth:** `auth login`, `auth logout`, `auth whoami`
   - **discovery:** `list`, `projects`, `teams`
-  - **bulk round-trip:** `pull`, `push`, `status`, `diff`, `lint`
+  - **read-only display:** `show <id>` — fetch and print an issue inline without touching the cache
+  - **bulk round-trip:** `pull [--to <dir>]`, `push`, `status`, `diff`, `lint`
   - **point edits:** `comment`, `set <field>`
   - **escape hatch:** `raw <query>`
   - **creation (Phase 4+):** `new`
@@ -266,8 +267,8 @@ Resolution: detect `cwd` → walk up for git root → look up by repo path → f
 
 All commands respect `--team <KEY>` (default from config), `--verbose`, and `--json` (structured output — see §10.8).
 
-### 8.1 `leebop pull [IDS...] [--project NAME] [--project-id UUID] [--refresh] [--no-comments]`
-Fetch entities into cache; write `description.md` + `metadata.yaml` atomically (temp file + rename). By default, **comments are fetched alongside** into `issues/<ID>/comments/<N>.md` as read-only files, because agents routinely need thread context to edit intelligently.
+### 8.1 `leebop pull [IDS...] [--project NAME] [--project-id UUID] [--refresh] [--no-comments] [--to <dir>]`
+Fetch entities into the cache (or an explicit `--to` directory); write `description.md` + `metadata.yaml` atomically (temp file + rename). By default, **comments are fetched alongside** into `issues/<ID>/comments/<comment-uuid>.md` as read-only files with YAML frontmatter, because agents routinely need thread context to edit intelligently. Prints the target path per entity so agents know exactly where the files landed.
 
 - `leebop pull TEAM-101` — single
 - `leebop pull TEAM-101 TEAM-102 TEAM-103` — list
@@ -275,8 +276,21 @@ Fetch entities into cache; write `description.md` + `metadata.yaml` atomically (
 - `leebop pull --project "Example Project"` — project + all its issues
 - `--refresh` — overwrite local even when unpushed edits exist (warn first)
 - `--no-comments` — skip comment fetching for speed
+- `--to <dir>` — **export mode**: write files to `<dir>/<id>/` instead of the cache. `status` and `push` continue to operate on the default cache only; files pulled with `--to` won't participate in the round-trip. Useful for dropping issue context next to code in a working directory.
 
-Default behavior: if local has unpushed edits, refuse. On per-entity GraphQL error, report and continue with the rest.
+Default behavior: if local cache has unpushed edits, refuse. On per-entity GraphQL error, report and continue with the rest. `--to` skips the unpushed-edits guard.
+
+### 8.1a `leebop show <id> [--no-comments] [--json]`
+Fetch a single issue and print it inline — formatted markdown-ish for humans, structured JSON for programs. **No cache side-effect.** The right verb for "what is this issue about?" — `pull` is overkill when you're not going to edit.
+
+- Default output: compact header (identifier, state, priority, assignee) + title + labels/project/url/updated + description + comments in chronological order.
+- `--no-comments` trims the output when you only need the description.
+- `--json` emits `{ schema_version: 1, metadata, description, comments }`.
+
+**When to use which:**
+- `show <id>` — reading for context, no intent to edit.
+- `pull <id>` — intent to edit and push back, or to keep alongside code via `--to`.
+- `list` — discovering which issues to read/pull.
 
 ### 8.2 `leebop push [IDS...] [--dry-run] [--force]`
 Diff local cache vs remote; push changed fields only.

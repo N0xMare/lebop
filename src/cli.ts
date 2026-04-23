@@ -10,6 +10,7 @@ import { registerPull } from "./commands/pull.ts";
 import { registerPush } from "./commands/push.ts";
 import { registerRaw } from "./commands/raw.ts";
 import { registerSet } from "./commands/set.ts";
+import { registerShow } from "./commands/show.ts";
 import { registerStatus } from "./commands/status.ts";
 import { registerTeams } from "./commands/teams.ts";
 
@@ -29,6 +30,7 @@ export async function run(argv: string[]): Promise<void> {
   registerProjects(program);
   registerTeams(program);
 
+  registerShow(program);
   registerPull(program);
   registerPush(program);
   registerStatus(program);
