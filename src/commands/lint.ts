@@ -5,8 +5,8 @@ import chalk from "chalk";
 import type { Command } from "commander";
 import { repoCacheDir, writeAtomic } from "../lib/cache.ts";
 import { resolveConfig } from "../lib/config.ts";
-import { applyFixes, lintContent } from "../lib/lint.ts";
-import type { Warning } from "../lib/quirks.ts";
+import { applyFixesFixpoint, lintContent } from "../lib/lint.ts";
+import type { LintContext, Warning } from "../lib/quirks.ts";
 
 interface LintOpts {
   team?: string;
@@ -30,8 +30,14 @@ export function registerLint(program: Command): void {
     .option("--strict", "exit non-zero on any warning")
     .option("--json", "emit structured JSON output")
     .action(async (paths: string[], opts: LintOpts) => {
+      const config = await resolveConfig({ teamOverride: opts.team });
+      const ctx: LintContext = {
+        repoConfig: config.repoConfig,
+        workspaceUrlPrefix: config.workspaceUrlPrefix,
+      };
+
       const targetFiles =
-        paths.length > 0 ? paths.map((p) => resolvePath(p)) : await collectCacheMarkdown(opts);
+        paths.length > 0 ? paths.map((p) => resolvePath(p)) : await collectCacheMarkdown(config);
 
       if (targetFiles.length === 0) {
         process.stderr.write(`${chalk.yellow("no markdown files found to lint.")}\n`);
@@ -45,15 +51,15 @@ export function registerLint(program: Command): void {
           continue;
         }
         const content = await Bun.file(file).text();
-        const { warnings } = lintContent(content);
+        const initial = lintContent(content, ctx);
 
         let fixedCount = 0;
-        if (opts.fix && warnings.some((w) => w.fix)) {
-          const fixed = applyFixes(content, warnings);
+        if (opts.fix && initial.warnings.some((w) => w.fix)) {
+          const { content: fixed } = applyFixesFixpoint(content, ctx);
           await writeAtomic(file, fixed);
-          fixedCount = warnings.filter((w) => w.fix).length;
+          fixedCount = initial.warnings.filter((w) => w.fix).length;
         }
-        fileResults.push({ path: file, warnings, fixedCount });
+        fileResults.push({ path: file, warnings: initial.warnings, fixedCount });
       }
 
       if (opts.json) {
@@ -117,8 +123,9 @@ function printHuman(results: FileResult[], didFix: boolean): void {
 }
 
 /** Walk the repo's cache for `description.md` and `content.md` files. */
-async function collectCacheMarkdown(opts: LintOpts): Promise<string[]> {
-  const config = await resolveConfig({ teamOverride: opts.team });
+async function collectCacheMarkdown(
+  config: Awaited<ReturnType<typeof resolveConfig>>,
+): Promise<string[]> {
   const root = repoCacheDir(config.repoHash);
   if (!existsSync(root)) return [];
 

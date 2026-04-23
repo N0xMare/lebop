@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { applyFixes, lintContent } from "../src/lib/lint.ts";
+import type { LintContext } from "../src/lib/quirks.ts";
 
 describe("L001 — ordered-list marker in table cell", () => {
   it("flags a table row with `1.`", () => {
@@ -112,5 +113,150 @@ describe("applyFixes ordering", () => {
     const fixed = applyFixes(content, warnings);
     // both `---` should now have a blank line before
     expect(fixed).toBe(["intro 1", "", "---", "middle", "intro 2", "", "---", "tail"].join("\n"));
+  });
+});
+
+// ---------- L004 — bracket issue refs (repo-scoped) ----------
+
+describe("L004 — bracket issue refs", () => {
+  const ctx: LintContext = {
+    repoConfig: { conventions: { bracket_issue_refs: true } },
+    workspaceUrlPrefix: "https://linear.app/unlink-xyz",
+  };
+
+  it("does nothing when conventions.bracket_issue_refs is unset", () => {
+    const content = "See UE-321 for context.";
+    expect(lintContent(content).warnings).toHaveLength(0);
+  });
+
+  it("does nothing when workspaceUrlPrefix is missing", () => {
+    const content = "See UE-321 for context.";
+    expect(
+      lintContent(content, { repoConfig: { conventions: { bracket_issue_refs: true } } }).warnings,
+    ).toHaveLength(0);
+  });
+
+  it("flags bare `TEAM-NN` refs", () => {
+    const content = "See UE-321 for context.";
+    const w = lintContent(content, ctx).warnings.filter((x) => x.rule === "L004");
+    expect(w).toHaveLength(1);
+  });
+
+  it("autofix wraps bare refs in markdown links with workspace URL", () => {
+    const content = "See UE-321 for context.";
+    const { warnings } = lintContent(content, ctx);
+    const fixed = applyFixes(content, warnings);
+    expect(fixed).toBe("See [UE-321](https://linear.app/unlink-xyz/issue/UE-321) for context.");
+  });
+
+  it("ignores refs already wrapped in markdown links", () => {
+    const content = "[UE-321](https://linear.app/unlink-xyz/issue/UE-321) is done.";
+    expect(lintContent(content, ctx).warnings.filter((w) => w.rule === "L004")).toHaveLength(0);
+  });
+
+  it("ignores refs inside code spans", () => {
+    const content = "Run `UE-321` to test.";
+    expect(lintContent(content, ctx).warnings.filter((w) => w.rule === "L004")).toHaveLength(0);
+  });
+
+  it("handles multiple refs on one line", () => {
+    const content = "UE-321 blocks UE-322.";
+    const { warnings } = lintContent(content, ctx);
+    const ue = warnings.filter((w) => w.rule === "L004");
+    expect(ue).toHaveLength(2);
+    const fixed = applyFixes(content, warnings);
+    expect(fixed).toContain("[UE-321](");
+    expect(fixed).toContain("[UE-322](");
+  });
+});
+
+// ---------- R001 — path_rewrites ----------
+
+describe("R001 — path rewrites", () => {
+  const ctx: LintContext = {
+    repoConfig: {
+      path_rewrites: [{ from: "crates/", to: "protocol/backend/crates/" }],
+    },
+  };
+
+  it("does nothing when path_rewrites is unset", () => {
+    const content = "See crates/auth for details.";
+    expect(lintContent(content).warnings.filter((w) => w.rule === "R001")).toHaveLength(0);
+  });
+
+  it("flags bare `crates/…` that's not under protocol/backend/", () => {
+    const content = "See crates/auth for details.";
+    const w = lintContent(content, ctx).warnings.filter((x) => x.rule === "R001");
+    expect(w).toHaveLength(1);
+  });
+
+  it("ignores `crates/…` already prefixed with `protocol/backend/`", () => {
+    const content = "See protocol/backend/crates/auth for details.";
+    expect(lintContent(content, ctx).warnings.filter((w) => w.rule === "R001")).toHaveLength(0);
+  });
+
+  it("autofix prepends the `to` prefix", () => {
+    const content = "Edit crates/auth/src/lib.rs.";
+    const { warnings } = lintContent(content, ctx);
+    const fixed = applyFixes(content, warnings);
+    expect(fixed).toBe("Edit protocol/backend/crates/auth/src/lib.rs.");
+  });
+
+  it("handles multiple rewrites independently", () => {
+    const multiCtx: LintContext = {
+      repoConfig: {
+        path_rewrites: [
+          { from: "crates/", to: "protocol/backend/crates/" },
+          { from: "apps/", to: "src/apps/" },
+        ],
+      },
+    };
+    const content = "Edit crates/a and apps/b.";
+    const fixed = applyFixes(content, lintContent(content, multiCtx).warnings);
+    expect(fixed).toBe("Edit protocol/backend/crates/a and src/apps/b.");
+  });
+});
+
+// ---------- R002 — required_formats ----------
+
+describe("R002 — required formats", () => {
+  const ctx: LintContext = {
+    repoConfig: {
+      required_formats: [
+        { pattern: "\\bpr-(\\d+)\\b", suggest: "[#$1]", message: "Use [#N] form" },
+      ],
+    },
+  };
+
+  it("does nothing when required_formats is unset", () => {
+    const content = "See pr-123 for the fix.";
+    expect(lintContent(content).warnings.filter((w) => w.rule === "R002")).toHaveLength(0);
+  });
+
+  it("flags patterns that match", () => {
+    const content = "See pr-123 for the fix.";
+    const w = lintContent(content, ctx).warnings.filter((x) => x.rule === "R002");
+    expect(w).toHaveLength(1);
+    expect(w[0]?.message).toContain("Use [#N] form");
+  });
+
+  it("autofix applies the capture-group replacement", () => {
+    const content = "See pr-123 for the fix.";
+    const fixed = applyFixes(content, lintContent(content, ctx).warnings);
+    expect(fixed).toBe("See [#123] for the fix.");
+  });
+
+  it("doesn't match when content already matches the suggest form", () => {
+    const content = "See [#123] for the fix.";
+    expect(lintContent(content, ctx).warnings.filter((w) => w.rule === "R002")).toHaveLength(0);
+  });
+
+  it("silently skips malformed patterns", () => {
+    const bad: LintContext = {
+      repoConfig: {
+        required_formats: [{ pattern: "[unclosed", suggest: "x" }],
+      },
+    };
+    expect(() => lintContent("anything", bad)).not.toThrow();
   });
 });

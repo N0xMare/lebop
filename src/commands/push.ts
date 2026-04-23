@@ -82,6 +82,10 @@ export function registerPush(program: Command): void {
     .option("--json", "emit structured per-entity result records")
     .action(async (ids: string[], opts: PushOpts) => {
       const config = await resolveConfig({ teamOverride: opts.team });
+      const lintCtx = {
+        repoConfig: config.repoConfig,
+        workspaceUrlPrefix: config.workspaceUrlPrefix,
+      };
 
       const plans = await collectPlans(config.repoHash, expandIds(ids));
 
@@ -129,7 +133,7 @@ export function registerPush(program: Command): void {
 
           // Lint the description if it's part of the change set; warn always, block on --strict.
           const descChanged = plan.changes.some((c) => c.field === "description");
-          const lintWarnings = descChanged ? lintContent(plan.description).warnings : [];
+          const lintWarnings = descChanged ? lintContent(plan.description, lintCtx).warnings : [];
           if (lintWarnings.length > 0 && !opts.json) {
             printLintWarnings(plan.identifier, lintWarnings, Boolean(opts.strict));
           }
@@ -199,7 +203,7 @@ export function registerPush(program: Command): void {
 
           // Lint project content if it changed; warn always, block on --strict.
           const contentChanged = plan.changes.some((c) => c.field === "content");
-          const lintWarnings = contentChanged ? lintContent(plan.content).warnings : [];
+          const lintWarnings = contentChanged ? lintContent(plan.content, lintCtx).warnings : [];
           if (lintWarnings.length > 0 && !opts.json) {
             printLintWarnings(`project/${plan.metadata.name}`, lintWarnings, Boolean(opts.strict));
           }

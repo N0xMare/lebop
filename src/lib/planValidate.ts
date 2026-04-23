@@ -8,6 +8,7 @@ import {
   type PlanWarning,
   type ValidationResult,
 } from "./planTypes.ts";
+import type { LintContext } from "./quirks.ts";
 import { resolveLabelId, resolvePriority, resolveStateId } from "./resolve.ts";
 
 /** TEAM-NN format. */
@@ -22,6 +23,7 @@ const isLinearId = (s: string): boolean => LINEAR_ID_RE.test(s);
 export function validatePlan(
   plan: ParsedPlan,
   teamMetadata: TeamMetadata | null,
+  lintCtx: LintContext = {},
 ): ValidationResult {
   const errors: PlanError[] = [];
   const warnings: PlanWarning[] = [];
@@ -109,7 +111,7 @@ export function validatePlan(
 
   // ---------- 6. Lint bodies ----------
   for (const issue of plan.issues) {
-    const { warnings: lintWs } = lintContent(issue.body);
+    const { warnings: lintWs } = lintContent(issue.body, lintCtx);
     for (const w of lintWs) {
       warnings.push({
         path: issue.path,
@@ -119,7 +121,7 @@ export function validatePlan(
     }
   }
   if (plan.project.body.trim() !== "") {
-    const { warnings: lintWs } = lintContent(plan.project.body);
+    const { warnings: lintWs } = lintContent(plan.project.body, lintCtx);
     for (const w of lintWs) {
       warnings.push({
         path: plan.project.path,

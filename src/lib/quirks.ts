@@ -1,11 +1,17 @@
 /**
- * Universal Linear-renderer quirks. Each rule is a pure function over a markdown string.
+ * Universal Linear-renderer quirks + repo-scoped convention rules. Each rule is a pure
+ * function over a markdown string (and optional LintContext carrying repo config).
  * Rules emit Warnings; the lint runner aggregates them and (optionally) applies Fixes.
  *
- * Rule IDs follow the spec §9.1 catalog (L001–L005) plus L006 added 2026-04-23 after the
- * sandbox regression caught Linear silently converting `text\n---` into `## text` (setext
- * H2 underline).
+ * Rule IDs follow spec §9:
+ *   Universal (§9.1): L001–L006
+ *   Repo-scoped (§9.2): L004 (bracket issue refs), R001 (path rewrites),
+ *                       R002 (required identifier formats).
+ *
+ * Repo-scoped rules self-skip when their enabling config is absent in ctx.
  */
+
+import type { RepoConfig } from "./types.ts";
 
 export type Severity = "warn" | "info" | "error";
 
@@ -27,11 +33,21 @@ export interface Warning {
   fix?: Fix | null;
 }
 
+/**
+ * Optional context passed to every rule. Universal rules ignore it; repo-scoped rules
+ * key off specific fields (`repoConfig.conventions.bracket_issue_refs`,
+ * `repoConfig.path_rewrites`, `repoConfig.required_formats`).
+ */
+export interface LintContext {
+  repoConfig?: RepoConfig;
+  workspaceUrlPrefix?: string;
+}
+
 export interface Rule {
   id: string;
   description: string;
   severity: Severity;
-  check: (content: string) => Warning[];
+  check: (content: string, ctx: LintContext) => Warning[];
 }
 
 // ---------- helpers ----------
@@ -208,9 +224,187 @@ const L006: Rule = {
   },
 };
 
+// ---------- L004: bracket issue refs (repo-scoped) ----------
+
+/** Global `TEAM-NN` regex used by L004 to find unbracketed refs. */
+const ISSUE_REF_RE = /\b[A-Z]+-\d+\b/g;
+
+const L004: Rule = {
+  id: "L004",
+  description:
+    "Issue ref TEAM-NN not wrapped as `[TEAM-NN](url)`; enabled by `conventions.bracket_issue_refs: true`",
+  severity: "warn",
+  check(content, ctx) {
+    if (!ctx.repoConfig?.conventions?.bracket_issue_refs) return [];
+    if (!ctx.workspaceUrlPrefix) return []; // can't construct the link without the prefix
+    const prefix = ctx.workspaceUrlPrefix.replace(/\/+$/, "");
+    const lines = content.split("\n");
+    const out: Warning[] = [];
+
+    lines.forEach((line, i) => {
+      // Collect spans of existing markdown links `[...](...)` so any TEAM-XXX inside —
+      // whether in the label or the URL — is left alone.
+      const linkRanges: [number, number][] = [];
+      for (const m of line.matchAll(/\[[^\]]*\]\([^)]*\)/g)) {
+        if (m.index !== undefined) linkRanges.push([m.index, m.index + m[0].length]);
+      }
+      // Also skip refs inside code spans (between single backticks).
+      const codeRanges = findBacktickRanges(line);
+
+      let rewrote = false;
+      const fixed = line.replace(ISSUE_REF_RE, (ref, ...args) => {
+        const offset = args[args.length - 2] as number;
+        if (inAny(linkRanges, offset)) return ref;
+        if (inAny(codeRanges, offset)) return ref;
+        rewrote = true;
+        out.push({
+          rule: "L004",
+          severity: "warn",
+          message: `\`${ref}\` should be rendered as a markdown link. Wrap as \`[${ref}](${prefix}/issue/${ref})\`.`,
+          line: i + 1,
+          fix: null, // we'll attach a line-level fix below once we know if any changed
+        });
+        return `[${ref}](${prefix}/issue/${ref})`;
+      });
+
+      if (rewrote) {
+        // Every warning above that belongs to this line gets the same line-replace fix.
+        for (
+          let j = out.length - 1;
+          j >= 0 && out[j]?.line === i + 1 && out[j]?.rule === "L004";
+          j--
+        ) {
+          const w = out[j];
+          if (w) w.fix = { startLine: i + 1, endLine: i + 1, replacement: [fixed] };
+        }
+      }
+    });
+
+    return out;
+  },
+};
+
+/** Find `[start, end)` ranges of single-backtick code spans on a line. */
+function findBacktickRanges(line: string): [number, number][] {
+  const ranges: [number, number][] = [];
+  let i = 0;
+  while (i < line.length) {
+    const open = line.indexOf("`", i);
+    if (open === -1) break;
+    const close = line.indexOf("`", open + 1);
+    if (close === -1) break;
+    ranges.push([open, close + 1]);
+    i = close + 1;
+  }
+  return ranges;
+}
+
+function inAny(ranges: [number, number][], pos: number): boolean {
+  return ranges.some(([a, b]) => pos >= a && pos < b);
+}
+
+// ---------- R001: path_rewrites (repo-scoped) ----------
+
+const R001: Rule = {
+  id: "R001",
+  description:
+    "Path prefix in `path_rewrites[].from` should be rewritten to the corresponding `to`",
+  severity: "warn",
+  check(content, ctx) {
+    const rewrites = ctx.repoConfig?.path_rewrites;
+    if (!rewrites || rewrites.length === 0) return [];
+    const lines = content.split("\n");
+    const out: Warning[] = [];
+
+    lines.forEach((line, i) => {
+      let fixed = line;
+      let any = false;
+      const localMessages: string[] = [];
+
+      for (const { from, to } of rewrites) {
+        if (!from || !to || from === to) continue;
+        if (!to.endsWith(from)) continue; // `to` must end with `from` for the prefix model to make sense
+
+        // Find occurrences of `from` that are NOT already preceded by the full `to`.
+        const fromEscaped = from.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        const re = new RegExp(
+          `(?<!${to.slice(0, to.length - from.length).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")})${fromEscaped}`,
+          "g",
+        );
+        const replaced = fixed.replace(re, to);
+        if (replaced !== fixed) {
+          any = true;
+          localMessages.push(`\`${from}\` → \`${to}\``);
+          fixed = replaced;
+        }
+      }
+
+      if (any) {
+        out.push({
+          rule: "R001",
+          severity: "warn",
+          message: `path prefix needs rewrite: ${localMessages.join(", ")}`,
+          line: i + 1,
+          fix: { startLine: i + 1, endLine: i + 1, replacement: [fixed] },
+        });
+      }
+    });
+
+    return out;
+  },
+};
+
+// ---------- R002: required identifier formats (repo-scoped) ----------
+
+const R002: Rule = {
+  id: "R002",
+  description:
+    "Identifier pattern from `required_formats[]` config should be rewritten to the declared form",
+  severity: "warn",
+  check(content, ctx) {
+    const fmts = ctx.repoConfig?.required_formats;
+    if (!fmts || fmts.length === 0) return [];
+    const lines = content.split("\n");
+    const out: Warning[] = [];
+
+    lines.forEach((line, i) => {
+      let fixed = line;
+      let any = false;
+      const msgs: string[] = [];
+
+      for (const { pattern, suggest, message } of fmts) {
+        let re: RegExp;
+        try {
+          re = new RegExp(pattern, "g");
+        } catch {
+          continue; // skip malformed patterns silently; config error surfaced elsewhere
+        }
+        const replaced = fixed.replace(re, suggest);
+        if (replaced !== fixed) {
+          any = true;
+          msgs.push(message ?? `pattern \`${pattern}\` → \`${suggest}\``);
+          fixed = replaced;
+        }
+      }
+
+      if (any) {
+        out.push({
+          rule: "R002",
+          severity: "warn",
+          message: msgs.join("; "),
+          line: i + 1,
+          fix: { startLine: i + 1, endLine: i + 1, replacement: [fixed] },
+        });
+      }
+    });
+
+    return out;
+  },
+};
+
 // ---------- registry ----------
 
-export const ALL_RULES: readonly Rule[] = [L001, L002, L003, L005, L006] as const;
+export const ALL_RULES: readonly Rule[] = [L001, L002, L003, L004, L005, L006, R001, R002] as const;
 
 export const RULES_BY_ID: Readonly<Record<string, Rule>> = Object.fromEntries(
   ALL_RULES.map((r) => [r.id, r]),

@@ -40,7 +40,11 @@ export function registerPlan(program: Command): void {
       const team = opts.team ?? parsed.project.frontmatter.team;
       const config = await resolveConfig({ teamOverride: team });
       const teamMetadata = await getTeamMetadata(config.repoHash, config.team);
-      const result = validatePlan(parsed, teamMetadata);
+      const lintCtx = {
+        repoConfig: config.repoConfig,
+        workspaceUrlPrefix: config.workspaceUrlPrefix,
+      };
+      const result = validatePlan(parsed, teamMetadata, lintCtx);
 
       if (opts.json) {
         process.stdout.write(
@@ -64,9 +68,13 @@ export function registerPlan(program: Command): void {
       const team = opts.team ?? parsed.project.frontmatter.team;
       const config = await resolveConfig({ teamOverride: team });
       const teamMetadata = await getTeamMetadata(config.repoHash, config.team);
+      const lintCtx = {
+        repoConfig: config.repoConfig,
+        workspaceUrlPrefix: config.workspaceUrlPrefix,
+      };
 
       // Fail fast on validation errors; proceed on warnings.
-      const validation = validatePlan(parsed, teamMetadata);
+      const validation = validatePlan(parsed, teamMetadata, lintCtx);
       if (validation.errors.length > 0) {
         if (opts.json) {
           process.stdout.write(`${JSON.stringify({ schema_version: 1, validation }, null, 2)}\n`);
@@ -85,6 +93,7 @@ export function registerPlan(program: Command): void {
       const result = await applyPlan(parsed, teamMetadata, {
         dryRun: opts.dryRun,
         strict: opts.strict,
+        lintCtx,
       });
 
       if (opts.json) {

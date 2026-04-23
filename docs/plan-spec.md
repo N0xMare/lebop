@@ -164,6 +164,8 @@ leebop plan pull     <dir> [--force] [--include-new] [--team KEY] [--json]
 - `--strict`: block any issue whose body produces lint warnings.
 - `--team`: override team (default from project's `team:` field).
 
+**`apply` / `validate`** inherit repo-scoped lint rules — if the repo has `conventions.bracket_issue_refs`, `path_rewrites`, or `required_formats` configured in `~/.leebop/config.yaml`, those fire on issue bodies the same way `leebop lint` does.
+
 **`diff`** — show drift between plan files and live Linear.
 - Per-entity field table + unified patch for body/content.
 - Per-issue relation drift (links in plan but missing on remote; links on remote but missing from plan).

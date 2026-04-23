@@ -17,6 +17,7 @@ export interface RepoConfig {
   team?: string;
   path_rewrites?: { from: string; to: string }[];
   conventions?: { bracket_issue_refs?: boolean };
+  required_formats?: { pattern: string; suggest: string; message?: string }[];
 }
 
 export interface WorkspaceConfig {

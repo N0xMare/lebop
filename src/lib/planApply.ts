@@ -11,6 +11,7 @@ import {
   PROJECT_UPDATE_MUTATION,
   type ProjectUpdateInput,
 } from "./pushMutations.ts";
+import type { LintContext } from "./quirks.ts";
 import { createLink } from "./relations.ts";
 import { resolveAssigneeId, resolveLabelIds, resolvePriority, resolveStateId } from "./resolve.ts";
 import { linear } from "./sdk.ts";
@@ -48,6 +49,7 @@ export interface ApplyResult {
 export interface ApplyOpts {
   dryRun?: boolean;
   strict?: boolean;
+  lintCtx?: LintContext;
 }
 
 // ---------- project upsert ----------
@@ -187,7 +189,7 @@ async function upsertIssue(
   const fm = issue.frontmatter;
 
   // Lint the body; --strict blocks.
-  const { warnings } = lintContent(issue.body);
+  const { warnings } = lintContent(issue.body, opts.lintCtx ?? {});
   if (opts.strict && warnings.length > 0) {
     return {
       slug: issue.slug,
