@@ -152,20 +152,32 @@ Exit 1 if any entity errored, was stale, or was lint-blocked. Partial failures d
 
 ```
 leebop plan validate <dir> [--team KEY] [--json]
-leebop plan apply    <dir> [--dry-run] [--force] [--strict] [--team KEY] [--json]
+leebop plan apply    <dir> [--dry-run] [--strict] [--team KEY] [--json]
+leebop plan diff     <dir> [--team KEY] [--json]
+leebop plan pull     <dir> [--force] [--include-new] [--team KEY] [--json]
 ```
 
 **`validate`** — parse + semantic checks (hits Linear for team metadata so it can verify label/state/assignee resolution). No Linear writes. Exit 1 on any validation error.
 
 **`apply`** — full realization.
 - `--dry-run`: print all mutations without executing. `linear_id` writeback is also suppressed.
-- `--force`: skip CAS staleness refusal during updates.
 - `--strict`: block any issue whose body produces lint warnings.
 - `--team`: override team (default from project's `team:` field).
 
+**`diff`** — show drift between plan files and live Linear.
+- Per-entity field table + unified patch for body/content.
+- Per-issue relation drift (links in plan but missing on remote; links on remote but missing from plan).
+- Flags remote-only issues that exist in the project but aren't in the plan (separate from drift — `--include-new` resolves them).
+- Exit 1 if any in-plan entity has drift. Extra-remote issues do NOT cause exit 1 (they don't overwrite anything).
+- `--json` emits the full diff including patches.
+
+**`pull`** — overwrite local plan files with remote state.
+- Refuses if any in-plan entity has drift, unless `--force`.
+- `--include-new` also imports issues that exist on the remote project but aren't in the plan. Imported file is named from a title-derived slug (collision-safe against existing slugs).
+- Preserves `linear_id`, `team`, and the user's `slug:` override; replaces all other frontmatter fields + the body with the remote version.
+- Rewrites link fields (`blocks`, `blocked_by`, `related`, `duplicates`, `duplicated_by`) to match the remote's current relation graph. The pull makes implicit inverse edges explicit — both sides of a relation get the corresponding entry in their file.
+
 Future (not in v1):
-- `leebop plan diff <dir>` — show drift between plan files and live remote
-- `leebop plan pull <dir>` — bring remote drift back into the files
 - `leebop plan archive <dir>` — mass-archive a plan's issues + project
 
 ## 6. Idempotency + re-apply semantics
@@ -182,7 +194,6 @@ A plan can be applied repeatedly. Guarantees:
 - Multiple projects per plan directory (one project per dir)
 - Issue archiving via plan (delete-a-file behavior is **warn-and-ignore** — the remote issue stays; use `leebop archive` for explicit disposal)
 - Comment seeding via plan
-- Pull-back / drift detection (`leebop plan diff`, `leebop plan pull`)
 - Custom fields, cycles (Linear's iteration concept), attachments — escape via `leebop raw` as needed
 - Moving issues between projects via plan
 - Enforcing one-relation-per-pair across the whole graph at validate time (currently relies on Linear's server behaviour + last-write-wins ordering)

@@ -2,7 +2,10 @@ import chalk from "chalk";
 import type { Command } from "commander";
 import { resolveConfig } from "../lib/config.ts";
 import { applyPlan } from "../lib/planApply.ts";
+import { diffPlan } from "../lib/planDiff.ts";
+import type { PlanDiffResult } from "../lib/planDiff.ts";
 import { parsePlan } from "../lib/planParse.ts";
+import { pullPlan } from "../lib/planPull.ts";
 import type { ParsedPlan } from "../lib/planTypes.ts";
 import { validatePlan } from "../lib/planValidate.ts";
 import { getTeamMetadata } from "../lib/resolve.ts";
@@ -15,6 +18,11 @@ interface CommonOpts {
 interface ApplyCmdOpts extends CommonOpts {
   dryRun?: boolean;
   strict?: boolean;
+}
+
+interface PullCmdOpts extends CommonOpts {
+  force?: boolean;
+  includeNew?: boolean;
 }
 
 export function registerPlan(program: Command): void {
@@ -93,6 +101,78 @@ export function registerPlan(program: Command): void {
         result.relations.some((r) => r.status === "error");
       if (hasErrors) process.exitCode = 1;
     });
+
+  plan
+    .command("diff <dir>")
+    .description("show drift between plan files and live Linear")
+    .option("--team <key>", "override the resolved team")
+    .option("--json", "emit structured result")
+    .action(async (dir: string, opts: CommonOpts) => {
+      const parsed = await parsePlan(dir);
+      const team = opts.team ?? parsed.project.frontmatter.team;
+      const config = await resolveConfig({ teamOverride: team });
+      const teamMetadata = await getTeamMetadata(config.repoHash, config.team);
+      const result = await diffPlan(parsed, teamMetadata);
+
+      if (opts.json) {
+        process.stdout.write(`${JSON.stringify({ schema_version: 1, ...result }, null, 2)}\n`);
+      } else {
+        printDiff(result);
+      }
+      if (result.has_drift) process.exitCode = 1;
+    });
+
+  plan
+    .command("pull <dir>")
+    .description("bring remote Linear state back into plan files (overwrites local)")
+    .option("--team <key>", "override the resolved team")
+    .option("--force", "pull even if local has drift (overwrites local edits)")
+    .option("--include-new", "also import issues that exist on remote but not in the plan")
+    .option("--json", "emit structured result")
+    .action(async (dir: string, opts: PullCmdOpts) => {
+      const parsed = await parsePlan(dir);
+      const team = opts.team ?? parsed.project.frontmatter.team;
+      const config = await resolveConfig({ teamOverride: team });
+      const teamMetadata = await getTeamMetadata(config.repoHash, config.team);
+
+      if (!opts.force) {
+        const preDiff = await diffPlan(parsed, teamMetadata);
+        if (preDiff.has_drift) {
+          if (opts.json) {
+            process.stdout.write(
+              `${JSON.stringify(
+                {
+                  schema_version: 1,
+                  refused: "drift-detected",
+                  hint: "run `leebop plan diff` to inspect, then re-run with --force to overwrite local",
+                  diff: preDiff,
+                },
+                null,
+                2,
+              )}\n`,
+            );
+          } else {
+            process.stderr.write(
+              `${chalk.yellow("refusing to pull:")} local plan has drift. Run \`leebop plan diff ${dir}\` to inspect, then \`leebop plan pull ${dir} --force\` to overwrite.\n`,
+            );
+          }
+          process.exitCode = 1;
+          return;
+        }
+      }
+
+      const result = await pullPlan(parsed, teamMetadata, { includeNew: opts.includeNew });
+      if (opts.json) {
+        process.stdout.write(`${JSON.stringify({ schema_version: 1, ...result }, null, 2)}\n`);
+      } else {
+        printPull(result);
+      }
+
+      const hasErrors =
+        result.project.status === "error" ||
+        result.issues.some((i) => i.status === "error" || i.status === "missing-remote");
+      if (hasErrors) process.exitCode = 1;
+    });
 }
 
 function summarizeParse(plan: ParsedPlan) {
@@ -164,6 +244,136 @@ function printApply(result: Awaited<ReturnType<typeof applyPlan>>, dryRun: boole
       `${createdIssues} issue(s) created · ${updatedIssues} updated · ${unchangedIssues} unchanged · ${createdRels} relation(s) created\n`,
     )}`,
   );
+}
+
+function printDiff(result: PlanDiffResult): void {
+  if (!result.has_drift) {
+    process.stdout.write(`${chalk.green("✓")} plan matches Linear — no drift\n`);
+    return;
+  }
+
+  // Project
+  const p = result.project;
+  process.stdout.write(
+    `${diffIcon(p.status)} project/${chalk.bold(p.name)}  ${chalk.gray(p.status)}\n`,
+  );
+  for (const f of p.field_changes) {
+    process.stdout.write(
+      `  ${chalk.cyan(f.field)}: ${chalk.red(JSON.stringify(f.remote))} ${chalk.gray("(remote)")} → ${chalk.green(JSON.stringify(f.local))} ${chalk.gray("(local)")}\n`,
+    );
+  }
+  if (p.content_patch) printPatch(p.content_patch);
+
+  // Issues
+  for (const i of result.issues) {
+    const label = i.linear_id ? chalk.bold(i.linear_id) : chalk.bold(i.slug);
+    process.stdout.write(
+      `${diffIcon(i.status)} ${label}  ${chalk.gray(i.status)}${i.error ? `  ${chalk.red(i.error)}` : ""}\n`,
+    );
+    for (const f of i.field_changes) {
+      process.stdout.write(
+        `  ${chalk.cyan(f.field)}: ${chalk.red(JSON.stringify(f.remote))} ${chalk.gray("(remote)")} → ${chalk.green(JSON.stringify(f.local))} ${chalk.gray("(local)")}\n`,
+      );
+    }
+    for (const r of i.relations_missing_remote) {
+      process.stdout.write(
+        `  ${chalk.yellow("+")} ${chalk.cyan(r.kind)}:${r.target} ${chalk.gray("(in plan, not on remote)")}\n`,
+      );
+    }
+    for (const r of i.relations_extra_remote) {
+      process.stdout.write(
+        `  ${chalk.yellow("-")} ${chalk.cyan(r.kind)}:${r.target} ${chalk.gray("(on remote, not in plan)")}\n`,
+      );
+    }
+    if (i.body_patch) printPatch(i.body_patch);
+  }
+
+  // Extra remote (not-in-plan) issues
+  if (result.extra_remote_issues.length > 0) {
+    process.stdout.write(
+      `\n${chalk.yellow(`${result.extra_remote_issues.length} issue(s) on remote but not in plan:`)}\n`,
+    );
+    for (const e of result.extra_remote_issues) {
+      process.stdout.write(
+        `  ${chalk.yellow("?")} ${chalk.bold(e.identifier)} ${chalk.gray(e.title)}\n`,
+      );
+    }
+    process.stdout.write(
+      chalk.gray("  use `leebop plan pull <dir> --include-new` to import them\n"),
+    );
+  }
+}
+
+function printPull(result: Awaited<ReturnType<typeof pullPlan>>): void {
+  const p = result.project;
+  process.stdout.write(
+    `${pullIcon(p.status)} project/${chalk.bold(p.name)}  ${chalk.gray(p.status)}${p.error ? `  ${chalk.red(p.error)}` : ""}\n`,
+  );
+  for (const i of result.issues) {
+    const label = i.linear_id ? chalk.bold(i.linear_id) : chalk.bold(i.slug);
+    process.stdout.write(
+      `${pullIcon(i.status)} ${label}  ${chalk.gray(i.status)}${i.error ? `  ${chalk.red(i.error)}` : ""}\n`,
+    );
+  }
+  for (const n of result.new_imports) {
+    process.stdout.write(
+      `${chalk.green("+")} ${chalk.bold(n.identifier)} imported → ${chalk.cyan(n.path)}\n`,
+    );
+  }
+  for (const s of result.skipped_new) {
+    process.stdout.write(
+      `${chalk.yellow("?")} ${chalk.bold(s.identifier)} ${chalk.gray(s.title)} ${chalk.gray("(remote-only; --include-new to import)")}\n`,
+    );
+  }
+}
+
+function printPatch(patch: string): void {
+  process.stdout.write("\n");
+  const colored = patch
+    .split("\n")
+    .map((l) => {
+      if (l.startsWith("+++") || l.startsWith("---")) return chalk.bold(l);
+      if (l.startsWith("@@")) return chalk.cyan(l);
+      if (l.startsWith("+")) return chalk.green(l);
+      if (l.startsWith("-")) return chalk.red(l);
+      return l;
+    })
+    .join("\n");
+  process.stdout.write(`${colored}\n`);
+}
+
+function diffIcon(status: string): string {
+  switch (status) {
+    case "unchanged":
+      return chalk.green("✓");
+    case "drift":
+      return chalk.yellow("!");
+    case "not-yet-applied":
+      return chalk.cyan("◦");
+    case "missing-remote":
+      return chalk.red("✗");
+    case "error":
+      return chalk.red("✗");
+    default:
+      return chalk.gray("?");
+  }
+}
+
+function pullIcon(status: string): string {
+  switch (status) {
+    case "updated":
+      return chalk.green("✓");
+    case "unchanged":
+      return chalk.gray("·");
+    case "skipped-no-id":
+      return chalk.cyan("◦");
+    case "missing-remote":
+      return chalk.red("✗");
+    case "error":
+      return chalk.red("✗");
+    default:
+      return chalk.gray("?");
+  }
 }
 
 function statusIcon(status: string): string {

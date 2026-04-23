@@ -121,8 +121,13 @@ echo '{"id":"UE-321"}' | leebop raw 'query($id:String!){issue(id:$id){title}}' -
 # declarative: author a project + issues + links as a dir of markdown files,
 # then realize the whole graph in Linear in one pass
 leebop plan validate path/to/plan-dir
-leebop plan apply    path/to/plan-dir --dry-run   # preview
-leebop plan apply    path/to/plan-dir             # create / update idempotently
+leebop plan apply    path/to/plan-dir --dry-run        # preview
+leebop plan apply    path/to/plan-dir                  # create / update idempotently
+leebop plan diff     path/to/plan-dir                  # local-vs-remote drift (incl. relations)
+leebop plan pull     path/to/plan-dir --include-new    # overwrite local with remote; import orphans
+
+# single-issue diff vs live remote (like git diff)
+leebop diff UE-321
 ```
 
 See `leebop <command> --help` for per-verb details, and `docs/plan-spec.md` for the plan format + apply semantics.
