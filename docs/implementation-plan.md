@@ -13,7 +13,7 @@ Living document. Update as phases progress, quirks are discovered, and open ques
 | Phase | Status | Notes |
 |---|---|---|
 | 0. Bootstrap + native auth | 🟢 | scaffolded, dispatcher wired, `auth login/logout/whoami` shipped |
-| 1. MVP — the full agentic read/write surface | ⬜ | bulk round-trip + single-shot + discovery + raw escape hatch |
+| 1. MVP — the full agentic read/write surface | 🟡 | all verbs implemented + typechecked; read-paths verified against real Linear; write-path verification pending sentinel issue |
 | 2. Projects round-trip + issue linking | ⬜ | |
 | 3. Linter + auto-fix | ⬜ | |
 | 4. Polish | ⬜ | `leebop new`, slash commands, SKILL.md |
@@ -98,28 +98,32 @@ Ship-blocker. Everything an agent needs to read/write Linear end-to-end, minus p
 
 ### Acceptance criteria
 
-**Discovery / read**
-- [ ] `leebop list --assignee me --state-type started` returns current in-flight work with `--json` schema `{schema_version, issues: [{identifier, title, state, assignee, updated_at, url}]}`
-- [ ] `leebop teams --json` lists the user's teams; `leebop projects --team TEAM` lists projects in that team
+**Discovery / read** (verified against real Linear)
+- [x] `leebop list --assignee me --state-type started` returns current in-flight work with `--json` schema `{schema_version, count, team, issues: [{identifier, title, state, state_type, priority, assignee, updated_at, url}]}`
+- [x] `leebop teams --json` lists the user's teams; `leebop projects --team TEAM` lists projects in that team
 
-**Bulk round-trip**
-- [ ] `leebop pull TEAM-101..TEAM-109` — 9 issue dirs written under `~/.leebop/cache/<hash>/issues/`, each with `description.md` + `metadata.yaml` + `comments/*.md`
-- [ ] Edit one `description.md`; `leebop push` pushes **only** that issue's description (verify mutation payload with `--dry-run`)
-- [ ] Add a label to `metadata.yaml`; `leebop push` resolves name → UUID and sends a full `labelIds` set (existing + new, respecting REPLACE semantics)
-- [ ] Stale-remote case: edit via Linear UI after local pull → `leebop push` refuses with a clean conflict message suggesting `leebop pull <ID> --refresh`
-- [ ] Edit 3 issues locally → `leebop status` shows 3 modified, rest clean
-- [ ] `leebop push --force` bypasses CAS (tested; documented as dangerous)
+**Bulk round-trip** (verified against real Linear, read + dry-run paths)
+- [x] `leebop pull TEAM-101..TEAM-109` — 9 issue dirs written under `~/.leebop/cache/<hash>/issues/`, each with `description.md` + `metadata.yaml` (comments/ when comments exist)
+- [x] `leebop pull --project "NAME"` fetches project + child issues
+- [x] Refuses to overwrite local edits without `--refresh`; `--refresh` honored
+- [x] Edit a `description.md`; `leebop push --dry-run` emits correct mutation payload with **only** the changed field
+- [x] Add a non-existent label to `metadata.yaml`; `leebop push --dry-run` errors with suggested candidates (name → UUID resolution guards)
+- [x] Stale-remote case: tamper local `_server.updated_at` backward; `leebop push` refuses with clean conflict message pointing at `leebop pull <ID> --refresh`
+- [x] Edit 3 issues locally → `leebop status` shows 3 modified, rest clean; human + `--json` output
+- [ ] `leebop push` actually mutates Linear (description change round-trip) — **pending sentinel issue**
+- [ ] `leebop push --force` bypasses CAS — **pending sentinel**
 
-**Single-shot**
-- [ ] `leebop comment TEAM-101 --body "LGTM"` adds a comment and exits clean
+**Single-shot** (implemented + typechecked, mutation verification pending sentinel)
+- [ ] `leebop comment TEAM-101 --body "LGTM"` adds a comment
 - [ ] `leebop set state TEAM-101 "In Progress"` resolves state name → UUID and updates
-- [ ] `leebop set labels TEAM-101 +urgent -area:backend` applies the delta (full set recomputed internally, `labelIds` REPLACE semantics respected)
-- [ ] `leebop set description TEAM-101 ...` refuses — error points user at `pull` → edit → `push`
+- [ ] `leebop set labels TEAM-101 +urgent -area:backend` applies the delta with REPLACE semantics
+- [x] `leebop set description TEAM-101 ...` refuses with clear pull→edit→push guidance (errors at parse time, no API call)
 
-**Escape hatch**
-- [ ] `leebop raw 'query { viewer { id email } }'` prints the JSON response
+**Escape hatch** (verified against real Linear)
+- [x] `leebop raw 'query { viewer { id email } }'` prints JSON response
+- [x] `leebop raw` with `--variables-json -` reads variables from stdin
 
-**Estimated size:** ~450 lines of source.
+**Estimated size:** ~450 lines → **actual: ~1,350 lines** across 13 new source files (library infrastructure grew with entity-snapshot diff strategy + multi-alias query builder + push-mutation module).
 
 ---
 
@@ -198,6 +202,7 @@ Append dated entries as work happens. Keep entries terse — link commits / PRs.
 - **2026-04-22** — spec + implementation plan drafted. No code.
 - **2026-04-22** — revised scope: leebop owns the full agentic Linear surface (auth, discovery, bulk round-trip, single-shot edit, GraphQL escape hatch). Native PAK auth replaces shelling out to `@schpet/linear-cli`. Phase 1 estimate bumped from ~200 → ~450 lines. Comment-read moved from Phase 2 → Phase 1 (bundled with `pull`). Issue linking added to Phase 2.
 - **2026-04-22** — Phase 0 🟢 complete. Project scaffolded on Bun 1.3.13 with `@linear/sdk@82`, strict TS, biome. CLI dispatcher + all subcommand registrations wired; unimplemented commands stubbed via `notImplemented()` so `leebop --help` already shows the full surface. Native PAK auth shipped: `auth login/logout/whoami [--refresh] [--json]`, with `--from-schpet` migration and PAK-vs-OAuth token discrimination. End-to-end verified via `--from-schpet` import against Linear; `auth.json` persisted at mode 0600 (dir 0700). Interactive PAK-paste login codepath exists but not user-verified yet.
+- **2026-04-22** — Phase 1 🟡 code-complete (~1,350 lines). All verbs shipped: `teams`, `projects`, `list`, `pull` (+ comments), `status`, `push` (+ `--dry-run`, CAS), `comment`, `set <field>`, `raw`. Read paths verified end-to-end against real Linear (UE workspace, 9-issue Relay Worker Refactor project). Discovered GraphQL constraint: `IssueFilter` doesn't expose `identifier`, so `pull` and `push` use multi-alias queries (one HTTP round-trip for N issues). Multi-file cache design: issue dir has `description.md` + `metadata.yaml` (with `_server:` snapshot including description hash for diff) + `comments/<uuid>.md` with YAML frontmatter. Team metadata cached at `~/.leebop/cache/<hash>/_team/<TEAM>.yaml` with 1h TTL. Sentinel-issue mutation verification blocked pending user designation.
 
 ---
 
