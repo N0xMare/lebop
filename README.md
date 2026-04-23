@@ -117,9 +117,15 @@ leebop set assignee UE-321 @me
 # GraphQL escape hatch — anything leebop doesn't wrap directly
 leebop raw 'query { viewer { id email } }'
 echo '{"id":"UE-321"}' | leebop raw 'query($id:String!){issue(id:$id){title}}' --variables-json -
+
+# declarative: author a project + issues + links as a dir of markdown files,
+# then realize the whole graph in Linear in one pass
+leebop plan validate path/to/plan-dir
+leebop plan apply    path/to/plan-dir --dry-run   # preview
+leebop plan apply    path/to/plan-dir             # create / update idempotently
 ```
 
-See `leebop <command> --help` for per-verb details.
+See `leebop <command> --help` for per-verb details, and `docs/plan-spec.md` for the plan format + apply semantics.
 
 ## Why not just use `@schpet/linear-cli`?
 

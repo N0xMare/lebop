@@ -8,9 +8,9 @@ Living document. Update as phases progress, quirks emerge, questions resolve. Pa
 
 ## TL;DR — where we are
 
-- **Phase 0–3 + 4a:** 🟢 shipped and verified (see table).
-- **Phase 4a (agent integration):** 🟢 shipped — `SKILL.md` + three slash commands tracked under `claude/` in the repo; `bin/install-claude` symlinks into `~/.claude/`. Symlink design = repo is source of truth, no drift after `git pull`.
-- **Next concrete step:** **Phase 4b polish.** Pick from: `leebop diff <id>`, L004 + repo-scoped lint rules, app-actor OAuth, declarative project-graph (parked idea, depends on `new` + `set links` + project push — all shipped, ready for design pass).
+- **Phase 0 → 4b:** 🟢 shipped and verified.
+- **Phase 4b (declarative project-graph):** 🟢 shipped — `leebop plan validate` + `leebop plan apply [--dry-run] [--strict]`. Author a project + issues + link graph as a dir of frontmatter-markdown files; apply realizes it in Linear, writes `linear_id` back to files, rewrites slug links → `UE-###`. Idempotent re-apply. Full walkthrough in `docs/plan-spec.md`; example in `examples/plans/sandbox-demo/`.
+- **Next concrete step:** **Phase 4c polish.** Remaining: `leebop diff <id>` (unified diff vs live remote), L004 + repo-scoped lint rules (`bracket_issue_refs` / `path_rewrites` config plumbing), `leebop plan diff`/`leebop plan pull` (drift-back feature), app-actor OAuth. None urgent.
 
 If you're a new agent reading this, jump to **§ Resumption checklist** below.
 
@@ -27,7 +27,8 @@ If you're a new agent reading this, jump to **§ Resumption checklist** below.
 | 2c. Project push live-verify | 🟢 | verified against `leebop sandbox` project (UUID `88377408-3d52-49f8-87c3-0d0f550cc9df`); latent post-push cache-hash-drift bug discovered and fixed. |
 | 3. Linter + auto-fix | 🟢 | `leebop lint [paths...] [--fix] [--strict] [--json]` shipped with rules L001/L002/L003/L005/L006; integrated into `push --strict` (block) / `push` (warn). 16 quirk tests + live-verify. |
 | 4a. Agent integration (SKILL + slash commands) | 🟢 | `claude/skills/leebop/SKILL.md` + `claude/commands/leebop-{pull,push,lint}.md`; `bin/install-claude` symlinks them into `~/.claude/`. Tracked in this repo so they don't drift from the code. |
-| 4b. Remaining polish | ⬜ | `leebop diff <id>`, L004 + repo-scoped rules, app-actor OAuth, declarative project-graph. |
+| 4b. Declarative project-graph (`leebop plan`) | 🟢 | Author a plan as dir of `.md` files; `leebop plan validate` + `leebop plan apply [--dry-run] [--strict]` realizes it in Linear. Idempotent re-apply via `linear_id` writeback + slug → `UE-###` link rewriting. 20 plan tests + live-verify against sandbox. See `docs/plan-spec.md`. |
+| 4c. Remaining polish | ⬜ | `leebop diff <id>`, L004 + repo-scoped lint rules, app-actor OAuth, `leebop plan diff`/`pull` (drift back into files). |
 
 Verified install / environment state on the development machine (as of last session):
 - **Bun 1.3.13** on macOS (darwin 24.6.0, arm64)
@@ -40,12 +41,12 @@ Verified install / environment state on the development machine (as of last sess
 
 ## Immediate next steps (in order)
 
-Phase 3 + agent integration shipped. Remaining surface (Phase 4 polish, in rough value order):
+Phase 4b shipped. Remaining polish (in rough value order):
 
-1. **`leebop diff <id>`** — unified diff vs live remote (could become `status --diff <id>` instead of a separate verb).
-2. **L004** + repo-scoped `R001`/`R002` linter rules — needs `--strict` plumbing for `bracket_issue_refs` config and `path_rewrites` config.
-3. **App-actor OAuth** (spec §11) — only when audit-trail noise becomes observable.
-4. **Declarative project-graph** (parked idea) — would need its own design pass; depends on `new` + `set links` + project push, all of which now exist.
+1. **`leebop diff <id>`** — unified diff vs live remote (could become `status --diff <id>`).
+2. **`leebop plan diff <dir>` / `leebop plan pull <dir>`** — detect + pull back remote drift into plan files. Natural extension of the apply loop.
+3. **L004** + repo-scoped `R001`/`R001` linter rules — needs `bracket_issue_refs` / `path_rewrites` config plumbing.
+4. **App-actor OAuth** (spec §11) — only when audit-trail noise becomes observable.
 
 **Mutation sandbox**: all live-test mutations run inside the persistent **`leebop sandbox`** project (UUID `88377408-3d52-49f8-87c3-0d0f550cc9df`). Sentinel issues: **UE-359** (issue mutation) and **UE-360** (links partner). Both held at state=Backlog (not Triage — Triage bloats the global cross-project view). See `reference_leebop_sandbox.md` in auto-memory for baseline/reset instructions.
 
@@ -88,6 +89,7 @@ src/
 │   ├── set.ts                # single-shot field mutations — title/state/priority/assignee/labels/links
 │   ├── new.ts                # create a new issue (Phase 2.5)
 │   ├── archive.ts            # archive one or more issues (Phase 2.5)
+│   ├── plan.ts               # leebop plan validate / apply (Phase 4b)
 │   └── raw.ts                # GraphQL escape hatch
 └── lib/
     ├── paths.ts              # ~/.leebop/ path constants
@@ -107,6 +109,10 @@ src/
     ├── errors.ts             # rewriteNotFound: friendly "not found: X" translator
     ├── quirks.ts             # universal Linear renderer rules (L001/L002/L003/L005/L006)
     ├── lint.ts               # rule runner + applyFixes
+    ├── planTypes.ts          # plan feature: frontmatter schema + LinkKey mapping
+    ├── planParse.ts          # plan feature: directory walker + frontmatter parser
+    ├── planValidate.ts       # plan feature: slug/link/cycle/lint/state/label checks
+    ├── planApply.ts          # plan feature: topological realizer (project+issues+links)
     ├── prompt.ts             # hidden-input stdin prompt for auth login
     └── notImplemented.ts     # stub helper for unshipped verbs
 ```
@@ -363,6 +369,7 @@ Append-only. Most recent at bottom.
 - **2026-04-23** — Pre-Phase-2 foundations. **Unit tests landed**: 4 files under `tests/` (`expand`, `diff`, `resolve`, `config`) covering pure libs; 51 tests pass in ~0.4s. tsc + biome green. **`issueRelation*` probe complete** — mutation shapes + enum values + idempotency semantics captured in § Phase 2. Headline finding: server-side idempotent create (same tuple → same UUID, no dup) and delete requires relation UUID (must look up before deleting via `-` delta). Also: surfaces design call to promote `leebop new` + `leebop archive` out of `raw` into first-class verbs (usage signal from this session's test workflow) — user input pending before committing to Phase 2.5 slot.
 - **2026-04-23** — **Phase 2 🟢 + Phase 2.5 🟢 shipped.** `leebop new` (create issue with `--title/--project/--state/--priority/--label/--assignee/--description(-file|--stdin)`), `leebop archive <id...>`, and `leebop set links <id> +/-KIND:TARGET` (5 kinds: `blocks | blocked-by | duplicates | duplicated-by | related`; `similar` intentionally in `raw` only). `show` now folds `relations + inverseRelations` into a `── links ──` section. Ships with 11 new unit tests for `parseLinkToken` (62 total, all green). **Live-verified** via TEST-C/TEST-D pair (UE-355 + UE-356 — both created via `leebop new`, linked in every directional variant, then archived via `leebop archive`). **Two significant Linear semantic quirks discovered during live-test, now logged**: (1) Linear enforces AT MOST ONE relation per issue pair — `+related:X` silently replaces any pre-existing `+blocks:X` or reverse-direction relation, which makes `+`/`-` delta semantics misleading when multiple deltas hit the same pair; (2) creating any `duplicate`-type relation may auto-move the involved issues to the `Duplicate` workflow state (type: `canceled`). Both documented under Discovered quirks. Same commander `-foo`-as-option bug hit `set links` as it did `set labels` — workaround: `--` separator or prefix with `+`. Logged as Immediate next step #1 for a UX fix.
 - **2026-04-23** — **UX fix: commander `-foo` bug in `set labels` + `set links` fully resolved.** `src/lib/argvPrep.ts::preprocessSetArgv` walks past `set FIELD ID` (accounting for `--team <val>`/`--team=val` and `--json`/`-h`/`--help`), then auto-inserts a `--` separator before the first unknown `-TOKEN` it encounters. Invariant: only touches `set` argv; leaves every other invocation alone; no-op if `--` already present. 14 new unit tests (76 total). **Live-verified** via TEST-E/TEST-F pair (UE-357 + UE-358, archived) — exercised single-negative (`-type:test`, `-blocks:UE-358`), mixed `+/-` sequences, `--json -blocks:…` co-existence, and explicit `--` back-compat. All five paths green. `leebop set labels UE-351 -type:test` and `leebop set links UE-355 -blocks:UE-356` now Just Work.
+- **2026-04-23** — **Phase 4b 🟢 — declarative project-graph shipped (`leebop plan`).** Author a plan as a directory of frontmatter-markdown files: `_project.md` + one `*.md` per issue. Each issue file carries title/state/priority/labels/assignee + 5 link fields (`blocks`, `blocked_by`, `related`, `duplicates`, `duplicated_by`). Link targets are local slugs (filename-derived, or explicit `slug:`) OR external Linear identifiers (`TEAM-NN` regex). `leebop plan validate` checks slug uniqueness + link resolution + cycles (warn) + body lint. `leebop plan apply` topologically realizes: project upsert → issue upsert (writing back `linear_id` per file) → slug→`UE-###` link rewriting in files → relation creation. Idempotent re-apply; `--dry-run` shows full planned graph including relations. 20 new unit tests (136 total, all green). **Live-verified** in sandbox: 3-issue plan `examples/plans/sandbox-demo/` created project cbcfb314 + UE-370/371/372 with 6 relations (incl. external reference to sentinel UE-359); re-apply reported all `unchanged`; all archived post-test. Docs: `docs/plan-spec.md` stable design reference. **Two latent fixes during implementation**: (a) frontmatter regex required trailing `\n` before closing `---` — broke empty frontmatter; (b) parser was including the conventional blank line after `---` in body, causing false-positive diff on re-apply — now strips one leading newline. Both in `planParse.ts`.
 - **2026-04-23** — **Phase 4a 🟢 — agent integration assets tracked in repo.** `claude/skills/leebop/SKILL.md` (when-to-use-which-verb guide for agents, with the discovered Linear quirks inline) + `claude/commands/leebop-{pull,push,lint}.md` (thin slash-command wrappers that prescribe sensible post-action behaviour: surface partial failures, run `status` after, don't auto-`--fix`/`--force` without asking). `bin/install-claude` is a re-runnable symlink installer (`~/.claude/skills/leebop` → `claude/skills/leebop/`, plus per-file links for slash commands). Tracked in the leebop repo so they evolve with the code; gitignore now excludes `.claude/` (harness-local per-project state).
 - **2026-04-23** — **Phase 3 🟢 — linter + auto-fix shipped.** `src/lib/quirks.ts` carries 5 universal rules (L001 ordered-list marker in table cell, L002 bullet marker in table cell, L003 indented code fence, L005 URL in backticks, L006 setext H2 from `text\n---` — the rule discovered during sandbox push). `src/lib/lint.ts` runs rules + applies bottom-up fixes. `leebop lint [paths...] [--fix] [--strict] [--json]` walks `description.md`/`content.md` in the cache by default; explicit paths override. `leebop push` runs lint pre-mutation: warnings always print (stderr); `--strict` blocks the push and exits 1. 16 unit tests in `tests/quirks.test.ts` (table-driven with input → expected warnings + autofix output); `lintContent` and `applyFixes` are pure. Live-verified in sandbox: edited UE-359 with all 4 quirk patterns, `lint --fix` fixed 3, `push --strict` blocked on the L005 info, plain `push` warned and proceeded. 96 tests total, all green. L004 + repo-scoped R001/R002 deferred until per-repo config plumbing materializes.
 - **2026-04-23** — **End-to-end shakedown + four polish fixes.** Walked every verb path against the sandbox: discovery (teams/projects/list with all filter combos), pull (single/list/range/project/--refresh/--no-comments/--to/--json), show, set (every field + edge cases), new, archive, push (multi-issue + --json), comment (--body/--body-file/--stdin), raw (--query-file + --variables-json from file & stdin), CAS+--force. Found and fixed: (1) **`pull` fail-fast on mixed valid+invalid IDs** — Linear SDK throws and discards partial data when ANY alias errors; fix: try multi-alias happy path, fall back to per-id `Promise.allSettled` so successes survive. (2) **Raw GraphQL not-found error surfaced** on `show`/`archive`/`pull` — added `src/lib/errors.ts::rewriteNotFound` (tiny translator used at catch sites; not a wrapper) and applied in those three commands. (3) **Team-metadata 1h TTL blocked `--project <name>` for freshly-created projects** — added `withFreshMetadataOnMiss` in `resolve.ts` that auto-retries with `refresh: true` on `ResolveError`; applied to `new` and `set`. **Sandbox baseline corrected**: UE-359/UE-360 moved from Triage → Backlog (Triage bloats Linear's global cross-project triage view). New unit tests (4 in `tests/errors.test.ts`); 80 total, all green.

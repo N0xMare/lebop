@@ -7,6 +7,7 @@ import { registerDiff } from "./commands/diff.ts";
 import { registerLint } from "./commands/lint.ts";
 import { registerList } from "./commands/list.ts";
 import { registerNew } from "./commands/new.ts";
+import { registerPlan } from "./commands/plan.ts";
 import { registerProjects } from "./commands/projects.ts";
 import { registerPull } from "./commands/pull.ts";
 import { registerPush } from "./commands/push.ts";
@@ -46,6 +47,7 @@ export async function run(rawArgv: string[]): Promise<void> {
 
   registerNew(program);
   registerArchive(program);
+  registerPlan(program);
 
   registerRaw(program);
 
