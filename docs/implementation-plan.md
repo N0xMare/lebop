@@ -1,242 +1,380 @@
 # leebop — implementation plan
 
-Living document. Update as phases progress, quirks are discovered, and open questions resolve. Paired with `spec.md` (stable design).
+Living document. Update as phases progress, quirks emerge, questions resolve. Paired with `spec.md` (stable design).
 
 **Status legend:** ⬜ not started · 🟡 in progress · 🟢 done · ⏸ blocked
 
 ---
 
-## Current state
+## TL;DR — where we are
 
-**Overall:** ⬜ not started — spec finalized, no code yet.
+- **Phase 0 (bootstrap + auth):** 🟢 shipped.
+- **Phase 1 (MVP agentic read/write surface):** 🟡 code-complete (~1,350 LOC), all read paths verified end-to-end against real Linear, all write paths verified via `--dry-run` only. **Mutation-path verification blocked pending user designation of a sentinel issue.**
+- **Next concrete step:** pick a sentinel issue (or dedicated test issue) in team `UE`, then run the three mutation tests in **§ Phase 1 acceptance — pending**.
 
-| Phase | Status | Notes |
-|---|---|---|
-| 0. Bootstrap + native auth | 🟢 | scaffolded, dispatcher wired, `auth login/logout/whoami` shipped |
-| 1. MVP — the full agentic read/write surface | 🟡 | all verbs implemented + typechecked; read-paths verified against real Linear; write-path verification pending sentinel issue |
-| 2. Projects round-trip + issue linking | ⬜ | |
-| 3. Linter + auto-fix | ⬜ | |
-| 4. Polish | ⬜ | `leebop new`, slash commands, SKILL.md |
+If you're a new agent reading this, jump to **§ Resumption checklist** below.
 
 ---
 
-## Phase 0 — Bootstrap + native auth
+## Current state
 
-Environment, scaffolding, and the auth layer. Auth is Phase 0 because every downstream command depends on it.
+| Phase | Status | What's in / what's out |
+|---|---|---|
+| 0. Bootstrap + native auth | 🟢 | scaffolding, CLI dispatcher, native PAK auth (`leebop auth login/logout/whoami`) |
+| 1. MVP — agentic read/write surface | 🟡 | all verbs implemented; `show`, `pull --to`, path-on-success shipped. Reads + dry-runs verified. Mutations pending sentinel. |
+| 2. Projects round-trip + issue linking | ⬜ | project pull already works (Phase 1); push and `set links` pending. |
+| 3. Linter + auto-fix | ⬜ | — |
+| 4. Polish | ⬜ | `leebop new`, slash commands, SKILL.md, git pre-commit, `leebop diff` remaining. (`show` promoted to Phase 1.) |
+
+Verified install / environment state on the development machine (as of last session):
+- **Bun 1.3.13** on macOS (darwin 24.6.0, arm64)
+- **Symlink:** `/opt/homebrew/bin/leebop → /Users/cmace/.bun/bin/leebop` exists and is on the PATH inherited by Claude Code subagents.
+- **Auth:** `~/.leebop/auth.json` present (token was imported via `--from-schpet`; viewer = `justice@unlink.xyz`, team `UE`, workspace `unlink-xyz`).
+- **Config:** `~/.leebop/config.yaml` seeded with `default_team: UE` and workspace URL prefix.
+- **Cache:** `~/.leebop/cache/5102b4186605/` (repo hash for `/Users/cmace/dev/unlink/leebop`) — contains pulled fixtures for `UE-321..UE-329` and project `Relay Worker Refactor`.
+
+---
+
+## Immediate next steps (in order)
+
+1. **Designate a sentinel issue in UE** — an existing issue you're comfortable mutating, OR a new `TEST: leebop sentinel` issue. Record its identifier here and in a `.leebop-test-target.yaml` when the integration-test harness lands.
+2. **Run the three pending mutation tests** (see **§ Phase 1 acceptance — pending** below). Each takes seconds. Revert via `leebop pull <id> --refresh` after.
+3. **Flip the mutation checkboxes, close Phase 1.**
+4. **Start Phase 2** (projects round-trip + issue linking) — see **§ Phase 2** for scope.
+
+Everything else (tests, linter, polish) is downstream of closing Phase 1.
+
+---
+
+## Preconditions for any development
+
+Before writing any code or running any command:
+
+1. **Shell PATH:** confirm `which leebop` returns `/opt/homebrew/bin/leebop` (or equivalent). If it doesn't resolve, run:
+   ```sh
+   ln -sf "$HOME/.bun/bin/leebop" /opt/homebrew/bin/leebop
+   ```
+   This symlink is **load-bearing for subagent discoverability**. Without it, Claude Code subagents silently fall back to `@schpet/linear-cli` because `~/.bun/bin` isn't on their inherited PATH. See the 2026-04-22 progress-log entry "Agent-UX smoke test" for the failure mode.
+2. **Auth:** confirm `leebop auth whoami` prints a viewer. If not, `leebop auth login [--from-schpet]`.
+3. **Bun version:** `bun --version` ≥ 1.1.
+4. **Dev flow:** from repo root, `bun install`, then `bunx tsc --noEmit` (typecheck) and `bunx biome check src/` (lint) are the two green gates before any commit. `bunx biome check --write src/` to auto-fix.
+
+---
+
+## Source map
+
+Where each concern lives. Keep this current when adding files.
+
+```
+src/
+├── cli.ts                    # commander dispatcher; registers all subcommands
+├── commands/
+│   ├── auth.ts               # login / logout / whoami
+│   ├── list.ts               # issue discovery by filter
+│   ├── projects.ts           # project listing
+│   ├── teams.ts              # team listing
+│   ├── show.ts               # read-only single-issue display (no cache side-effect)
+│   ├── pull.ts               # cache materialization; --to for export-mode
+│   ├── push.ts               # CAS-guarded mutation; --dry-run
+│   ├── status.ts             # git-like diff against _server snapshot
+│   ├── diff.ts               # (stub) Phase 4
+│   ├── lint.ts               # (stub) Phase 3
+│   ├── comment.ts            # add a comment (direct mutation)
+│   ├── set.ts                # single-shot field mutations with name→UUID
+│   └── raw.ts                # GraphQL escape hatch
+└── lib/
+    ├── paths.ts              # ~/.leebop/ path constants
+    ├── types.ts              # AuthFile, UserConfig, RepoConfig
+    ├── auth.ts               # PAK persistence + validation + linearClientFromToken
+    ├── sdk.ts                # singleton LinearClient from stored PAK
+    ├── config.ts             # cwd → git root → repo config → team resolution
+    ├── cache.ts              # atomic read/write for issues/projects/comments/team metadata
+    ├── resolve.ts            # name ↔ UUID (states/labels/assignees/priorities) + team metadata fetch
+    ├── diff.ts               # field-level diff against _server snapshot
+    ├── build.ts              # FetchedIssue → IssueMetadata + description (canonical build)
+    ├── expand.ts             # ID range expansion (TEAM-101..TEAM-109)
+    ├── pullQuery.ts          # multi-alias issue query builder + fragment + types
+    ├── pushMutations.ts      # issueUpdate/projectUpdate + batched CAS query builder
+    ├── prompt.ts             # hidden-input stdin prompt for auth login
+    └── notImplemented.ts     # stub helper for unshipped verbs
+```
+
+Cache layout (under `~/.leebop/cache/<repo-hash>/`):
+
+```
+issues/<IDENTIFIER>/
+├── description.md            # user-editable
+├── metadata.yaml             # user-editable top-level + _server: snapshot (read-only-ish)
+└── comments/<comment-uuid>.md  # YAML frontmatter + body (read-only; refreshed on pull)
+
+projects/<project-uuid>/
+├── content.md
+└── metadata.yaml
+
+_team/<TEAM-KEY>.yaml          # team metadata (labels, states, members, projects) with 1h TTL
+```
+
+`<repo-hash>` = `sha256(absolute-git-root-path).slice(0,12)`; fallback `_global` when cwd isn't in a git repo.
+
+---
+
+## Phase 0 — Bootstrap + native auth 🟢
+
+Environment, scaffolding, and the auth layer.
 
 ### Environment
-- [x] Confirm `bun --version` works — **Bun 1.3.13** (upgraded from 0.8.1)
-- [x] Confirm user can create a Linear personal API key at Settings → API
-- [x] Confirm the target Linear team + workspace are accessible — verified via `viewer` query during `auth login`
+- [x] Bun 1.3.13 verified (upgraded from 0.8.1 during session)
+- [x] Linear PAK creation verified (or `--from-schpet` import)
+- [x] Target team + workspace (`UE` in `unlink-xyz`) accessible via `viewer` probe
 
 ### Scaffolding
-- [x] `bun init`
-- [x] Add deps per `spec.md` §10.2 — `@linear/sdk@82`, `yaml`, `commander`, `diff@9`, `chalk`; dev: `typescript`, `vitest`, `@biomejs/biome`
-- [x] Strict `tsconfig.json` — bun default is already `strict` + `noUncheckedIndexedAccess`; `module: Preserve` / `moduleResolution: bundler` is correct for a bun-native app (NodeNext would apply only for the Node+tsx fallback)
-- [x] `.gitignore`
-- [x] Source tree per `spec.md` §5 — `src/cli.ts` dispatcher + command registration for all verbs; Phase 1+ commands stubbed via `notImplemented()` helper so they appear in `--help`
-- [x] `bin/leebop` shim + `package.json` `"bin": { "leebop": "./bin/leebop" }`
-- [x] `bun link` — symlinked at `~/.bun/bin/leebop`. **User TODO:** add `~/.bun/bin` to `PATH` for bare-name invocation
-- [x] Biome config — `bunx biome check [--write]` lints + formats
+- [x] `bun init`, deps installed (`@linear/sdk@82`, `yaml`, `commander`, `diff@9`, `chalk`; dev: `typescript`, `vitest`, `@biomejs/biome`)
+- [x] Strict `tsconfig.json` (`strict`, `noUncheckedIndexedAccess`, `module: Preserve`, `moduleResolution: bundler`)
+- [x] `.gitignore` (node_modules, dist, auth.json, /cache/)
+- [x] Source tree + CLI dispatcher; all subcommands registered (stubs for Phase 1+ via `notImplemented()`)
+- [x] `bin/leebop` shim + `package.json` `"bin"`
+- [x] `bun link` + symlink into `/opt/homebrew/bin` for subagent discoverability
+- [x] Biome config (`bunx biome check [--write]`)
 
 ### Auth (native PAK)
 - [x] `src/lib/auth.ts` — PAK persistence at `~/.leebop/auth.json` (0600), load/validate/delete; PAK (`lin_api_`) vs OAuth-bearer discrimination via `linearClientFromToken()`
 - [x] `src/commands/auth.ts` — `login` (hidden-input prompt + `--token` / `--token-file` / `--from-schpet`), `logout`, `whoami [--refresh] [--json]`
-- [x] `src/lib/sdk.ts` — `LinearClient` backed by stored PAK; clean 401 → "run `leebop auth login`" message; `handleAuthError()` helper
+- [x] `src/lib/sdk.ts` — `LinearClient` backed by stored PAK; clean 401 → "run `leebop auth login`" message
 
 ### Acceptance
-- [x] `leebop --help` prints the subcommand list (via `~/.bun/bin/leebop` — bare `leebop` works once user adds `~/.bun/bin` to PATH)
-- [x] `leebop auth login --from-schpet` validates against Linear and writes `~/.leebop/auth.json` with mode 0600 (dir 0700)
-- [x] `leebop auth whoami` prints `{email, name, id}`; `--refresh` re-validates; `--json` emits structured output
-- [x] `leebop auth logout` removes the file; subsequent commands emit clean "run `leebop auth login`" error
-- [ ] Interactive `leebop auth login` (no flags) with a pasted PAK — code path exists and typechecks; user-verified round-trip pending
+- [x] `leebop --help` prints subcommand list
+- [x] `leebop auth login --from-schpet` validates + persists (mode 0600, dir 0700)
+- [x] `leebop auth whoami` / `--refresh` / `--json`
+- [x] `leebop auth logout` + subsequent-command clean error
+- [ ] Interactive `leebop auth login` (bare prompt) — codepath exists and typechecks, **not user-verified this session**
 
 ---
 
-## Phase 1 — MVP: full agentic read/write surface
+## Phase 1 — MVP: full agentic read/write surface 🟡
 
-Ship-blocker. Everything an agent needs to read/write Linear end-to-end, minus project round-trip (Phase 2) and linter (Phase 3).
+Ship-blocker. Everything an agent needs to read/write Linear end-to-end, minus project-mutation (still Phase 2) and linter (Phase 3).
 
-### Scope
+### Scope — shipped
 
 **Foundations**
-- `src/lib/config.ts` — resolve cwd → git root → repo config → team
-- `src/lib/cache.ts` — atomic read/write for `description.md` + `metadata.yaml` (+ comments)
-- `src/lib/diff.ts` — field-level diff between local `metadata.yaml` and remote snapshot
-- `src/lib/resolve.ts` — name ↔ UUID resolution for labels, states, assignees
-- Team metadata cache (labels, states, members) under `~/.leebop/cache/<repo-hash>/_team/<TEAM>.yaml`; refresh on demand / TTL
+- `src/lib/config.ts` — cwd → git root → repo config → team; `<repo-hash>` = SHA-256[:12] of git root
+- `src/lib/cache.ts` — atomic read/write for issues, projects, comments, team metadata; sha256 description/content hashes
+- `src/lib/diff.ts` — field-level diff against `_server:` snapshot (title, description, state, priority, labels, assignee; project-level fields too)
+- `src/lib/resolve.ts` — name ↔ UUID for states/labels/assignees + priority name ↔ number; team metadata fetch + 1h TTL cache
+- `src/lib/build.ts` — canonical `FetchedIssue → IssueMetadata + description` mapper; used by `pull`, `push` response-refresh, and `set` cache-refresh
 
 **Bulk round-trip**
-- `leebop pull [IDS...|--project] [--no-comments]` — single, list, range (`TEAM-101..TEAM-109`), project; bundles comments by default
-- `leebop push [IDS...] [--dry-run] [--force]` — CAS via `updatedAt`, field-level diff, only mutate changed fields
-- `leebop status` — git-like modified/clean/stale summary
+- `leebop pull [ids...] [--project NAME|--project-id UUID] [--refresh] [--no-comments] [--to DIR] [--json]` — single / list / range / project; bundles comments; `--to DIR` for export mode (no cache write); prints target path per entity
+- `leebop push [ids...] [--dry-run] [--force] [--json]` — batched CAS via multi-alias `updatedAt` query; field-level diff; only mutates changed fields; refreshes `_server` from mutation response
+- `leebop status [--json]` — git-like modified/clean summary with per-field change names
 
-**Single-shot point edits**
-- `leebop comment <ID> [--body TEXT | --body-file F | -]` — add comment
-- `leebop set title|state|priority|assignee|labels <ID> <value>` — direct mutation with server-side CAS; `labels` uses `+foo -bar` delta syntax
+**Read-only display**
+- `leebop show <id> [--no-comments] [--json]` — fetch + print inline, no cache side-effect. Clear pull-vs-show guidance in `--help`.
+
+**Single-shot**
+- `leebop comment <id> [--body TEXT | --body-file F | --stdin] [--json]`
+- `leebop set <field> <id> <value..>` — `title | state | priority | assignee | labels`; labels uses `+foo -bar` delta syntax and `=foo,bar` exact-replace; `description`/`content` deliberately refused with pull→edit→push guidance; cache-refreshed if issue is cached
 
 **Discovery**
-- `leebop list [filters...]` — issues by assignee/state/project/label/updated-since
-- `leebop projects [--team KEY]` — list projects
-- `leebop teams` — list teams
+- `leebop list [filters...] [--json]` — filters: `--project`, `--project-id`, `--state`, `--state-type`, `--assignee`, `--label` (repeatable), `--priority`, `--updated-since` (`7d|24h|ISO`), `--limit`, `--team`
+- `leebop projects [--team --state --json]`
+- `leebop teams [--json]`
 
 **Escape hatch**
-- `leebop raw <query> [--variables-json FILE|-]` — GraphQL passthrough
+- `leebop raw <query> [--variables-json FILE|-] [--json]` — query from arg / `--query-file` / stdin; variables from JSON file or stdin
 
 **Cross-cutting**
-- `--json` flag on all read commands (`list`, `projects`, `teams`, `status`, `pull` summary) — stable schema, versioned `{"schema_version": 1, ...}`
+- `--json` on all read commands (`list`, `projects`, `teams`, `status`, `pull` summary, `show`, `whoami`). Stable versioned schema: `{"schema_version": 1, ...}`.
 
-### Build order (strict)
-1. `config.ts` + `cache.ts` + `resolve.ts` — foundations (SDK client already wired in Phase 0)
-2. `leebop list` — proves SDK + filter plumbing; agent-critical entry point
-3. `leebop teams` + `leebop projects` — cheap, validate team metadata cache
-4. `leebop pull` (+ comments) — proves cache format works
-5. `leebop status` — proves diff detection works
-6. `leebop push` with `--dry-run` from day one — ship-blocker
-7. `leebop comment` + `leebop set` — leverage existing mutation plumbing
-8. `leebop raw` — trivial once SDK client exists; closes the completeness gap
+### Acceptance criteria — verified
+**Discovery / read** (real Linear, `UE` workspace)
+- [x] `leebop list --assignee me --state-type started` returns current in-flight work; `--json` emits `{schema_version, team, count, issues:[...]}` 
+- [x] `leebop teams --json` lists accessible teams; `leebop projects --team UE` lists projects
+- [x] `leebop raw 'query { viewer { id email } }'` prints JSON; `--variables-json -` works from stdin
 
-### Acceptance criteria
+**Bulk read + diff** (real Linear)
+- [x] `leebop pull UE-321..UE-329` — 9 issue dirs written; each `description.md` + `metadata.yaml`; comments fetched when present (verified via UE-317)
+- [x] `leebop pull --project "Relay Worker Refactor"` produces project dir + child issues; prints target path per entity
+- [x] `leebop pull --to /tmp/leebop-test UE-322` — files land at `/tmp/leebop-test/UE-322/`; cache untouched; warning about round-trip printed
+- [x] Refuse-overwrite-without-refresh guard works (cache mode only; `--to` bypasses by design)
+- [x] `leebop show <id>` — formatted inline read; agent UX verified (subagent resolved the issue with 2 commands: `--help` → `show`)
 
-**Discovery / read** (verified against real Linear)
-- [x] `leebop list --assignee me --state-type started` returns current in-flight work with `--json` schema `{schema_version, count, team, issues: [{identifier, title, state, state_type, priority, assignee, updated_at, url}]}`
-- [x] `leebop teams --json` lists the user's teams; `leebop projects --team TEAM` lists projects in that team
+**Dry-run + guards** (real Linear)
+- [x] `leebop push --dry-run` emits correct mutation payload with only the changed field (verified: description-only edit → `{"description":"..."}` in input)
+- [x] Non-existent label → `resolveLabelId` throws `unknown label "fake-label"` with candidate suggestions — `--dry-run` caught it before any API call
+- [x] CAS staleness — tamper `_server.updated_at` backward → push refuses with clean conflict message pointing at `leebop pull <id> --refresh`
+- [x] `leebop status` — local edits detected (description, state, labels); human + `--json` outputs
 
-**Bulk round-trip** (verified against real Linear, read + dry-run paths)
-- [x] `leebop pull TEAM-101..TEAM-109` — 9 issue dirs written under `~/.leebop/cache/<hash>/issues/`, each with `description.md` + `metadata.yaml` (comments/ when comments exist)
-- [x] `leebop pull --project "NAME"` fetches project + child issues
-- [x] Refuses to overwrite local edits without `--refresh`; `--refresh` honored
-- [x] Edit a `description.md`; `leebop push --dry-run` emits correct mutation payload with **only** the changed field
-- [x] Add a non-existent label to `metadata.yaml`; `leebop push --dry-run` errors with suggested candidates (name → UUID resolution guards)
-- [x] Stale-remote case: tamper local `_server.updated_at` backward; `leebop push` refuses with clean conflict message pointing at `leebop pull <ID> --refresh`
-- [x] Edit 3 issues locally → `leebop status` shows 3 modified, rest clean; human + `--json` output
-- [ ] `leebop push` actually mutates Linear (description change round-trip) — **pending sentinel issue**
-- [ ] `leebop push --force` bypasses CAS — **pending sentinel**
+**Refusals** (static guards, verified)
+- [x] `leebop set description <id> ...` refuses at parse time, points at pull→edit→push (tested)
 
-**Single-shot** (implemented + typechecked, mutation verification pending sentinel)
-- [ ] `leebop comment TEAM-101 --body "LGTM"` adds a comment
-- [ ] `leebop set state TEAM-101 "In Progress"` resolves state name → UUID and updates
-- [ ] `leebop set labels TEAM-101 +urgent -area:backend` applies the delta with REPLACE semantics
-- [x] `leebop set description TEAM-101 ...` refuses with clear pull→edit→push guidance (errors at parse time, no API call)
+### Acceptance criteria — pending (sentinel issue required)
 
-**Escape hatch** (verified against real Linear)
-- [x] `leebop raw 'query { viewer { id email } }'` prints JSON response
-- [x] `leebop raw` with `--variables-json -` reads variables from stdin
+Run these once a sentinel issue is designated. Each should complete in seconds; revert between runs with `leebop pull <sentinel> --refresh`.
 
-**Estimated size:** ~450 lines → **actual: ~1,350 lines** across 13 new source files (library infrastructure grew with entity-snapshot diff strategy + multi-alias query builder + push-mutation module).
+- [ ] **Real push round-trip:** edit sentinel's `description.md` locally → `leebop push` → re-pull → confirm the edit landed in Linear and `status` is clean
+- [ ] **Real comment:** `leebop comment <sentinel> --body "test via leebop $(date +%s)"` → verify the comment appears when re-pulled
+- [ ] **Real set:**
+  - [ ] `leebop set priority <sentinel> urgent` → verify via `show`
+  - [ ] `leebop set state <sentinel> "<a state name>"` → verify via `show`
+  - [ ] `leebop set labels <sentinel> +<known-label> -<known-label>` → verify via `show`
+  - [ ] `leebop set assignee <sentinel> @me` → verify via `show`
+- [ ] `leebop push --force` bypasses CAS (tamper `_server.updated_at` forward, `--force`, confirm it pushes anyway)
+- [ ] Interactive `leebop auth login` (no flags; hidden-input prompt) — `auth logout`, then `auth login`, paste a PAK manually
+
+### Deferred from Phase 1 (not yet implemented)
+- [ ] `leebop pull` space-separated list of IDs (tested range `UE-321..UE-329` and single; not `UE-321 UE-322 UE-323` — code supports it, untested in session)
+- [ ] `leebop pull --no-comments` flag exercise
+- [ ] Multi-issue push in one invocation (path exists; tested only with 1 modified issue at a time)
+- [ ] `leebop projects --state <state>` filter (code present, not exercised)
+- [ ] `leebop list --label foo --priority 1` (filter combinations beyond what was tested)
+
+**Actual size:** ~1,350 LOC across 13 source files (original estimate ~450; growth was in cache/diff/build/resolve infrastructure that's reused across verbs).
 
 ---
 
-## Phase 2 — Projects round-trip + issue linking
+## Phase 2 — Projects round-trip + issue linking ⬜
+
+Project pull already works from Phase 1 (`leebop pull --project`). What's left:
 
 ### Scope
-- Extend cache to `projects/<uuid>/` with `content.md` + `metadata.yaml`
-- `leebop pull --project "Name"` / `--project-id <uuid>` — fetches project + child issues (comments already bundled in Phase 1)
-- `leebop push` handles `projectUpdate` (content, description, state)
-- **Issue linking:** `leebop set links <ID> blocks:TEAM-102,related:TEAM-103,duplicates:TEAM-104` — delta syntax (`+blocks:TEAM-105`, `-related:TEAM-103`); maps to Linear's `IssueRelation` mutations
+- **Project push:** `leebop push` already has the project branch coded (see `src/commands/push.ts`, `PROJECT_UPDATE_MUTATION`), untested against real Linear
+- **Issue linking:** `leebop set links <id> +blocks:X,-related:Y,duplicates:Z` — delta syntax; maps to Linear's `IssueRelation` create/delete mutations; ships as a new field under `set`
 
-### Acceptance criteria
-- [ ] `leebop pull --project "Example Project"` produces project dir + all child issue dirs
-- [ ] Edit project `content.md` locally; `leebop push` updates project content, does **not** touch child issues unless they're also modified
-- [ ] `leebop set links TEAM-101 +blocks:TEAM-102` creates the blocks relation; re-running is idempotent (no duplicate relation)
-- [ ] `leebop set links TEAM-101 -blocks:TEAM-102` removes the relation
+### Acceptance
+- [ ] `leebop pull --project "<name>"` → edit `content.md` → `leebop push` mutates project content in Linear (verify via re-pull)
+- [ ] Project push does **not** touch child issues unless they're also modified
+- [ ] `leebop set links <id> +blocks:<id2>` creates the blocks relation (verify via Linear UI or re-pull)
+- [ ] Re-running the same `+blocks:` is idempotent (no duplicate relation)
+- [ ] `leebop set links <id> -blocks:<id2>` removes it
 
 **Estimated size:** ~120 additional lines.
 
+**Linking requires GraphQL we haven't touched yet:** `issueRelationCreate` / `issueRelationDelete`. The `IssueRelation` type in `@linear/sdk` has `type: "blocks"|"related"|"duplicate"`. Worth a quick probe via `leebop raw` before coding.
+
 ---
 
-## Phase 3 — Linter + auto-fix
+## Phase 3 — Linter + auto-fix ⬜
 
 ### Scope
 - `src/lib/quirks.ts` — universal rules (L001–L005 per `spec.md` §9.1)
 - `src/lib/lint.ts` — rule runner with severity + auto-fix hooks
 - Repo-scoped rules (R001–R002) loaded from `config.yaml`
 - `leebop lint [PATHS...] [--fix] [--strict]`
-- `leebop push` calls lint first; `--strict` push blocks on warnings
+- `leebop push` integrates lint; `--strict` push blocks on warnings
 
-### Acceptance criteria
-- [ ] Lint against a table with a cell = `1. Foo` emits `L001` warning
+### Acceptance
+- [ ] Lint against a table cell = `1. Foo` emits `L001` warning
 - [ ] `leebop lint --fix` rewrites `1. Foo` → `Row 1 — Foo` without mangling adjacent cells
-- [ ] Lint against a description containing a configured `path_rewrites.from` prefix emits `R001` and applies the `to` prefix on `--fix`
+- [ ] Lint against a description containing a configured `path_rewrites.from` prefix emits `R001` and applies `to` prefix on `--fix`
 - [ ] `leebop push --strict` refuses to push content with outstanding `L001` / `R001` warnings
-- [ ] Table-driven fixture tests under `tests/quirks/` — one fixture per rule, expected `--fix` output
+- [ ] Table-driven fixture tests under `tests/quirks/`
 
 **Estimated size:** ~100 additional lines.
 
 ---
 
-## Phase 4 — Polish (optional)
+## Phase 4 — Polish ⬜
 
-- [ ] `leebop diff <ID>` — unified diff vs live remote (with `--json` output)
-- [ ] `leebop new --from <template|yaml>` — template-driven issue creation (bulk and single), reusing the cache file format
-- [ ] Slash commands in `~/.claude/commands/`: `/leebop-pull`, `/leebop-push`, `/leebop-lint`
-- [ ] `SKILL.md` at `~/.claude/skills/leebop/SKILL.md`
-- [ ] Short-alias CLIs (`lp pull` or `leebop-pull` symlinks) if ergonomics demand
+- [ ] `leebop diff <id>` — unified diff vs live remote (with `--json`). Fetch fresh remote → diff against local. Partial overlap with `show` + `status`; may become `status --diff <id>` instead of a separate verb.
+- [ ] `leebop new --from <template|yaml>` — template-driven issue creation (bulk + single); reuses cache file format
+- [ ] Slash commands under `~/.claude/commands/`: `/leebop-pull`, `/leebop-push`, `/leebop-lint`
+- [ ] `SKILL.md` at `~/.claude/skills/leebop/SKILL.md` — agent-focused guidance (when to use which verb, the pull→edit→push mental model, `show` vs `pull` distinction)
+- [ ] Short-alias CLIs if ergonomics demand
 - [ ] Git pre-commit hook on leebop's own repo — self-lint fixtures
+- [ ] **App-actor OAuth** (from spec §11): register a Linear OAuth app, implement PKCE, use `actor=app` so agent mutations attribute to a separate identity in Linear's audit log
+
+`show` was originally a Phase 4 idea but got promoted to Phase 1 after the agent UX test.
 
 ---
 
 ## Test strategy
 
-### Unit
-Vitest against pure functions: `config` resolution, `diff`, name → UUID resolution, YAML parsing/serialization preserving comments.
+**Current reality:** zero tests written. Everything verified this session was interactive/manual.
 
-### Integration
-Real Linear API via a dedicated sentinel issue + sentinel project in the target team. Don't mock the SDK — the whole point is catching real Linear behavior (including renderer quirks as they emerge).
+### What to write first (before Phase 2)
+1. **Vitest unit tests** on pure functions — `diff.ts`, `resolve.ts`, `expand.ts`, `config.ts`. No network, no SDK. Fast.
+2. **Integration test harness** against a real sentinel issue in `UE`:
+   - `.leebop-test-target.yaml` at repo root names the team + sentinel ID
+   - Tests gated on `LEEBOP_TEST_SENTINEL` env var (set to the identifier)
+   - `test.skipIf(!process.env.LEEBOP_TEST_SENTINEL)` on integration suites
+   - Teardown must reset sentinel's fields (title/state/priority/labels/assignee) to known values; store expected baseline in the yaml
+3. **Table-driven linter tests** once Phase 3 lands.
 
-- Gate integration tests on `LINEAR_TEST_TOKEN` env var — `test.skipIf(!process.env.LINEAR_TEST_TOKEN)`
-- Sentinel config: a `.leebop-test-target.yaml` at repo root naming the test team + sentinel issue ID. Re-runnable; tests must reset the sentinel's fields at teardown.
-
-### Linter
-Table-driven. Each rule in `quirks.ts` has a fixture file that triggers it and an expected `--fix` output. `vitest.each` iterates.
-
-### Real-world stress test
-End-to-end validation against a real multi-issue project (≥1 project + several issues with rich markdown tables + cross-references). Pull → edit → push round-trip must produce no diff when the edit is a no-op.
+### What not to do
+Don't mock `@linear/sdk`. The whole point is catching Linear's real behavior (renderer quirks, undocumented filter constraints). Mocks would have let `IssueFilter.identifier` pass code review — it doesn't exist on Linear's schema, and we only discovered that at runtime.
 
 ---
 
 ## Progress log
 
-Append dated entries as work happens. Keep entries terse — link commits / PRs.
+Append-only. Most recent at bottom.
 
 - **2026-04-22** — spec + implementation plan drafted. No code.
-- **2026-04-22** — revised scope: leebop owns the full agentic Linear surface (auth, discovery, bulk round-trip, single-shot edit, GraphQL escape hatch). Native PAK auth replaces shelling out to `@schpet/linear-cli`. Phase 1 estimate bumped from ~200 → ~450 lines. Comment-read moved from Phase 2 → Phase 1 (bundled with `pull`). Issue linking added to Phase 2.
-- **2026-04-22** — Phase 0 🟢 complete. Project scaffolded on Bun 1.3.13 with `@linear/sdk@82`, strict TS, biome. CLI dispatcher + all subcommand registrations wired; unimplemented commands stubbed via `notImplemented()` so `leebop --help` already shows the full surface. Native PAK auth shipped: `auth login/logout/whoami [--refresh] [--json]`, with `--from-schpet` migration and PAK-vs-OAuth token discrimination. End-to-end verified via `--from-schpet` import against Linear; `auth.json` persisted at mode 0600 (dir 0700). Interactive PAK-paste login codepath exists but not user-verified yet.
-- **2026-04-22** — Phase 1 🟡 code-complete (~1,350 lines). All verbs shipped: `teams`, `projects`, `list`, `pull` (+ comments), `status`, `push` (+ `--dry-run`, CAS), `comment`, `set <field>`, `raw`. Read paths verified end-to-end against real Linear (UE workspace, 9-issue Relay Worker Refactor project). Discovered GraphQL constraint: `IssueFilter` doesn't expose `identifier`, so `pull` and `push` use multi-alias queries (one HTTP round-trip for N issues). Multi-file cache design: issue dir has `description.md` + `metadata.yaml` (with `_server:` snapshot including description hash for diff) + `comments/<uuid>.md` with YAML frontmatter. Team metadata cached at `~/.leebop/cache/<hash>/_team/<TEAM>.yaml` with 1h TTL. Sentinel-issue mutation verification blocked pending user designation.
-- **2026-04-22** — Agent-UX smoke test: spawned a minimal-context subagent and asked it to fetch+explain an issue. **Round 1 failed silently** — `leebop` wasn't on the PATH that Claude Code subagents inherit, so the agent fell back to `@schpet/linear-cli`. Root cause: `bun link` puts binaries in `~/.bun/bin`, which subagents don't inherit even after the user edits their shell rc. Fixed by symlinking `~/.bun/bin/leebop → /opt/homebrew/bin/leebop` (sudo-free; `/opt/homebrew/bin` is user-writable with Homebrew installed, and it's universally on PATH). **Round 2 succeeded** — subagent discovered leebop via `--help`, ran `leebop pull UE-322`, produced correct summary. Surfaced two UX gaps: (1) `pull` didn't print where files landed → fixed; now prints full cache path; (2) no read-only verb for "just show this issue" → fixed; `leebop show <id>` added. Also added `pull --to <dir>` export mode so agents can drop issue context alongside code. README rewritten with install instructions + comparative overview of how production CLIs solve install/PATH (brew formulas, install scripts, `npm install -g`, single-binary releases).
+- **2026-04-22** — revised scope: leebop owns the full agentic Linear surface (auth, discovery, bulk round-trip, single-shot edit, GraphQL escape hatch). Native PAK auth replaces shelling out to `@schpet/linear-cli`. Phase 1 estimate bumped 200 → 450 lines. Comment-read moved Phase 2 → Phase 1. Issue linking added to Phase 2.
+- **2026-04-22** — Phase 0 🟢 complete. Project scaffolded on Bun 1.3.13 with `@linear/sdk@82`, strict TS, biome. CLI dispatcher + all subcommand registrations wired; unimplemented commands stubbed via `notImplemented()` so `leebop --help` already shows the full surface. Native PAK auth shipped: `auth login/logout/whoami [--refresh] [--json]`, with `--from-schpet` migration and PAK-vs-OAuth token discrimination. End-to-end verified via `--from-schpet`; `auth.json` persisted at mode 0600 (dir 0700). Commit `19dd34e`.
+- **2026-04-22** — Phase 1 🟡 code-complete (~1,350 lines). All verbs shipped. Read paths verified end-to-end against `UE` workspace + `Relay Worker Refactor` project. Discovered: `IssueFilter` doesn't expose `identifier` → use multi-alias GraphQL via `issue(id: "…")`. Multi-file cache design with `_server:` snapshot (incl. description hash) for cheap status diff. Team metadata cache with 1h TTL. Sentinel-issue mutation verification blocked pending user designation. Commit `7a77f4b`.
+- **2026-04-22** — Agent-UX smoke test. **Round 1 failed silently**: subagent couldn't find `leebop` on its PATH and fell back to `@schpet/linear-cli`. Root cause: `bun link` places bins in `~/.bun/bin`, which Claude Code subagents don't inherit even after the user edits `~/.zshrc`. **Fix:** symlink `~/.bun/bin/leebop → /opt/homebrew/bin/leebop` (sudo-free; universally on PATH). **Round 2 succeeded**: subagent discovered leebop via `--help`, pulled UE-322, produced correct summary. Two UX gaps surfaced and fixed: (1) `pull` didn't print where files landed → now prints full cache path; (2) no read-only "just show me this issue" verb → added `leebop show <id>`. Also added `leebop pull --to <dir>` export mode. README rewritten with install + comparative overview of production CLI install patterns. Commit `5c0c0ab`.
+- **2026-04-22** — Session close: Phase 1 paused awaiting sentinel-issue designation for mutation-path verification. All Phase 1 code shipped, all read paths verified. Implementation plan rewritten for clean resumption.
 
 ---
 
-## Discovered quirks (living list)
+## Discovered quirks (running list)
 
-Rules that emerge during implementation beyond `spec.md` §6.2. Add here first, promote to spec once verified.
+Facts that cost time or were non-obvious on first encounter. **Don't rediscover — check here first.** Promote to `spec.md` when they're stable enough to codify.
 
-_(none yet)_
+### Linear API / SDK
+- **`IssueFilter` has no `identifier` field.** `issues(filter: { identifier: { in: [...] } })` → error `Field "identifier" is not defined by type "IssueFilter"`. Workaround: multi-alias query — `issue(id: "TEAM-NN")` accepts either UUID or identifier. See `src/lib/pullQuery.ts::buildPullIssuesQuery`.
+- **`@linear/sdk` `accessToken` vs `apiKey` matters.** `accessToken` prepends `Bearer ` to the Authorization header; `apiKey` uses the token as-is. Personal API keys (`lin_api_...`) must go through `apiKey`; OAuth tokens (from schpet) through `accessToken`. Discrimination via prefix in `src/lib/auth.ts::linearClientFromToken`.
+- **`Issue.identifier` is a virtual field**, but `Issue(id: "…")` accepts both the UUID and the identifier string. Handy for pull; still not a filter field.
+- **`updatedAt` CAS is entity-level, not field-level.** Any edit bumps it, so CAS refusal can be a false positive when two users edited unrelated fields between pull and push. Accepted trade-off; `--force` is the escape. See spec §10.7.
+- **`issueUpdate.input.labelIds` REPLACES**, it doesn't merge. `push` fetches the current label set, computes the target set client-side, and submits the full replacement. `set labels` uses `+/-` delta syntax to hide this from the user.
+- **Linear's `viewer.name` may equal their email** (observed: `justice@unlink.xyz` is both `name` and `email`). Don't assume `name` is distinct from `email`.
+
+### Tooling / environment
+- **`bun link` doesn't put binaries on the PATH agents inherit.** `~/.bun/bin` is an interactive-shell-only PATH addition. Subagents (and Claude Code itself) inherit the PATH of the process that started them. Fix: symlink the `bun link`-ed bin into `/opt/homebrew/bin` (macOS) or `/usr/local/bin` (Linux) — those dirs are universally on PATH. Documented as a required install step in `README.md`.
+- **Bun's default tsconfig uses `"module": "Preserve"` and `"moduleResolution": "bundler"`**, not `NodeNext`. That's correct for a bun-native app; NodeNext is what we'd use only for a Node+tsx fallback. Spec mentions NodeNext — that was generic TS advice, not mandatory.
+- **`client.client.rawRequest(query, variables)` is the public escape hatch** in `@linear/sdk`. `.client` is typed, `rawRequest` is typed. No `@ts-expect-error` needed.
+- **Biome's organizeImports is aggressive.** Put `type` imports separate from value imports; it'll reorder anyway. Acceptable; just run `bunx biome check --write` and commit.
+
+### Tests
+- **`@schpet/linear-cli 2.0.0`'s `linear auth token` command returns an OAuth bearer** (not a PAK). That's why `--from-schpet` works with `accessToken`, not `apiKey`, and why the discrimination check is needed.
+- **Sanity probe for any new GraphQL query:** run it through `leebop raw '…'` first to confirm the schema accepts it before coding the wrapper.
 
 ---
 
 ## Open questions — running log
 
-Mirror of `spec.md` §12 plus anything that surfaces during build. Answer inline as resolved.
+Mirror of `spec.md` §12 plus anything surfaced during build. Answer inline as resolved.
 
-| # | Question | Lean | Resolved? |
+| # | Question | Current state | Resolved? |
 |---|---|---|---|
-| 1 | Name-resolution on ambiguous label/state prefix | exact match, fail with candidate list | ⬜ |
-| 2 | Cache location when not in a git repo | `~/.leebop/cache/_global/` + `default_team` | ⬜ |
-| 3 | Batch size for `updatedAt` CAS checks | 10/query; benchmark later | ⬜ |
-| 4 | `--project NAME` pulls issues by default? | yes, with `--no-issues` opt-out | ⬜ |
-| 5 | App-actor OAuth timing | defer until audit-trail noise observed | ⬜ |
-| 6 | `leebop set` field-set stability | start with title/state/priority/assignee/labels; links in Phase 2; description/content deliberately excluded | ⬜ |
+| 1 | Name-resolution on ambiguous label/state prefix | exact match, fail with candidate list. Implemented in `resolveLabelId` / `resolveAssigneeId`; `resolveStateId` requires exact case-insensitive match. | 🟢 |
+| 2 | Cache location when not in a git repo | `~/.leebop/cache/_global/` + `default_team` fallback. Implemented in `resolveConfig` via `GLOBAL_REPO_ROOT`. | 🟢 |
+| 3 | Batch size for `updatedAt` CAS checks | unlimited multi-alias (one call per `push` invocation); benchmark if push gets called on 50+ issues. | 🟡 deferred |
+| 4 | `--project NAME` pulls issues by default? | yes; no `--no-issues` flag implemented — may add if project-only pulls become common. | 🟢 for now |
+| 5 | App-actor OAuth timing | defer until audit-trail noise observed. Still deferred. | ⬜ |
+| 6 | `leebop set` field-set stability | title/state/priority/assignee/labels shipped; links in Phase 2; description/content refused (points at pull→edit→push). | 🟢 |
+| 7 | How do `pull --to <dir>` files participate in push/status? | **Export-only for v1.** Cache is canonical for round-trip. Files in `--to` are leaf copies for agent reference next to code; edits there don't round-trip. Warning printed on pull. | 🟢 |
+| 8 | Install / PATH story | Required step: symlink `~/.bun/bin/leebop → /opt/homebrew/bin/leebop`. Documented in README. A `curl | bash` installer is a Phase 4 polish item. | 🟢 for now |
 
 ---
 
-## Handoff / resumption checklist
+## Resumption checklist
 
-If an agent or the builder picks this up after a break, in order:
+If you're picking this up cold (new agent or returning developer):
 
-1. Read `spec.md` end-to-end.
-2. Read this file's **Current state** and most recent entries in **Progress log**.
-3. Check **Discovered quirks** — these are behaviors already paid for once; don't rediscover.
-4. Run `leebop --help` to see what's already wired up.
-5. Pick the first ⬜ checkbox in the current phase; resume there.
-6. On any new quirk: append to **Discovered quirks** before fixing, so the knowledge survives the fix.
+1. **Read `docs/spec.md` end-to-end.** Stable design — architecture, file formats, verified Linear facts, command surface, rejected alternatives.
+2. **Read this file's TL;DR, Current state, and Immediate next steps.** Don't re-read the entire Progress log unless you want history — the "Current state" + "Immediate next steps" summarize the actionable present.
+3. **Verify preconditions** (**§ Preconditions for any development** above): `which leebop`, `leebop auth whoami`, `bun --version`.
+4. **Run `leebop --help`** to confirm the surface matches this doc. If a verb is missing or extra, this doc is stale — reconcile before coding.
+5. **Consult Source map** to find the right file for your task.
+6. **Consult Discovered quirks** before writing any Linear-touching code. Most costly bugs in prior sessions would have been avoided by reading this list first.
+7. **Pick the first ⬜ checkbox in the current phase.** Currently: **§ Phase 1 acceptance — pending** (sentinel mutation tests).
+8. **On any new quirk: append to Discovered quirks BEFORE fixing** so the knowledge survives the fix.
+9. **Before committing any code:** `bunx tsc --noEmit` + `bunx biome check src/` both green. `bunx biome check --write src/` to auto-fix formatting.
+10. **Commit convention:** present-tense subject lines, scope prefix (`feat:`, `docs:`, `fix:`). Include a short "why" in the body. Don't commit without running the tsc+biome gate.
+
+### Human-only steps
+- **Designating a sentinel issue** (step 1 of Immediate next steps) — can't be automated; needs a real choice of Linear issue you're OK mutating for tests.
+- **App-actor OAuth registration** (Phase 4) — requires logging into Linear and registering an OAuth application; store `client_id` in code, `client_secret` as an env var.
