@@ -259,7 +259,7 @@ export function registerPlan(program: Command): void {
                 {
                   schema_version: 1,
                   refused: "drift-detected",
-                  hint: "run `leebop plan diff` to inspect, then re-run with --force to overwrite local",
+                  hint: "run `lebop plan diff` to inspect, then re-run with --force to overwrite local",
                   diff: preDiff,
                 },
                 null,
@@ -268,7 +268,7 @@ export function registerPlan(program: Command): void {
             );
           } else {
             process.stderr.write(
-              `${chalk.yellow("refusing to pull:")} local plan has drift. Run \`leebop plan diff ${dir}\` to inspect, then \`leebop plan pull ${dir} --force\` to overwrite.\n`,
+              `${chalk.yellow("refusing to pull:")} local plan has drift. Run \`lebop plan diff ${dir}\` to inspect, then \`lebop plan pull ${dir} --force\` to overwrite.\n`,
             );
           }
           process.exitCode = 1;
@@ -414,7 +414,7 @@ function printDiff(result: PlanDiffResult): void {
       );
     }
     process.stdout.write(
-      chalk.gray("  use `leebop plan pull <dir> --include-new` to import them\n"),
+      chalk.gray("  use `lebop plan pull <dir> --include-new` to import them\n"),
     );
   }
 }

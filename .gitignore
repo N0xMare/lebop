@@ -6,7 +6,7 @@ dist/
 .vscode/
 .idea/
 
-# leebop runtime state lives in ~/.leebop/, never in the repo,
+# lebop runtime state lives in ~/.lebop/, never in the repo,
 # but ignore any stray local test-state files
 auth.json
 /cache/

@@ -1,16 +1,16 @@
-# leebop — spec
+# lebop — spec
 
 **Status:** shipped and in use — see `docs/implementation-plan.md` for per-phase status and `docs/plan-spec.md` for the declarative-planning design.
 **Kind:** dev tool for agentic linear users
-**Layout:** source lives in this repo; runtime state in `~/.leebop/`
+**Layout:** source lives in this repo; runtime state in `~/.lebop/`
 
 ## 1. What this is
 
-A TypeScript CLI that gives coding agents a complete, efficient, correct interface to Linear. The hero use case is a local pull → edit → push loop for bulk edits. Around that, leebop also owns issue discovery, single-shot point edits, comments, and a GraphQL escape hatch — so agents don't need to context-switch to another tool for any baseline operation.
+A TypeScript CLI that gives coding agents a complete, efficient, correct interface to Linear. The hero use case is a local pull → edit → push loop for bulk edits. Around that, lebop also owns issue discovery, single-shot point edits, comments, and a GraphQL escape hatch — so agents don't need to context-switch to another tool for any baseline operation.
 
-One sentence: stateless CLI (Bun runtime) → `@linear/sdk`, with markdown + YAML cache under `~/.leebop/cache/<repo-hash>/` for the bulk loop and direct mutations for single-shot. No daemon, no webhooks, no MCP server. Pull is on-demand; CAS via `updatedAt` catches races at push time.
+One sentence: stateless CLI (Bun runtime) → `@linear/sdk`, with markdown + YAML cache under `~/.lebop/cache/<repo-hash>/` for the bulk loop and direct mutations for single-shot. No daemon, no webhooks, no MCP server. Pull is on-demand; CAS via `updatedAt` catches races at push time.
 
-**Core assumption:** the calling agent has filesystem edit primitives (Read/Write/Edit). The whole design rests on materializing Linear state as files so the agent uses its existing text-editing vocabulary instead of a Linear-specific tool surface. If the target agent class is tool-call-only (no filesystem), the shape changes — most likely a thin MCP server wrapping the same verbs and returning content inline. Today (Claude Code and similar coding agents) this assumption holds cleanly; name it explicitly so the condition under which leebop's shape would need to change is visible. See §10.8 for the JSON-output escape hatch that partially covers tool-call-only callers.
+**Core assumption:** the calling agent has filesystem edit primitives (Read/Write/Edit). The whole design rests on materializing Linear state as files so the agent uses its existing text-editing vocabulary instead of a Linear-specific tool surface. If the target agent class is tool-call-only (no filesystem), the shape changes — most likely a thin MCP server wrapping the same verbs and returning content inline. Today (Claude Code and similar coding agents) this assumption holds cleanly; name it explicitly so the condition under which lebop's shape would need to change is visible. See §10.8 for the JSON-output escape hatch that partially covers tool-call-only callers.
 
 ## 2. Motivation
 
@@ -30,25 +30,25 @@ Goal: collapse the agent workflow from "N round-trips per field" to "pull once �
 ## 3. Scope
 
 ### In scope
-- Per-user CLI `leebop` with subcommands:
+- Per-user CLI `lebop` with subcommands:
   - **auth:** `auth login`, `auth logout`, `auth whoami`
   - **discovery:** `list`, `projects`, `teams`
   - **read-only display:** `show <id>` — fetch and print an issue inline without touching the cache
   - **bulk round-trip:** `pull [--to <dir>]`, `push`, `status`, `diff`, `lint`
   - **point edits:** `comment`, `set <field>`
   - **escape hatch:** `raw <query>`
-  - **creation:** `new` (single issue); `leebop plan apply <dir>` (bulk project + issues + links from a directory of markdown files)
+  - **creation:** `new` (single issue); `lebop plan apply <dir>` (bulk project + issues + links from a directory of markdown files)
 - Native authentication via Linear personal API key (PAK); no runtime dependency on `@schpet/linear-cli`
-- Local cache of Linear entities as editable markdown + YAML under `~/.leebop/cache/<repo-hash>/`
+- Local cache of Linear entities as editable markdown + YAML under `~/.lebop/cache/<repo-hash>/`
 - Issues: read/write `description`, `title`, `state`, `priority`, `labels`, `assignee`; bundled comment read on `pull`
 - Projects: read/write `content`, `description`, `state`; project listing
 - Comments: read (bundled with `pull`) and write (`comment`); editing existing comments deferred
 - Issue linking (`blocks`, `blocked-by`, `related`, `duplicates`, `duplicated-by`) via `set links` and via plan frontmatter
-- Per-repo config at `~/.leebop/config.yaml` (default team, path rewrites, conventions)
+- Per-repo config at `~/.lebop/config.yaml` (default team, path rewrites, conventions)
 - CAS via `updatedAt` — refuse push if remote changed since pull
 - Markdown linter encoding discovered Linear-renderer quirks
-- GraphQL escape hatch (`leebop raw`) so no Linear operation is hard-gated behind "leave the tool"
-- User-level Claude Code skill at `~/.claude/skills/leebop/SKILL.md`
+- GraphQL escape hatch (`lebop raw`) so no Linear operation is hard-gated behind "leave the tool"
+- User-level Claude Code skill at `~/.claude/skills/lebop/SKILL.md`
 
 ### Out of scope
 - Multi-user collaboration — this is a personal tool
@@ -57,9 +57,9 @@ Goal: collapse the agent workflow from "N round-trips per field" to "pull once �
 - Local MCP server exposure (see §4)
 - Migrating content between Linear workspaces
 - UI — CLI + files only
-- Interactive/human-UX features of `@schpet/linear-cli` (browser-open, branch-name generation, interactive pickers); leebop complements it, does not replace it
-- Conflict merging — on `updatedAt` mismatch, abort and require explicit `leebop pull --refresh`
-- Destructive ops as first-class verbs (archive, delete) — use `leebop raw` deliberately
+- Interactive/human-UX features of `@schpet/linear-cli` (browser-open, branch-name generation, interactive pickers); lebop complements it, does not replace it
+- Conflict merging — on `updatedAt` mismatch, abort and require explicit `lebop pull --refresh`
+- Destructive ops as first-class verbs (archive, delete) — use `lebop raw` deliberately
 
 ## 4. Alternatives rejected
 
@@ -68,7 +68,7 @@ External research surfaced a heavier architecture: local daemon + webhook subscr
 | Rejected | Why | What we do instead |
 |---|---|---|
 | Long-running daemon | Solo-agent scale, no multi-consumer freshness requirement; process supervision is operational surface for near-zero gain | Stateless CLI, invoked on demand |
-| Linear webhook subscription | Push-sync only helps when multiple consumers race edits; single-agent case is tight enough with pull-on-demand. Also requires public endpoint / tunnel | `leebop pull` fetches fresh each run; CAS on push |
+| Linear webhook subscription | Push-sync only helps when multiple consumers race edits; single-agent case is tight enough with pull-on-demand. Also requires public endpoint / tunnel | `lebop pull` fetches fresh each run; CAS on push |
 | Local MCP server | Reproduces the per-field-round-trip pattern that makes the official Linear MCP slow for agents. Also: some harness setups require per-workspace MCP registration; a CLI works anywhere `PATH` is set | Bundled high-level verbs (`pull`, `push`, `status`, `lint`) |
 
 Adopted from that research: `@linear/sdk` directly (typed GraphQL, schema kept current by Linear), materialized local view, bundled high-level verbs. **App-actor OAuth** deferred to a later phase — see §11.
@@ -76,12 +76,12 @@ Adopted from that research: `@linear/sdk` directly (typed GraphQL, schema kept c
 ## 5. Architecture
 
 ```
-leebop/                                    # this repo — source only
-├── package.json                           # "bin": { "leebop": "./bin/leebop" }
+lebop/                                    # this repo — source only
+├── package.json                           # "bin": { "lebop": "./bin/lebop" }
 ├── tsconfig.json                          # strict, noUncheckedIndexedAccess
 ├── bun.lockb
 ├── bin/
-│   └── leebop                             # #!/usr/bin/env bun → src/cli.ts
+│   └── lebop                             # #!/usr/bin/env bun → src/cli.ts
 ├── src/
 │   ├── cli.ts                             # dispatcher + subcommand routing
 │   ├── commands/
@@ -112,7 +112,7 @@ leebop/                                    # this repo — source only
     ├── spec.md
     └── implementation-plan.md
 
-~/.leebop/                                 # runtime state — never touched by git
+~/.lebop/                                 # runtime state — never touched by git
 ├── config.yaml                            # user config, keyed by repo path
 └── cache/<repo-hash>/
     ├── issues/TEAM-123/
@@ -122,11 +122,11 @@ leebop/                                    # this repo — source only
         ├── content.md
         └── metadata.yaml
 
-~/.claude/skills/leebop/
-└── SKILL.md                               # agent pointer — when to use leebop
+~/.claude/skills/lebop/
+└── SKILL.md                               # agent pointer — when to use lebop
 ```
 
-Principle: whatever repo the user's shell is in stays pristine. All tool runtime state lives under `~/.leebop/`.
+Principle: whatever repo the user's shell is in stays pristine. All tool runtime state lives under `~/.lebop/`.
 
 ## 6. Prior art — facts the implementation must encode
 
@@ -134,15 +134,15 @@ These are verified behaviors. Do not rediscover.
 
 ### 6.1 Auth (native, personal API key)
 
-**v1:** leebop owns authentication end-to-end via Linear **personal API keys** (PAK). No runtime dependency on `@schpet/linear-cli`.
+**v1:** lebop owns authentication end-to-end via Linear **personal API keys** (PAK). No runtime dependency on `@schpet/linear-cli`.
 
 Flow:
-1. `leebop auth login` prompts for a PAK (user pastes from Linear Settings → API). Optional `--from-schpet` imports the token currently stored by `@schpet/linear-cli` as a one-step migration.
+1. `lebop auth login` prompts for a PAK (user pastes from Linear Settings → API). Optional `--from-schpet` imports the token currently stored by `@schpet/linear-cli` as a one-step migration.
 2. PAK is validated by calling `viewer { id name email }` before it's persisted; if the call fails, reject and don't write.
-3. Stored at `~/.leebop/auth.json` with `chmod 0600`. Shape: `{ "schema_version": 1, "token": "lin_api_...", "viewer": { "id": "...", "email": "...", "name": "..." }, "created_at": "..." }`.
-4. `leebop auth whoami` prints the cached viewer; re-validates against Linear if `--refresh` is passed.
-5. `leebop auth logout` deletes `~/.leebop/auth.json`.
-6. On 401 from any command, emit a clean message pointing at `leebop auth login`; do not attempt silent reauth.
+3. Stored at `~/.lebop/auth.json` with `chmod 0600`. Shape: `{ "schema_version": 1, "token": "lin_api_...", "viewer": { "id": "...", "email": "...", "name": "..." }, "created_at": "..." }`.
+4. `lebop auth whoami` prints the cached viewer; re-validates against Linear if `--refresh` is passed.
+5. `lebop auth logout` deletes `~/.lebop/auth.json`.
+6. On 401 from any command, emit a clean message pointing at `lebop auth login`; do not attempt silent reauth.
 
 **Why PAK, not OAuth:** PAK avoids registering a public OAuth app, implementing PKCE, running a local callback server, and managing refresh tokens. Costs one visit to Linear Settings to generate a key. OAuth (including the actor=app variant for audit-trail separation) is the natural upgrade when the friction shows up — see §11.
 
@@ -246,7 +246,7 @@ _server:
   updated_at: "2026-01-01T00:00:00Z"
 ```
 
-### 7.5 `~/.leebop/config.yaml`
+### 7.5 `~/.lebop/config.yaml`
 ```yaml
 default_team: TEAM
 workspaces:
@@ -267,20 +267,20 @@ Resolution: detect `cwd` → walk up for git root → look up by repo path → f
 
 All commands respect `--team <KEY>` (default from config), `--verbose`, and `--json` (structured output — see §10.8).
 
-### 8.1 `leebop pull [IDS...] [--project NAME] [--project-id UUID] [--refresh] [--no-comments] [--to <dir>]`
+### 8.1 `lebop pull [IDS...] [--project NAME] [--project-id UUID] [--refresh] [--no-comments] [--to <dir>]`
 Fetch entities into the cache (or an explicit `--to` directory); write `description.md` + `metadata.yaml` atomically (temp file + rename). By default, **comments are fetched alongside** into `issues/<ID>/comments/<comment-uuid>.md` as read-only files with YAML frontmatter, because agents routinely need thread context to edit intelligently. Prints the target path per entity so agents know exactly where the files landed.
 
-- `leebop pull TEAM-101` — single
-- `leebop pull TEAM-101 TEAM-102 TEAM-103` — list
-- `leebop pull TEAM-101..TEAM-109` — inclusive range, same team
-- `leebop pull --project "Example Project"` — project + all its issues
+- `lebop pull TEAM-101` — single
+- `lebop pull TEAM-101 TEAM-102 TEAM-103` — list
+- `lebop pull TEAM-101..TEAM-109` — inclusive range, same team
+- `lebop pull --project "Example Project"` — project + all its issues
 - `--refresh` — overwrite local even when unpushed edits exist (warn first)
 - `--no-comments` — skip comment fetching for speed
 - `--to <dir>` — **export mode**: write files to `<dir>/<id>/` instead of the cache. `status` and `push` continue to operate on the default cache only; files pulled with `--to` won't participate in the round-trip. Useful for dropping issue context next to code in a working directory.
 
 Default behavior: if local cache has unpushed edits, refuse. On per-entity GraphQL error, report and continue with the rest. `--to` skips the unpushed-edits guard.
 
-### 8.1a `leebop show <id> [--no-comments] [--json]`
+### 8.1a `lebop show <id> [--no-comments] [--json]`
 Fetch a single issue and print it inline — formatted markdown-ish for humans, structured JSON for programs. **No cache side-effect.** The right verb for "what is this issue about?" — `pull` is overkill when you're not going to edit.
 
 - Default output: compact header (identifier, state, priority, assignee) + title + labels/project/url/updated + description + comments in chronological order.
@@ -292,25 +292,25 @@ Fetch a single issue and print it inline — formatted markdown-ish for humans, 
 - `pull <id>` — intent to edit and push back, or to keep alongside code via `--to`.
 - `list` — discovering which issues to read/pull.
 
-### 8.2 `leebop push [IDS...] [--dry-run] [--force]`
+### 8.2 `lebop push [IDS...] [--dry-run] [--force]`
 Diff local cache vs remote; push changed fields only.
 
-- Bare `leebop push` — push all locally-modified entities in current repo's cache
-- `leebop push TEAM-101 TEAM-102` — subset
+- Bare `lebop push` — push all locally-modified entities in current repo's cache
+- `lebop push TEAM-101 TEAM-102` — subset
 - `--dry-run` — print diff + mutations; no API calls
 - `--force` — skip CAS (dangerous; use only after manual reconciliation)
 
 Per-entity flow:
 1. Read local files.
 2. Fetch current remote `updatedAt` (batched query across all entities being pushed).
-3. CAS: remote `updatedAt > local _server.updated_at` → abort this entity, report conflict, suggest `leebop pull <ID> --refresh`.
+3. CAS: remote `updatedAt > local _server.updated_at` → abort this entity, report conflict, suggest `lebop pull <ID> --refresh`.
 4. Compute field-level diff. Resolve names → UUIDs (labels, state, assignee) against cached team metadata.
 5. Emit `issueUpdate` / `projectUpdate` with **only changed fields**.
 6. Refresh local `_server.updated_at` from mutation response.
 
 Field-level diff is load-bearing: don't clobber fields the agent didn't touch. Exit non-zero on any failure; print summary at end.
 
-### 8.3 `leebop status`
+### 8.3 `lebop status`
 Git-like status for the current repo's cache.
 
 ```
@@ -328,18 +328,18 @@ Clean (5):
 Stale (remote newer — needs pull) (0)
 ```
 
-### 8.4 `leebop diff <ID>`
+### 8.4 `lebop diff <ID>`
 Unified diff of local vs remote for a single entity. Fetches fresh remote, renders markdown-aware diff.
 
-### 8.5 `leebop lint [PATHS...] [--fix] [--strict]`
+### 8.5 `lebop lint [PATHS...] [--fix] [--strict]`
 Run linter rules against local markdown files (default: all `description.md` / `content.md` in current repo's cache).
 
 - `--fix` applies safe rewrites (the `1. X` → `Row 1 — X` class).
 - `--strict` exits non-zero on any warning.
 - Split: universal Linear-quirk rules (in `src/lib/quirks.ts`) and repo-scoped rules (loaded from `config.yaml`).
-- `leebop push` runs lint first; `--strict` mode blocks the push on warnings.
+- `lebop push` runs lint first; `--strict` mode blocks the push on warnings.
 
-### 8.6 `leebop list [filters...] [--json]`
+### 8.6 `lebop list [filters...] [--json]`
 Discover issues by filter. **No cache side-effect** — pure read. This is how agent sessions typically *start* (find the work, then pull it).
 
 Filters (all optional, composable):
@@ -353,20 +353,20 @@ Filters (all optional, composable):
 
 Default output: one line per issue, `IDENT  [STATE]  TITLE  (assignee)`. `--json` emits structured records.
 
-### 8.7 `leebop projects [--team KEY] [--state STATE] [--json]`
+### 8.7 `lebop projects [--team KEY] [--state STATE] [--json]`
 List projects in the team. Default output: `NAME  [STATE]  <uuid>` one per line. `--json` for structured.
 
-### 8.8 `leebop teams [--json]`
+### 8.8 `lebop teams [--json]`
 List teams in the workspace. Useful for seeding `config.yaml` and for discovering the correct team key.
 
-### 8.9 `leebop comment <ID> [--body "text" | --body-file FILE | -]`
+### 8.9 `lebop comment <ID> [--body "text" | --body-file FILE | -]`
 Add a comment to an issue. No cache round-trip — direct mutation.
 
-- `leebop comment TEAM-101 --body "LGTM"` — inline body
-- `leebop comment TEAM-101 --body-file notes.md` — from file (for multi-line markdown)
-- `leebop comment TEAM-101 -` — read body from stdin
+- `lebop comment TEAM-101 --body "LGTM"` — inline body
+- `lebop comment TEAM-101 --body-file notes.md` — from file (for multi-line markdown)
+- `lebop comment TEAM-101 -` — read body from stdin
 
-### 8.10 `leebop set <field> <ID> <value> [--json]`
+### 8.10 `lebop set <field> <ID> <value> [--json]`
 Single-shot point edit. Resolves names → UUIDs; uses fresh server-side `updatedAt` for CAS. No local-cache round-trip.
 
 Supported fields:
@@ -379,20 +379,20 @@ Supported fields:
 
 Refuses to run on fields where single-shot makes no sense (`description`, `content`) — those require `pull` → edit → `push`.
 
-### 8.11 `leebop raw <query> [--variables-json FILE | -] [--json]`
-GraphQL escape hatch. Executes an arbitrary query/mutation through the authenticated client and prints the response. The explicit-opt-in guardrail for edge-case Linear operations (cycles, archive, attachments, history, custom fields) that leebop doesn't model as first-class verbs.
+### 8.11 `lebop raw <query> [--variables-json FILE | -] [--json]`
+GraphQL escape hatch. Executes an arbitrary query/mutation through the authenticated client and prints the response. The explicit-opt-in guardrail for edge-case Linear operations (cycles, archive, attachments, history, custom fields) that lebop doesn't model as first-class verbs.
 
-- `leebop raw "query { viewer { id email } }"`
-- `leebop raw "$(cat query.graphql)" --variables-json vars.json`
-- `leebop raw - --variables-json -` — query and variables both from stdin (separated by delimiter)
+- `lebop raw "query { viewer { id email } }"`
+- `lebop raw "$(cat query.graphql)" --variables-json vars.json`
+- `lebop raw - --variables-json -` — query and variables both from stdin (separated by delimiter)
 
 Output is the raw JSON response. `--json` is the default; provided as a no-op flag for consistency with other commands.
 
-### 8.12 `leebop auth <login | logout | whoami [--refresh]> [--from-schpet]`
+### 8.12 `lebop auth <login | logout | whoami [--refresh]> [--from-schpet]`
 See §6.1 for the full auth flow. Summary:
-- `leebop auth login` — prompt for PAK (or `--from-schpet` to import); validate against Linear; store at `~/.leebop/auth.json` (0600).
-- `leebop auth whoami` — print cached viewer; `--refresh` re-validates against Linear.
-- `leebop auth logout` — delete `~/.leebop/auth.json`.
+- `lebop auth login` — prompt for PAK (or `--from-schpet` to import); validate against Linear; store at `~/.lebop/auth.json` (0600).
+- `lebop auth whoami` — print cached viewer; `--refresh` re-validates against Linear.
+- `lebop auth logout` — delete `~/.lebop/auth.json`.
 
 ## 9. Lint rule catalog
 
@@ -421,7 +421,7 @@ See §6.1 for the full auth flow. Summary:
 
 **Why Bun:**
 - Runs `.ts` directly — no build step, no `dist/`
-- ~30 ms cold start vs ~150 ms for `tsx`/`ts-node`; matters when the agent repeatedly runs `leebop status`
+- ~30 ms cold start vs ~150 ms for `tsx`/`ts-node`; matters when the agent repeatedly runs `lebop status`
 - `Bun.file` / `Bun.write` for atomic I/O; fewer deps
 - `bun build --compile` available if single-binary distribution ever matters
 
@@ -433,7 +433,7 @@ Runtime:
 - `@linear/sdk` — Linear's official TS SDK
 - `yaml` (eemeli/yaml) — preserves comments/anchors better than `js-yaml`
 - `commander` — CLI arg parsing (or `clipanion` for class-based subcommands)
-- `diff` — unified-diff rendering for `leebop diff`
+- `diff` — unified-diff rendering for `lebop diff`
 - `chalk` — terminal colors (optional)
 
 Dev:
@@ -464,20 +464,20 @@ Typed calls throughout; escape hatch for uncovered fields is `linear().client.ra
 ### 10.4 Distribution
 
 ```bash
-cd <leebop-repo-root>
+cd <lebop-repo-root>
 bun install
-bun link    # symlinks `leebop` into Bun's global bin dir
+bun link    # symlinks `lebop` into Bun's global bin dir
 ```
 
 `package.json`:
 ```json
 {
-  "name": "leebop",
-  "bin": { "leebop": "./bin/leebop" }
+  "name": "lebop",
+  "bin": { "lebop": "./bin/lebop" }
 }
 ```
 
-`bin/leebop`:
+`bin/lebop`:
 ```sh
 #!/usr/bin/env bun
 import("../src/cli.ts").then(m => m.run(process.argv.slice(2)));
@@ -506,15 +506,15 @@ Every read command (`pull` summary, `status`, `diff`) accepts `--json` for struc
 
 - **App-actor OAuth** — register a Linear OAuth app and use `actor=app` flow so agent mutations attribute to the app identity, not the human user. Keeps Linear audit log clean and lets agent access be gated/revoked independently. Deferred until audit-trail noise is observable.
 - **Comment write-path** — commenting from local files feels awkward; `linear issue comment add` is fine for now. Add if repeatedly useful.
-- **Slash commands** — one-liners under `~/.claude/commands/` (`/leebop-pull`, `/leebop-push`, `/leebop-lint`). Add after CLI interface settles.
-- **Git pre-commit hook** for leebop's own repo — dogfood the linter on its own fixtures.
-- **Bulk issue creation** — shipped as `leebop plan apply <dir>`, which realizes a directory of frontmatter-markdown files as a Linear project + issues + links in one pass. See `docs/plan-spec.md` for the format and apply semantics.
+- **Slash commands** — one-liners under `~/.claude/commands/` (`/lebop-pull`, `/lebop-push`, `/lebop-lint`). Add after CLI interface settles.
+- **Git pre-commit hook** for lebop's own repo — dogfood the linter on its own fixtures.
+- **Bulk issue creation** — shipped as `lebop plan apply <dir>`, which realizes a directory of frontmatter-markdown files as a Linear project + issues + links in one pass. See `docs/plan-spec.md` for the format and apply semantics.
 
 ## 12. Open questions
 
 These are design decisions deferred to implementation. Record answers in `implementation-plan.md` as they're resolved.
 
 1. **Name resolution on ambiguity** — when two labels/states share a name prefix, how do we behave? Current lean: require exact match; fail with a candidate list.
-2. **Cache location when not in a git repo** — fall back to `~/.leebop/cache/_global/` using `default_team`, or refuse? Current lean: global fallback.
+2. **Cache location when not in a git repo** — fall back to `~/.lebop/cache/_global/` using `default_team`, or refuse? Current lean: global fallback.
 3. **Batch size for remote `updatedAt` staleness check** — 10 per query reasonable; benchmark and revisit.
 4. **Project-issue relationship on pull** — `--project NAME` pulls issues too by default? Current lean: yes, with `--no-issues` to opt out.

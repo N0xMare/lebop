@@ -38,22 +38,22 @@ export function registerSet(program: Command): void {
       "after",
       `
 Examples:
-  leebop set state TEAM-101 "In Progress"
-  leebop set priority TEAM-101 urgent
-  leebop set assignee TEAM-101 @me
-  leebop set assignee TEAM-101 null           (unassign)
-  leebop set labels TEAM-101 +urgent -area:backend
-  leebop set labels TEAM-101 =area:backend,bug  (exact replacement)
-  leebop set title TEAM-101 "new title here"
-  leebop set links TEAM-101 +blocks:TEAM-102 -related:TEAM-103
+  lebop set state TEAM-101 "In Progress"
+  lebop set priority TEAM-101 urgent
+  lebop set assignee TEAM-101 @me
+  lebop set assignee TEAM-101 null           (unassign)
+  lebop set labels TEAM-101 +urgent -area:backend
+  lebop set labels TEAM-101 =area:backend,bug  (exact replacement)
+  lebop set title TEAM-101 "new title here"
+  lebop set links TEAM-101 +blocks:TEAM-102 -related:TEAM-103
     supported kinds: blocks | blocked-by | duplicates | duplicated-by | related
-    (use \`leebop raw\` for \`similar\`)
+    (use \`lebop raw\` for \`similar\`)
 `,
     )
     .action(async (field: string, id: string, valueArgs: string[], opts: SetOpts) => {
       if (UNSUPPORTED_FIELDS.has(field)) {
         throw new Error(
-          `\`set ${field}\` is deliberately unsupported (${field} is a large multi-line field). use \`leebop pull ${id}\` → edit → \`leebop push\` instead.`,
+          `\`set ${field}\` is deliberately unsupported (${field} is a large multi-line field). use \`lebop pull ${id}\` → edit → \`lebop push\` instead.`,
         );
       }
       if (!SUPPORTED_FIELDS.includes(field as SupportedField)) {

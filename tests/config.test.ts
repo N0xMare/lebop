@@ -24,7 +24,7 @@ describe("findGitRoot", () => {
   let tmp: string;
 
   beforeEach(() => {
-    tmp = mkdtempSync(join(tmpdir(), "leebop-config-test-"));
+    tmp = mkdtempSync(join(tmpdir(), "lebop-config-test-"));
   });
 
   afterEach(() => {

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Wire leebop's Claude Code integration assets (skill + slash commands) into
+# Wire lebop's Claude Code integration assets (skill + slash commands) into
 # the user's ~/.claude/ directory via symlinks. Re-runnable; safe to repeat
 # after `git pull` since symlinks resolve through the repo.
 #
@@ -8,11 +8,11 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-SKILL_SRC="$REPO_ROOT/claude/skills/leebop"
+SKILL_SRC="$REPO_ROOT/claude/skills/lebop"
 COMMANDS_SRC="$REPO_ROOT/claude/commands"
 
 CLAUDE_HOME="${CLAUDE_HOME:-$HOME/.claude}"
-SKILL_DST="$CLAUDE_HOME/skills/leebop"
+SKILL_DST="$CLAUDE_HOME/skills/lebop"
 COMMANDS_DST="$CLAUDE_HOME/commands"
 
 mkdir -p "$CLAUDE_HOME/skills" "$COMMANDS_DST"
@@ -22,7 +22,7 @@ ln -sfn "$SKILL_SRC" "$SKILL_DST"
 echo "linked $SKILL_DST → $SKILL_SRC"
 
 # Slash commands — file-level symlinks so unrelated commands in ~/.claude/commands aren't touched.
-for f in "$COMMANDS_SRC"/leebop-*.md; do
+for f in "$COMMANDS_SRC"/lebop-*.md; do
   name="$(basename "$f")"
   ln -sf "$f" "$COMMANDS_DST/$name"
   echo "linked $COMMANDS_DST/$name → $f"

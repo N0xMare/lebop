@@ -3,7 +3,7 @@ import { chmodSync, existsSync, unlinkSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import { LinearClient } from "@linear/sdk";
-import { AUTH_FILE, LEEBOP_HOME } from "./paths.ts";
+import { AUTH_FILE, LEBOP_HOME } from "./paths.ts";
 import type { AuthFile, Viewer } from "./types.ts";
 
 const AUTH_SCHEMA_VERSION = 1 as const;
@@ -15,12 +15,12 @@ export async function loadAuth(): Promise<AuthFile | null> {
     const data = (await file.json()) as unknown;
     if (!isAuthFile(data)) {
       throw new Error(
-        `auth file at ${AUTH_FILE} has unexpected shape — run \`leebop auth login\` to recreate`,
+        `auth file at ${AUTH_FILE} has unexpected shape — run \`lebop auth login\` to recreate`,
       );
     }
     return data;
   } catch (err) {
-    if (err instanceof Error && err.message.includes("leebop auth login")) throw err;
+    if (err instanceof Error && err.message.includes("lebop auth login")) throw err;
     throw new Error(`failed to read ${AUTH_FILE}: ${(err as Error).message}`);
   }
 }
@@ -35,7 +35,7 @@ export async function saveAuth(token: string, viewer: Viewer): Promise<AuthFile>
   };
   await Bun.write(AUTH_FILE, `${JSON.stringify(auth, null, 2)}\n`);
   chmodSync(AUTH_FILE, 0o600);
-  chmodSync(LEEBOP_HOME, 0o700);
+  chmodSync(LEBOP_HOME, 0o700);
   return auth;
 }
 
@@ -89,7 +89,7 @@ export function importFromSchpet(): string {
   } catch (err) {
     const msg = (err as Error).message ?? String(err);
     throw new Error(
-      `could not import from @schpet/linear-cli: ${msg}. Install it (https://github.com/schpet/linear-cli) and run \`linear auth login\`, or use \`leebop auth login\` with a Linear personal API key.`,
+      `could not import from @schpet/linear-cli: ${msg}. Install it (https://github.com/schpet/linear-cli) and run \`linear auth login\`, or use \`lebop auth login\` with a Linear personal API key.`,
     );
   }
 }

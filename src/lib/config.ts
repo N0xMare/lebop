@@ -58,7 +58,7 @@ export async function resolveConfig(options?: {
   const team = options?.teamOverride ?? repoConfig.team ?? userConfig.default_team;
   if (!team) {
     throw new Error(
-      "no Linear team resolved. pass --team KEY, or set `default_team` / a per-repo `team` in ~/.leebop/config.yaml",
+      "no Linear team resolved. pass --team KEY, or set `default_team` / a per-repo `team` in ~/.lebop/config.yaml",
     );
   }
 

@@ -33,7 +33,7 @@ import { linear } from "../lib/sdk.ts";
 export function registerPull(program: Command): void {
   program
     .command("pull [ids...]")
-    .description("fetch Linear entities into ~/.leebop/cache for local editing")
+    .description("fetch Linear entities into ~/.lebop/cache for local editing")
     .option("--team <key>", "override the resolved team")
     .option("--project <name>", "fetch a project and its child issues")
     .option("--project-id <uuid>", "fetch by project UUID")
@@ -97,7 +97,7 @@ export function registerPull(program: Command): void {
             `${chalk.yellow("refusing to overwrite local edits on:")} ${conflicts.join(", ")}\n`,
           );
           process.stderr.write(
-            `  push them with ${chalk.cyan("leebop push")} or re-run with ${chalk.cyan("--refresh")}\n`,
+            `  push them with ${chalk.cyan("lebop push")} or re-run with ${chalk.cyan("--refresh")}\n`,
           );
           process.exit(1);
         }
@@ -212,7 +212,7 @@ export function registerPull(program: Command): void {
       if (destinationRoot) {
         process.stdout.write(
           chalk.gray(
-            `\nexport mode: \`leebop status\` and \`leebop push\` operate on the default cache only — edits here won't round-trip.\n`,
+            `\nexport mode: \`lebop status\` and \`lebop push\` operate on the default cache only — edits here won't round-trip.\n`,
           ),
         );
       }

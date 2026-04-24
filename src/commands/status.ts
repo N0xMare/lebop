@@ -19,7 +19,7 @@ import {
 export function registerStatus(program: Command): void {
   program
     .command("status")
-    .description("git-like status for the current repo's leebop cache")
+    .description("git-like status for the current repo's lebop cache")
     .option("--team <key>", "override the resolved team")
     .option("--json", "emit structured status")
     .action(async (opts: { team?: string; json?: boolean }) => {
@@ -101,7 +101,7 @@ export function registerStatus(program: Command): void {
       const totalClean = cleanIssues.length + cleanProjects.length;
 
       if (totalModified === 0 && totalClean === 0) {
-        process.stdout.write("cache is empty. run `leebop pull` to materialize issues.\n");
+        process.stdout.write("cache is empty. run `lebop pull` to materialize issues.\n");
         return;
       }
 

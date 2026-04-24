@@ -23,7 +23,7 @@ export async function run(rawArgv: string[]): Promise<void> {
   const program = new Command();
 
   program
-    .name("leebop")
+    .name("lebop")
     .description("agentic Linear CLI — pull/edit/push loop for coding agents")
     .version("0.1.0")
     .option("--verbose", "verbose output")

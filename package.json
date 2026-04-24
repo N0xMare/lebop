@@ -1,10 +1,10 @@
 {
-  "name": "leebop",
+  "name": "lebop",
   "version": "0.1.0",
   "description": "Agentic Linear CLI — ad-hoc ops (list/show/set/comment/pull/push) + declarative planning (plan apply) as a directory of markdown files.",
   "type": "module",
   "bin": {
-    "leebop": "./bin/leebop"
+    "lebop": "./bin/lebop"
   },
   "scripts": {
     "check": "biome check .",

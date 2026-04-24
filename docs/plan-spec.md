@@ -1,12 +1,12 @@
-# leebop plan — spec
+# lebop plan — spec
 
 **Status:** design, pre-implementation (Phase 4b)
-**Command:** `leebop plan {validate,apply}`
+**Command:** `lebop plan {validate,apply}`
 **Paired with:** `docs/spec.md` (overall architecture), `docs/implementation-plan.md` (living phase tracker)
 
 ## 1. What this is
 
-A declarative flow: author a Linear project + its issues as plain markdown files in a directory, then run `leebop plan apply <dir>` to realize the whole graph in Linear in one pass. Re-runnable and idempotent — subsequent applies push only diffs and no-op on unchanged entries.
+A declarative flow: author a Linear project + its issues as plain markdown files in a directory, then run `lebop plan apply <dir>` to realize the whole graph in Linear in one pass. Re-runnable and idempotent — subsequent applies push only diffs and no-op on unchanged entries.
 
 Motivating use case: "design an initiative in markdown with an agent, then push the whole thing to Linear." Complements (but does not replace) the per-issue `pull → edit → push` loop.
 
@@ -37,11 +37,11 @@ name: Relayer Hardening v2
 description: "tagline ≤ 255 chars"
 state: backlog                      # backlog | planned | started | completed | canceled
 team: UE                            # team KEY (not UUID)
-linear_id: 88377408-…               # written back by leebop after first apply
+linear_id: 88377408-…               # written back by lebop after first apply
 ---
 
 # Project body content goes here.
-Full markdown; same as what `leebop pull --project` would produce.
+Full markdown; same as what `lebop pull --project` would produce.
 ```
 
 Required: `name`, `team`.
@@ -60,7 +60,7 @@ labels:
   - type:feature
   - area:relayer
 assignee: justice@unlink.xyz         # email | name | @me | null
-linear_id: UE-401                    # written back by leebop after first apply
+linear_id: UE-401                    # written back by lebop after first apply
 parent: epic-multi-rpc               # optional; slug OR UE-### — creates sub-issue hierarchy
 
 blocks:                              # outgoing; list of slugs OR UE-### identifiers
@@ -77,7 +77,7 @@ duplicated_by:                       # WARNING: can move those issues to state "
 ---
 
 # Body markdown.
-This is the issue description — same renderer rules as `leebop pull`.
+This is the issue description — same renderer rules as `lebop pull`.
 ```
 
 Required: `title`.
@@ -85,11 +85,11 @@ Optional: `state`, `priority`, `estimate`, `labels`, `assignee`, `linear_id`, `p
 Body: description; optional.
 
 **Parent / sub-issue semantics.** `parent:` takes one of:
-- A local slug from another issue file in the same plan directory — leebop resolves to the target's Linear identifier during apply (parent must be created first; topological ordering is handled automatically).
+- A local slug from another issue file in the same plan directory — lebop resolves to the target's Linear identifier during apply (parent must be created first; topological ordering is handled automatically).
 - A bare `TEAM-NN` identifier — for parents that live in other projects or pre-exist outside the plan.
 - `null` / absent — no parent; top-level issue.
 
-Plan apply creates parents before children (topologically sorted). Validate refuses cycles in the parent chain. On pull, leebop discovers parent relationships from Linear and writes them back into the `parent:` field (as `UE-NN`).
+Plan apply creates parents before children (topologically sorted). Validate refuses cycles in the parent chain. On pull, lebop discovers parent relationships from Linear and writes them back into the `parent:` field (as `UE-NN`).
 
 **Estimate.** A numeric value (typically 1/2/3/5/8 for Fibonacci points). Passed straight through to Linear's `estimate` field on create/update. Pull writes the server value back.
 
@@ -106,7 +106,7 @@ Each entry in `blocks:` / `blocked_by:` / `related:` / `duplicates:` / `duplicat
 
 ## 4. Apply semantics
 
-`leebop plan apply <dir>` runs this sequence:
+`lebop plan apply <dir>` runs this sequence:
 
 ### 4.1 Parse + validate
 Every file is parsed (YAML frontmatter + markdown body). Validation fails fast on:
@@ -120,7 +120,7 @@ And warns (non-fatal) on:
 - Cycles in the `blocks` / `blocked_by` graph
 - `duplicates:` / `duplicated_by:` entries (Linear side-effect: moves involved issues to state `Duplicate` with type `canceled`)
 - Slugs matching the `TEAM-NN` regex
-- Lint warnings on any body (same rules as `leebop lint`)
+- Lint warnings on any body (same rules as `lebop lint`)
 
 ### 4.2 Project upsert
 - If `_project.md` has no `linear_id`: call `projectCreate`, write the returned UUID back to `_project.md`.
@@ -138,7 +138,7 @@ For each issue file:
 If any issue's lint produces warnings and `--strict` is set, that issue is skipped with status `lint-blocked`. Without `--strict`, warnings print and the push proceeds.
 
 ### 4.4 Link rewriting (slug → identifier)
-After all issues have `linear_id`s populated, leebop rewrites the plan files:
+After all issues have `linear_id`s populated, lebop rewrites the plan files:
 - Each entry in `blocks:` / `blocked_by:` / `related:` / `duplicates:` / `duplicated_by:` is translated from slug → `UE-XXX` if it was a slug.
 - External identifiers are left unchanged.
 
@@ -162,14 +162,14 @@ Exit 1 if any entity errored, was stale, or was lint-blocked. Partial failures d
 ## 5. CLI surface
 
 ```
-leebop plan validate <dir> [--team KEY] [--json]
-leebop plan apply    <dir> [--dry-run] [--strict] [--team KEY] [--json]
-leebop plan diff     <dir> [--team KEY] [--json]
-leebop plan pull     <dir> [--force] [--include-new] [--team KEY] [--json]
-leebop plan lint     <dir> [--fix] [--strict] [--team KEY] [--json]
+lebop plan validate <dir> [--team KEY] [--json]
+lebop plan apply    <dir> [--dry-run] [--strict] [--team KEY] [--json]
+lebop plan diff     <dir> [--team KEY] [--json]
+lebop plan pull     <dir> [--force] [--include-new] [--team KEY] [--json]
+lebop plan lint     <dir> [--fix] [--strict] [--team KEY] [--json]
 ```
 
-**`lint`** — walk every `.md` in the plan dir (issues + project) and run the linter (universal + repo-scoped rules per the loaded config). `--fix` applies safe autofixes in-place to the `.md` files; `--strict` exits non-zero if any warnings remain. Intended pre-apply sweep — cleaner than running `leebop lint path/*.md`.
+**`lint`** — walk every `.md` in the plan dir (issues + project) and run the linter (universal + repo-scoped rules per the loaded config). `--fix` applies safe autofixes in-place to the `.md` files; `--strict` exits non-zero if any warnings remain. Intended pre-apply sweep — cleaner than running `lebop lint path/*.md`.
 
 **`validate`** — parse + semantic checks (hits Linear for team metadata so it can verify label/state/assignee resolution). No Linear writes. Exit 1 on any validation error.
 
@@ -178,7 +178,7 @@ leebop plan lint     <dir> [--fix] [--strict] [--team KEY] [--json]
 - `--strict`: block any issue whose body produces lint warnings.
 - `--team`: override team (default from project's `team:` field).
 
-**`apply` / `validate`** inherit repo-scoped lint rules — if the repo has `conventions.bracket_issue_refs`, `path_rewrites`, or `required_formats` configured in `~/.leebop/config.yaml`, those fire on issue bodies the same way `leebop lint` does.
+**`apply` / `validate`** inherit repo-scoped lint rules — if the repo has `conventions.bracket_issue_refs`, `path_rewrites`, or `required_formats` configured in `~/.lebop/config.yaml`, those fire on issue bodies the same way `lebop lint` does.
 
 **`diff`** — show drift between plan files and live Linear.
 - Per-entity field table + unified patch for body/content.
@@ -194,7 +194,7 @@ leebop plan lint     <dir> [--fix] [--strict] [--team KEY] [--json]
 - Rewrites link fields (`blocks`, `blocked_by`, `related`, `duplicates`, `duplicated_by`) to match the remote's current relation graph. The pull makes implicit inverse edges explicit — both sides of a relation get the corresponding entry in their file.
 
 Future (not in v1):
-- `leebop plan archive <dir>` — mass-archive a plan's issues + project
+- `lebop plan archive <dir>` — mass-archive a plan's issues + project
 
 ## 6. Idempotency + re-apply semantics
 
@@ -208,23 +208,23 @@ A plan can be applied repeatedly. Guarantees:
 ## 7. What's NOT in scope (v1)
 
 - Multiple projects per plan directory (one project per dir)
-- Issue archiving via plan (delete-a-file behavior is **warn-and-ignore** — the remote issue stays; use `leebop archive` for explicit disposal)
+- Issue archiving via plan (delete-a-file behavior is **warn-and-ignore** — the remote issue stays; use `lebop archive` for explicit disposal)
 - Comment seeding via plan
-- Custom fields, cycles (Linear's iteration concept), attachments — escape via `leebop raw` as needed
+- Custom fields, cycles (Linear's iteration concept), attachments — escape via `lebop raw` as needed
 - Moving issues between projects via plan
 - Enforcing one-relation-per-pair across the whole graph at validate time (currently relies on Linear's server behaviour + last-write-wins ordering)
 
-## 8. Relationship to existing leebop concepts
+## 8. Relationship to existing lebop concepts
 
 | Concept | Plan apply shares? |
 |---|---|
-| `~/.leebop/cache/` | **No.** Plan files live wherever the user puts them; they don't participate in `leebop status` / `leebop push`. |
+| `~/.lebop/cache/` | **No.** Plan files live wherever the user puts them; they don't participate in `lebop status` / `lebop push`. |
 | `_server:` snapshot | **No.** Drift detection uses live remote fetch, not a cached snapshot. |
 | CAS via `updatedAt` | **Yes.** Same mechanism on per-issue update. |
-| Linter (`leebop lint`) | **Yes.** Run on each body; `--strict` gates. |
-| `leebop new` + `set links` | **Yes, internally.** Plan apply is a compose of `issueCreate` + `issueRelationCreate` calls; shares the same GraphQL plumbing via `src/lib/relations.ts` and the mutation helpers. |
+| Linter (`lebop lint`) | **Yes.** Run on each body; `--strict` gates. |
+| `lebop new` + `set links` | **Yes, internally.** Plan apply is a compose of `issueCreate` + `issueRelationCreate` calls; shares the same GraphQL plumbing via `src/lib/relations.ts` and the mutation helpers. |
 
-**Design principle:** plan is for **initial authoring**; cache + push is for **ongoing editing**. After first apply, users can either (a) stay in the plan directory and re-apply, or (b) `leebop pull UE-XXX` into the cache and edit there. Both paths work; mixing them in a single session is supported but the cache does not auto-sync with plan files (see out-of-scope #5).
+**Design principle:** plan is for **initial authoring**; cache + push is for **ongoing editing**. After first apply, users can either (a) stay in the plan directory and re-apply, or (b) `lebop pull UE-XXX` into the cache and edit there. Both paths work; mixing them in a single session is supported but the cache does not auto-sync with plan files (see out-of-scope #5).
 
 ## 9. Example
 
@@ -248,7 +248,7 @@ team: UE
 ---
 # Sandbox demo
 
-Generated by `leebop plan apply` for regression testing.
+Generated by `lebop plan apply` for regression testing.
 ```
 
 `01-foundation.md`:
@@ -281,14 +281,14 @@ blocked_by:
 Downstream consumer of the foundation.
 ```
 
-After `leebop plan apply plans/sandbox-demo/`, each file's frontmatter contains a `linear_id:` and the slug-based link entries have been rewritten to `UE-XXX`.
+After `lebop plan apply plans/sandbox-demo/`, each file's frontmatter contains a `linear_id:` and the slug-based link entries have been rewritten to `UE-XXX`.
 
 ## 10. Open questions (defer until concrete)
 
 - **Relation-replacement awareness at apply time.** Currently if a plan declares `blocks: [X]` and `related: [X]` on the same issue, the second write silently replaces the first (Linear's one-relation-per-pair rule). Validate could catch this class; currently it doesn't. Track if this bites.
-- **Issue deletion via plan.** Explicit opt-in verb (`leebop plan archive`) feels right if/when wanted.
+- **Issue deletion via plan.** Explicit opt-in verb (`lebop plan archive`) feels right if/when wanted.
 - **Body lint autofix integration.** Should `plan apply --fix` run lint `--fix` on bodies before push? Possibly, but introduces a file-mutation surprise. Defer.
 
 ---
 
-**See also:** `docs/spec.md` §8 for the full leebop verb surface; `docs/implementation-plan.md` for current phase status.
+**See also:** `docs/spec.md` §8 for the full lebop verb surface; `docs/implementation-plan.md` for current phase status.

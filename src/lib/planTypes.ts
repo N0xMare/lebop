@@ -1,5 +1,5 @@
 /**
- * Shared types for the `leebop plan` feature. See `docs/plan-spec.md` for the
+ * Shared types for the `lebop plan` feature. See `docs/plan-spec.md` for the
  * full frontmatter schema and apply semantics.
  */
 

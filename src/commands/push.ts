@@ -112,7 +112,7 @@ export function registerPush(program: Command): void {
               kind: "issue",
               status: "stale",
               fields: plan.changes.map((c) => c.field),
-              error: `remote updated since pull — run \`leebop pull ${plan.identifier} --refresh\``,
+              error: `remote updated since pull — run \`lebop pull ${plan.identifier} --refresh\``,
             });
             continue;
           }
@@ -293,7 +293,7 @@ async function collectPlans(repoHash: string, explicitIds: string[]): Promise<Pl
       // explicit ids that don't exist should error, but for "push everything modified"
       // we silently skip non-existent cached entries.
       if (explicitIds.length > 0) {
-        throw new Error(`${id} not in cache — run \`leebop pull ${id}\` first`);
+        throw new Error(`${id} not in cache — run \`lebop pull ${id}\` first`);
       }
       continue;
     }

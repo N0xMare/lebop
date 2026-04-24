@@ -63,7 +63,7 @@ export function registerAuth(program: Command): void {
       const stored = await loadAuth();
       if (!stored) {
         process.stderr.write(
-          `${chalk.red("no credentials stored.")} run ${chalk.cyan("leebop auth login")}\n`,
+          `${chalk.red("no credentials stored.")} run ${chalk.cyan("lebop auth login")}\n`,
         );
         process.exit(1);
       }

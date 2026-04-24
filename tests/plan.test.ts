@@ -44,7 +44,7 @@ describe("slugFromPath", () => {
 // ---------- parsePlan + validatePlan integration ----------
 
 function writePlanDir(contents: Record<string, string>): string {
-  const dir = mkdtempSync(join(tmpdir(), "leebop-plan-test-"));
+  const dir = mkdtempSync(join(tmpdir(), "lebop-plan-test-"));
   for (const [name, content] of Object.entries(contents)) {
     const path = join(dir, name);
     mkdirSync(join(path, ".."), { recursive: true });

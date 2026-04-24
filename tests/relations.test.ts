@@ -48,7 +48,7 @@ describe("parseLinkToken", () => {
 
   it("rejects unknown kinds with suggestion list", () => {
     expect(() => parseLinkToken("+similar:UE-1")).toThrow(/unknown link kind "similar"/);
-    expect(() => parseLinkToken("+similar:UE-1")).toThrow(/similar lives in `leebop raw`/);
+    expect(() => parseLinkToken("+similar:UE-1")).toThrow(/similar lives in `lebop raw`/);
   });
 
   it("rejects invalid target identifiers", () => {

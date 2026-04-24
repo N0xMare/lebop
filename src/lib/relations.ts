@@ -39,7 +39,7 @@ export function parseLinkToken(token: string): LinkDelta {
   const target = rest.slice(colon + 1).toUpperCase();
   if (!(LINK_KINDS as readonly string[]).includes(kind)) {
     throw new Error(
-      `unknown link kind "${kind}". supported: ${LINK_KINDS.join(", ")} (similar lives in \`leebop raw\`)`,
+      `unknown link kind "${kind}". supported: ${LINK_KINDS.join(", ")} (similar lives in \`lebop raw\`)`,
     );
   }
   if (!/^[A-Z]+-\d+$/.test(target)) {

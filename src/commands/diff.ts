@@ -33,7 +33,7 @@ export function registerDiff(program: Command): void {
       const local = await readIssue(config.repoHash, upperId);
       if (!local) {
         throw new Error(
-          `${upperId} is not in the local cache. run \`leebop pull ${upperId}\` first.`,
+          `${upperId} is not in the local cache. run \`lebop pull ${upperId}\` first.`,
         );
       }
 
