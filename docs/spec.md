@@ -864,10 +864,18 @@ lebop completions zsh  > "${fpath[1]}/_lebop"   # then: compinit
 lebop completions fish > ~/.config/fish/completions/lebop.fish
 ```
 
-Emits a completion script for the requested shell on stdout. Top-level
-subcommand names + descriptions are pulled from the live commander tree,
-so the script stays in sync with whatever's registered. Deeper-than-
-first-arg completion falls back to file completion.
+Emits a completion script for the requested shell on stdout. The script
+understands **two levels** of the commander tree — top-level commands
+(`lebop <TAB>`) and their direct subcommands (`lebop auth <TAB>` →
+`login logout list default token whoami migrate`). Names + descriptions
+are pulled from the live commander tree at runtime, so the script stays
+in sync with whatever's registered. Beyond level 2 (positional args, flag
+values), completion falls back to file paths.
+
+The bash script soft-depends on the `bash-completion` package for
+`_init_completion`; if that helper is missing it degrades gracefully to
+the same compgen-only path. macOS users with Homebrew already have it
+(`brew install bash-completion@2`); most Linux distros ship it.
 
 ---
 

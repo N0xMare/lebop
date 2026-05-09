@@ -14,9 +14,14 @@ ships (`v1.0.0`), this section will be moved into a versioned entry below.
 
 ### Added
 
-- **CLI**: 33 top-level commands across discovery, lifecycle, taxonomy
-  CRUD, PM surface, plus `plan`, `lint`, `raw`, `mcp`, `schema`,
-  `help-search`. See `docs/spec.md` §8.
+- **CLI**: 34 top-level commands covering discovery (`list`, `mine`,
+  `projects`, `teams`), lifecycle (`show`, `pull`, `push`, `status`,
+  `diff`, `lint`), taxonomy + PM CRUD (`set`, `comment`, `label`,
+  `milestone`, `project`, `project-update`, `initiative`,
+  `initiative-update`, `cycle`, `document`, `agent-session`, `team`,
+  `link`, `new`, `archive`, `unarchive`, `relation`), declarative
+  authoring (`plan`), plus `auth`, `raw`, `mcp`, `schema`,
+  `help-search`, `completions`. See `docs/spec.md` §8.
 - **MCP server** (`lebop mcp`): 41 tools wrapping the same lib core
   exposed by the CLI. stdio transport. Per-tool `workspace` arg + sticky-
   state-safe env restoration via `safe()` decorator. `LebopError` `code`

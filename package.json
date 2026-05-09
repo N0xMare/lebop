@@ -50,9 +50,6 @@
   "engines": {
     "bun": ">=1.1.0"
   },
-  "publishConfig": {
-    "access": "public"
-  },
   "devDependencies": {
     "@biomejs/biome": "^1.9.4",
     "@types/bun": "latest",

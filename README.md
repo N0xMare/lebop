@@ -37,7 +37,9 @@ The installer drops a single self-contained binary (no Bun runtime needed) at `~
 ```sh
 git clone https://github.com/N0xMare/lebop && cd lebop
 bun install && bun link
-ln -sf "$HOME/.bun/bin/lebop" /opt/homebrew/bin/lebop   # macOS; /usr/local/bin on Linux
+mkdir -p "$HOME/.local/bin"
+ln -sf "$HOME/.bun/bin/lebop" "$HOME/.local/bin/lebop"
+# add ~/.local/bin to PATH if it isn't already (matches the binary installer)
 ```
 
 Per-user config lives at `~/.lebop/config.yaml`; auth at `~/.lebop/auth.json` (mode 0600); local cache at `~/.lebop/cache/<repo-hash>/`. **Your repo working tree stays pristine — all runtime state is in `~/.lebop/`.**

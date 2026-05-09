@@ -49,9 +49,10 @@ if [ "$VERSION" = "latest" ]; then
   redirect="$(curl -fsSLI -o /dev/null -w '%{url_effective}' \
     "https://github.com/${REPO}/releases/latest")"
   VERSION="${redirect##*/}"
-  if [ -z "$VERSION" ] || [ "$VERSION" = "latest" ]; then
-    die "could not resolve latest release tag (is the repo public + has a release?)"
-  fi
+  case "$VERSION" in
+    v[0-9]*) ;;
+    *) die "could not resolve latest release tag (got '$VERSION'). Is $REPO public and tagged?" ;;
+  esac
 fi
 
 base="https://github.com/${REPO}/releases/download/${VERSION}"
@@ -113,8 +114,14 @@ target="${install_dir}/lebop"
 if [ -w "$install_dir" ]; then
   install -m 0755 "$tmp/$asset" "$target"
 else
-  warn "$install_dir is not writable; using sudo"
-  sudo install -m 0755 "$tmp/$asset" "$target"
+  warn "$install_dir is not writable; trying sudo (non-interactive)"
+  if ! sudo -n install -m 0755 "$tmp/$asset" "$target" 2>/dev/null; then
+    if [ -t 0 ]; then
+      sudo install -m 0755 "$tmp/$asset" "$target"
+    else
+      die "$install_dir requires sudo but no tty for password prompt. Set LEBOP_INSTALL_DIR to a writable path (e.g. \$HOME/.local/bin)."
+    fi
+  fi
 fi
 
 info "installed $(bold "$target")"

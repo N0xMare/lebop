@@ -5,8 +5,10 @@ together.
 
 ## Local development
 
-lebop runs on Bun. Install Bun (`curl -fsSL https://bun.sh/install | bash`),
-then:
+lebop runs on **Bun**, not Node. The `bin/lebop` shebang is
+`#!/usr/bin/env bun`, the test runner targets bun, and the release
+workflow ships standalone bun-compiled binaries — there is no Node build.
+Install Bun (`curl -fsSL https://bun.sh/install | bash`), then:
 
 ```sh
 bun install
