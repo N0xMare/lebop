@@ -30,14 +30,16 @@ describe("auth whoami", () => {
     expect(r.exitCode).toBe(0);
     expect(r.stdout).toContain("Test Viewer");
     expect(r.stdout).toContain("viewer@example.com");
+    expect(r.stdout).toContain("test-workspace");
   });
 
-  it("--json emits structured envelope", async () => {
+  it("--json emits structured envelope including workspace", async () => {
     const r = await runLebop(["auth", "whoami", "--json"], env);
     expect(r.exitCode).toBe(0);
     const parsed = JSON.parse(r.stdout);
     expect(parsed.schema_version).toBe(1);
     expect(parsed.viewer.email).toBe("viewer@example.com");
+    expect(parsed.workspace).toBe("test-workspace");
     expect(parsed.refreshed).toBe(false);
   });
 
@@ -52,6 +54,60 @@ describe("auth whoami", () => {
     expect(r.stderr).toContain("hint:");
     expect(r.stderr).toContain("lebop auth login");
     await rm(noAuthHome, { recursive: true, force: true });
+  });
+});
+
+describe("auth list / default / token", () => {
+  it("auth list shows the configured workspace as default", async () => {
+    const r = await runLebop(["auth", "list"], env);
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toContain("test-workspace");
+    expect(r.stdout).toContain("Test Workspace");
+    // The * marker indicates default
+    expect(r.stdout).toContain("*");
+  });
+
+  it("auth list --json emits the workspace + is_default flag", async () => {
+    const r = await runLebop(["auth", "list", "--json"], env);
+    expect(r.exitCode).toBe(0);
+    const parsed = JSON.parse(r.stdout);
+    expect(parsed.default).toBe("test-workspace");
+    expect(parsed.workspaces).toHaveLength(1);
+    expect(parsed.workspaces[0].slug).toBe("test-workspace");
+    expect(parsed.workspaces[0].is_default).toBe(true);
+  });
+
+  it("auth default (no arg) prints the current default slug", async () => {
+    const r = await runLebop(["auth", "default"], env);
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout.trim()).toBe("test-workspace");
+  });
+
+  it("auth token prints the token to stdout", async () => {
+    const r = await runLebop(["auth", "token"], env);
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout.trim()).toBe("lin_api_test_integration");
+  });
+
+  it("auth token <unknown-slug> errors with structured AuthError", async () => {
+    const r = await runLebop(["auth", "token", "no-such-workspace"], env);
+    expect(r.exitCode).toBe(1);
+    expect(r.stderr).toContain("error[auth_error]:");
+    expect(r.stderr).toContain("not configured");
+  });
+
+  it("--workspace flag selects the named workspace via env", async () => {
+    // The flag is propagated to LEBOP_WORKSPACE by the preAction hook;
+    // since the test only has one workspace, passing the right slug works
+    // and passing a wrong one errors via loadAuthForWorkspace.
+    const r = await runLebop(["--workspace", "test-workspace", "auth", "token"], env);
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout.trim()).toBe("lin_api_test_integration");
+
+    const bad = await runLebop(["--workspace", "no-such", "auth", "token"], env);
+    expect(bad.exitCode).toBe(1);
+    expect(bad.stderr).toContain("error[auth_error]:");
+    expect(bad.stderr).toContain("not configured");
   });
 });
 

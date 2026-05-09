@@ -179,8 +179,10 @@ which lebop           # /opt/homebrew/bin/lebop (or /usr/local/bin/lebop)
 lebop auth login
 ```
 
-Prompts for your PAK (hidden input). Validates against Linear via
-`viewer { id email }` before writing; rejects if validation fails.
+Prompts for your PAK (hidden input). Validates by fetching `viewer +
+organization`; rejects on auth failure. The organization's `urlKey` is
+used as the **workspace slug** — the canonical identifier for selecting
+which set of credentials to use later.
 
 Alternatives:
 
@@ -190,15 +192,33 @@ lebop auth login --token-file path/to/token
 lebop auth login --from-schpet            # import from @schpet/linear-cli
 ```
 
-Stored at `~/.lebop/auth.json` (mode 0600, dir 0700). On 401 from any
-command, lebop emits a clean message pointing back at `lebop auth login` —
-no silent reauth.
+Stored at `~/.lebop/auth.json` (mode 0600, dir 0700). The file supports
+multiple workspaces; running `auth login` again with a token for a
+different organization adds it as another entry.
 
 ```sh
-lebop auth whoami            # show cached viewer
-lebop auth whoami --refresh  # re-validate against Linear
-lebop auth logout            # delete ~/.lebop/auth.json
+lebop auth list                    # list configured workspaces (default marked *)
+lebop auth list --json             # structured records
+lebop auth default                 # print current default slug
+lebop auth default <slug>          # set the default workspace
+lebop auth token [<slug>]          # print API token (handy for `curl`)
+lebop auth whoami [<slug>]         # show cached viewer for a workspace
+lebop auth whoami [<slug>] --refresh   # re-validate against Linear
+lebop auth logout [<slug>]         # remove one workspace; if only one is configured, removes the file
 ```
+
+**Workspace selection** for any command:
+
+1. `--workspace <slug>` flag (top-level, applies to all subcommands)
+2. `LEBOP_WORKSPACE` env var
+3. The auth file's `default`
+4. The single configured workspace if there's exactly one
+
+If none match (multiple workspaces, no default, no flag/env), lebop
+errors with the available slugs.
+
+On 401 from any command, lebop emits a clean message pointing back at
+`lebop auth login` — no silent reauth.
 
 ### 4.4 Configure (optional)
 
@@ -503,11 +523,14 @@ All commands respect `--team <KEY>` (default from config) and `--json`
 
 ```
 lebop auth login [--token TOKEN | --token-file FILE | --from-schpet]
-lebop auth logout
-lebop auth whoami [--refresh] [--json]
+lebop auth logout [<slug>]
+lebop auth list [--json]
+lebop auth default [<slug>]
+lebop auth token [<slug>]
+lebop auth whoami [<slug>] [--refresh] [--json]
 ```
 
-See §4.3.
+See §4.3 for selection rules and the multi-workspace data model.
 
 ### 8.2 `list` — issue search
 
@@ -899,14 +922,35 @@ rules flagging the same line all get a chance to compose.
 These are encoded in code; documented here so contributors don't
 rediscover.
 
-### 11.1 Auth — native PAK
+### 11.1 Auth — native PAK, multi-workspace
 
 - lebop owns auth end-to-end via Linear **personal API keys** (PAK). No
   runtime dependency on `@schpet/linear-cli`.
-- `lebop auth login` validates by calling `viewer { id name email }` before
-  it persists; if the call fails, no write.
-- Stored at `~/.lebop/auth.json` mode 0600. Shape:
-  `{ schema_version: 1, token, viewer: { id, email, name }, created_at }`.
+- `lebop auth login` validates by fetching `viewer + organization` before
+  it persists; the organization's `urlKey` becomes the workspace slug.
+- Stored at `~/.lebop/auth.json` mode 0600. **Schema v2** (multi-workspace):
+
+  ```jsonc
+  {
+    "schema_version": 2,
+    "workspaces": {
+      "unlink-xyz": {
+        "slug": "unlink-xyz",
+        "name": "Unlink",
+        "url_key": "unlink-xyz",
+        "token": "lin_api_...",
+        "viewer": { "id": "...", "email": "...", "name": "..." },
+        "created_at": "..."
+      }
+    },
+    "default": "unlink-xyz"
+  }
+  ```
+
+  v1 (single-workspace) files are auto-migrated on first read — lebop
+  fetches the org urlKey, rewrites the file as v2, and continues.
+- Selection: `--workspace` flag → `LEBOP_WORKSPACE` env → auth file
+  default → single configured workspace.
 - On 401 from any command: clean message, point at `lebop auth login`. No
   silent reauth.
 - **Why PAK, not OAuth:** PAK avoids registering an OAuth app, PKCE, a local

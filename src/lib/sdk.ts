@@ -1,27 +1,39 @@
 import type { LinearClient } from "@linear/sdk";
-import { linearClientFromToken, loadAuth } from "./auth.ts";
-import { AuthError } from "./errors.ts";
+import { linearClientFromToken, loadAuthForWorkspace } from "./auth.ts";
 import { withRetry } from "./retry.ts";
 
-let _client: LinearClient | undefined;
+// Per-workspace client cache. Calls to `linear()` resolve to the same
+// LinearClient across the process for a given workspace slug; switching
+// workspaces just looks up a different cached entry.
+const _clients = new Map<string, LinearClient>();
 
-export async function linear(): Promise<LinearClient> {
-  if (_client) return _client;
-  const auth = await loadAuth();
-  if (!auth) {
-    throw new AuthError("no Linear credentials found", "run `lebop auth login` first");
+/**
+ * Resolve the LinearClient for a specific workspace, or for the default
+ * workspace when no slug is given. Caches per-slug for the process lifetime.
+ *
+ * Selection order matches `loadAuthForWorkspace`:
+ *   1. Explicit `workspace` arg
+ *   2. `LEBOP_WORKSPACE` env var
+ *   3. The auth file's `default`
+ *   4. The single configured workspace if there's exactly one
+ */
+export async function linear(workspace?: string): Promise<LinearClient> {
+  const auth = await loadAuthForWorkspace(workspace);
+  let client = _clients.get(auth.slug);
+  if (!client) {
+    client = linearClientFromToken(auth.token);
+    _clients.set(auth.slug, client);
   }
-  _client = linearClientFromToken(auth.token);
-  return _client;
+  return client;
 }
 
 /**
- * Reset the cached LinearClient. Used by tests that switch credentials or API
- * URLs mid-process, and will be needed by the long-running MCP server (§13.3)
- * to react to per-request workspace switches and credential rotation.
+ * Reset the cached LinearClients. Used by tests that switch credentials or
+ * API URLs mid-process, and by the long-running MCP server (§13.3) for
+ * credential rotation.
  */
 export function resetLinearClient(): void {
-  _client = undefined;
+  _clients.clear();
 }
 
 /**
@@ -40,8 +52,14 @@ export function resetLinearClient(): void {
  *     spurious not-found)
  *   - `issueRelationDelete` by UUID (same — gone after first success)
  *   - `addComment` (would post a duplicate)
+ *
+ * Pass `workspace` to target a specific workspace; defaults to the resolved
+ * default per the auth file.
  */
-export async function withClient<T>(fn: (client: LinearClient) => Promise<T>): Promise<T> {
-  const client = await linear();
+export async function withClient<T>(
+  fn: (client: LinearClient) => Promise<T>,
+  workspace?: string,
+): Promise<T> {
+  const client = await linear(workspace);
   return withRetry(() => fn(client));
 }

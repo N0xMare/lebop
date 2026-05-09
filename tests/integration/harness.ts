@@ -137,6 +137,9 @@ export async function startMockLinear(): Promise<MockServer> {
  * Create a fresh temp `LEBOP_HOME` directory containing a valid `auth.json`
  * for the given token. Returns the directory path so the test can pass it
  * via env to `runLebop`.
+ *
+ * Writes the v2 multi-workspace shape directly so tests don't trigger the
+ * v1→v2 migration path (which calls Linear to fetch the org urlKey).
  */
 export async function makeAuthFile(
   token: string,
@@ -145,16 +148,25 @@ export async function makeAuthFile(
     email: "viewer@example.com",
     name: "Test Viewer",
   },
+  slug = "test-workspace",
 ): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), "lebop-test-"));
   await writeFile(
     join(dir, "auth.json"),
     JSON.stringify(
       {
-        schema_version: 1,
-        token,
-        viewer,
-        created_at: new Date().toISOString(),
+        schema_version: 2,
+        workspaces: {
+          [slug]: {
+            slug,
+            name: "Test Workspace",
+            url_key: slug,
+            token,
+            viewer,
+            created_at: new Date().toISOString(),
+          },
+        },
+        default: slug,
       },
       null,
       2,

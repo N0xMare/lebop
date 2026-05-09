@@ -27,6 +27,17 @@ export async function run(rawArgv: string[]): Promise<void> {
     .name("lebop")
     .description("agentic Linear CLI — pull/edit/push loop for coding agents")
     .version("0.1.0")
+    .option(
+      "--workspace <slug>",
+      "select Linear workspace (overrides default + LEBOP_WORKSPACE env)",
+    )
+    .hook("preAction", (thisCommand) => {
+      // Propagate --workspace into LEBOP_WORKSPACE so every subcommand picks
+      // it up via loadAuthForWorkspace's env-var path. One global flag,
+      // zero per-command plumbing.
+      const ws = thisCommand.opts().workspace as string | undefined;
+      if (ws) process.env.LEBOP_WORKSPACE = ws;
+    })
     .showHelpAfterError();
 
   registerAuth(program);
