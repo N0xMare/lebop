@@ -6,6 +6,25 @@ import { linear, withClient } from "../lib/sdk.ts";
 
 interface ArchiveOpts {
   json?: boolean;
+  bulkFile?: string;
+  bulkStdin?: boolean;
+}
+
+async function readBulkFile(path: string): Promise<string[]> {
+  const text = await Bun.file(path).text();
+  return parseIdentifierList(text);
+}
+
+async function readBulkStdin(): Promise<string[]> {
+  return parseIdentifierList(await Bun.stdin.text());
+}
+
+/** Strip `#` comments + whitespace; return non-empty tokens. */
+function parseIdentifierList(text: string): string[] {
+  return text
+    .split(/\s+/)
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0 && !s.startsWith("#"));
 }
 
 interface ArchiveResult {
@@ -16,11 +35,26 @@ interface ArchiveResult {
 
 export function registerArchive(program: Command): void {
   program
-    .command("archive <ids...>")
+    .command("archive [ids...]")
     .description("archive one or more issues (reversible in Linear UI)")
+    .option(
+      "--bulk-file <path>",
+      "read identifiers from a file (whitespace-separated, # comments OK)",
+    )
+    .option("--bulk-stdin", "read identifiers from stdin")
     .option("--json", "emit structured results")
     .action(async (ids: string[], opts: ArchiveOpts) => {
-      const identifiers = expandIds(ids);
+      // Merge args + bulk inputs. Identifier sources combine; ranges
+      // (TEAM-101..TEAM-105) are still expanded for any source.
+      const fromFile = opts.bulkFile ? await readBulkFile(opts.bulkFile) : [];
+      const fromStdin = opts.bulkStdin ? await readBulkStdin() : [];
+      const allArgs = [...ids, ...fromFile, ...fromStdin];
+      if (allArgs.length === 0) {
+        throw new Error(
+          "no identifiers — pass them positionally or via --bulk-file / --bulk-stdin",
+        );
+      }
+      const identifiers = expandIds(allArgs);
       const client = await linear();
 
       const results: ArchiveResult[] = [];

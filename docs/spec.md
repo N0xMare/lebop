@@ -774,22 +774,38 @@ project miss. Returns the new identifier and URL on stdout.
 (v1.0 will add `--estimate`, `--parent`, `--milestone`, `--cycle`,
 `--due-date`.)
 
-### 8.9 `archive <IDS...>` / `unarchive <IDS...>`
+### 8.9 `archive` / `unarchive`
 
 ```
-lebop archive TEAM-101 TEAM-102 [--json]
-lebop unarchive TEAM-101 TEAM-102 [--json]
+lebop archive [IDS...] [--bulk-file FILE | --bulk-stdin] [--json]
+lebop unarchive <IDS...> [--json]
 ```
 
-Archives or unarchives one or more issues. Per-id status tracking —
-partial failures don't stop the run. Both ID ranges (`TEAM-101..TEAM-105`)
-and space-separated lists are supported.
+Archive supports three input shapes (combinable):
 
-`--bulk-file FILE` / `--bulk-stdin` for large lists is a follow-up.
+- Positional: `lebop archive TEAM-101 TEAM-102 TEAM-103..TEAM-110`
+- `--bulk-file <path>`: whitespace-separated IDs, one or many per line.
+  Lines starting with `#` are treated as comments.
+- `--bulk-stdin`: same shape, read from stdin (good for piping from
+  `lebop list --json | jq -r '.issues[].identifier' | lebop archive --bulk-stdin`).
+
+Per-id status tracking — partial failures don't stop the run. Ranges
+(`TEAM-101..TEAM-105`) work in any source. Unarchive keeps the simpler
+positional-only shape (less common bulk use case).
 
 ### 8.10 `plan` — declarative authoring
 
 See §9.
+
+### 8.9a `link` — attach a URL to an issue
+
+```
+lebop link <issue> <url> [--title TEXT] [--json]
+```
+
+Creates an Attachment on the issue with the URL as its target. Common
+use: link a PR, design doc, or external bug tracker. `--title` defaults
+to the URL.
 
 ### 8.10a `schema` — dump Linear's GraphQL schema
 
@@ -802,23 +818,43 @@ JSON with `--json`). Pairs with `lebop raw` for offline schema-aware
 development: dump once, point your editor at the SDL, write queries, then
 send them via `raw`.
 
+### 8.10b `help-search` — search Linear's product documentation
+
+```
+lebop help-search "<term>" [--json]
+```
+
+Passthrough to Linear's `searchDocumentation` query. Returns help-center
+articles matching the term — useful for "how do I do X in Linear" agent
+queries.
+
 ### 8.11 `raw` — GraphQL escape hatch
 
 ```
-lebop raw <query> [--variables-json FILE | -] [--query-file FILE]
+lebop raw <query> [--variables-json FILE | -]
+                  [--variable k=v]            # repeatable; @file or JSON-coerced
+                  [--query-file FILE]
+                  [--paginate]                # auto-walk connections
 ```
 
 Executes any GraphQL query/mutation through the authenticated client. The
-explicit-opt-in for edge-case Linear operations (cycles, attachments,
-custom fields) lebop doesn't model as first-class verbs.
+explicit-opt-in for edge-case Linear operations (custom fields, audit
+history, attachments lebop doesn't wrap) — but the most common needs now
+have first-class verbs.
 
 ```sh
 lebop raw 'query { viewer { id email } }'
 echo '{"id":"TEAM-1"}' | lebop raw 'query($id:String!){issue(id:$id){title}}' --variables-json -
-lebop raw - --variables-json -    # query and variables both from stdin (delimiter-separated)
+lebop raw 'query{teams(first:$first){nodes{id key}pageInfo{hasNextPage endCursor}}}' \
+  --variable first=10 --paginate
+
+# `--variable` accepts JSON literals (numbers/booleans/objects) and `@file` paths
+lebop raw 'mutation($input:IssueCreateInput!){issueCreate(input:$input){success}}' \
+  --variable input=@payload.json
 ```
 
-Output is the raw JSON response.
+Output is the raw JSON response (or merged `nodes[]` when `--paginate`
+walks a connection).
 
 ---
 

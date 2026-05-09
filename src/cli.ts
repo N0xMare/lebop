@@ -7,9 +7,11 @@ import { registerComment } from "./commands/comment.ts";
 import { registerCycle } from "./commands/cycle.ts";
 import { registerDiff } from "./commands/diff.ts";
 import { registerDocument } from "./commands/document.ts";
+import { registerHelpSearch } from "./commands/help-search.ts";
 import { registerInitiativeUpdate } from "./commands/initiative-update.ts";
 import { registerInitiative } from "./commands/initiative.ts";
 import { registerLabel } from "./commands/label.ts";
+import { registerLink } from "./commands/link.ts";
 import { registerLint } from "./commands/lint.ts";
 import { registerList } from "./commands/list.ts";
 import { registerMcp } from "./commands/mcp.ts";
@@ -82,6 +84,7 @@ export async function run(rawArgv: string[]): Promise<void> {
   registerDocument(program);
   registerAgentSession(program);
   registerTeam(program);
+  registerLink(program);
 
   registerNew(program);
   registerArchive(program);
@@ -89,6 +92,7 @@ export async function run(rawArgv: string[]): Promise<void> {
   registerPlan(program);
 
   registerSchema(program);
+  registerHelpSearch(program);
   registerRaw(program);
   registerMcp(program);
 
