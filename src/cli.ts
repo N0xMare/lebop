@@ -4,6 +4,7 @@ import { registerAgentSession } from "./commands/agent-session.ts";
 import { registerArchive } from "./commands/archive.ts";
 import { registerAuth } from "./commands/auth.ts";
 import { registerComment } from "./commands/comment.ts";
+import { registerCompletions } from "./commands/completions.ts";
 import { registerCycle } from "./commands/cycle.ts";
 import { registerDiff } from "./commands/diff.ts";
 import { registerDocument } from "./commands/document.ts";
@@ -95,6 +96,7 @@ export async function run(rawArgv: string[]): Promise<void> {
   registerHelpSearch(program);
   registerRaw(program);
   registerMcp(program);
+  registerCompletions(program);
 
   try {
     await program.parseAsync(argv);

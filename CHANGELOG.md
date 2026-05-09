@@ -35,6 +35,8 @@ ships (`v1.0.0`), this section will be moved into a versioned entry below.
   scoped rules (L004, R001, R002).
 - **Cache + diff** with field-level diffing against `_server` snapshot;
   `lebop status` shows modified / clean / stale (remote-newer) sections.
+- **Shell completions** (`lebop completions <bash|zsh|fish>`) emitting
+  scripts that complete top-level subcommands.
 - **241 tests** passing under both `bun test` and `vitest run`.
 
 ### Documentation

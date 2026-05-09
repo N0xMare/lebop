@@ -856,6 +856,19 @@ lebop raw 'mutation($input:IssueCreateInput!){issueCreate(input:$input){success}
 Output is the raw JSON response (or merged `nodes[]` when `--paginate`
 walks a connection).
 
+### 8.12 `completions <bash|zsh|fish>` — shell completion
+
+```
+lebop completions bash > /usr/local/etc/bash_completion.d/lebop
+lebop completions zsh  > "${fpath[1]}/_lebop"   # then: compinit
+lebop completions fish > ~/.config/fish/completions/lebop.fish
+```
+
+Emits a completion script for the requested shell on stdout. Top-level
+subcommand names + descriptions are pulled from the live commander tree,
+so the script stays in sync with whatever's registered. Deeper-than-
+first-arg completion falls back to file completion.
+
 ---
 
 ## 9. Plan workflow — declarative authoring
