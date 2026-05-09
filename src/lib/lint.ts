@@ -32,7 +32,16 @@ export function applyFixes(content: string, warnings: Warning[]): string {
     .filter((w): w is Warning & { fix: NonNullable<Warning["fix"]> } => Boolean(w.fix))
     .sort((a, b) => b.fix.startLine - a.fix.startLine);
 
-  // Keep at most one fix per line-range. Rule-ordering is stable from lintContent's sort.
+  // Keep at most one fix per line-range. Rule-ordering is stable from
+  // lintContent's sort (rules execute in registration order). When two rules
+  // both want to rewrite the same line, the first one to fire wins **on this
+  // pass**; the loser flags the same warning again on the next fixpoint
+  // iteration against the updated content, and either applies cleanly or
+  // becomes a no-op if the prior fix already addressed it. Composes safely
+  // for non-overlapping rules and for monotonic transforms (each rule's fix
+  // narrows the violation space). For two rules that want the same line in
+  // mutually-exclusive ways, behavior is fixpoint-converged but undefined:
+  // run them via `--fix` deliberately and inspect the result.
   const seen = new Set<string>();
   const deduped: typeof fixable = [];
   for (const w of fixable) {

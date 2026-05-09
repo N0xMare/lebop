@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, renameSync } from "node:fs";
 import { mkdir, readdir, rm } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { CACHE_ROOT } from "./paths.ts";
 
@@ -91,7 +91,7 @@ export function teamCacheFile(repoHash: string, teamKey: string): string {
 // ---------- atomic write ----------
 
 export async function writeAtomic(path: string, content: string): Promise<void> {
-  const dir = path.slice(0, path.lastIndexOf("/"));
+  const dir = dirname(path);
   await mkdir(dir, { recursive: true });
   const tmp = `${path}.tmp-${process.pid}-${Date.now()}`;
   await Bun.write(tmp, content);

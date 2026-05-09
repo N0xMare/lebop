@@ -4,6 +4,7 @@ import { createTwoFilesPatch } from "diff";
 import { buildIssueMetadata } from "../lib/build.ts";
 import { readIssue } from "../lib/cache.ts";
 import { resolveConfig } from "../lib/config.ts";
+import { arraysEqual } from "../lib/diff.ts";
 import { rewriteNotFound } from "../lib/errors.ts";
 import { type FetchedIssue, buildPullIssuesQuery } from "../lib/pullQuery.ts";
 import { withClient } from "../lib/sdk.ts";
@@ -111,7 +112,7 @@ function computeFieldDiff(
   }
   const localLabels = [...local.labels].sort();
   const remoteLabels = [...remote.labels].sort();
-  if (JSON.stringify(localLabels) !== JSON.stringify(remoteLabels)) {
+  if (!arraysEqual(localLabels, remoteLabels)) {
     diffs.push({ field: "labels", local: localLabels, remote: remoteLabels });
   }
   if ((local.assignee ?? null) !== (remote.assignee ?? null)) {
