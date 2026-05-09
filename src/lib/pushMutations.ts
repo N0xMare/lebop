@@ -32,8 +32,14 @@ export const PROJECT_UPDATE_MUTATION = /* GraphQL */ `
 /**
  * Batched `updatedAt` fetch for CAS.
  * Returns a query string with one alias per identifier.
+ *
+ * Throws on empty `identifiers` — an empty selection set returns an invalid
+ * GraphQL document that Linear rejects.
  */
 export function buildCasQuery(identifiers: string[]): string {
+  if (identifiers.length === 0) {
+    throw new Error("buildCasQuery: cannot build a query with zero identifiers");
+  }
   const aliases = identifiers
     .map((id, i) => {
       if (!/^[A-Z]+-\d+$/.test(id)) throw new Error(`invalid identifier: ${id}`);

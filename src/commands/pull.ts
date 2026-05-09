@@ -185,6 +185,15 @@ export function registerPull(program: Command): void {
               (response) => response.data.issue?.comments ?? null,
               { pageSize: 250, initialAfter: startCursor },
             );
+            // Defensive: if the follow-up returned nothing despite the first
+            // page reporting hasNextPage:true (e.g. issue deleted between
+            // calls), surface a warning so the partial set isn't silently
+            // taken as canonical.
+            if (more.length === 0) {
+              process.stderr.write(
+                `${chalk.yellow("warning:")} ${issue.identifier} reported additional comments but the follow-up fetch returned 0 nodes — issue may have been deleted; first 250 written\n`,
+              );
+            }
             issue.comments.nodes.push(...more);
             issue.comments.pageInfo.hasNextPage = false;
             issue.comments.pageInfo.endCursor = null;

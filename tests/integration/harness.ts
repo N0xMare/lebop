@@ -31,7 +31,8 @@
 
 import { spawn } from "node:child_process";
 import { mkdtemp, writeFile } from "node:fs/promises";
-import { type AddressInfo, createServer } from "node:http";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 

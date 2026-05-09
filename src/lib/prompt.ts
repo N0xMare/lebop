@@ -16,12 +16,27 @@ export async function promptHidden(message: string): Promise<string> {
 
   return new Promise<string>((resolve, reject) => {
     let buffer = "";
+    let cleanedUp = false;
 
     const cleanup = () => {
+      if (cleanedUp) return;
+      cleanedUp = true;
       process.stdin.setRawMode(false);
       process.stdin.pause();
       process.stdin.removeListener("data", onData);
+      process.removeListener("SIGINT", onSignal);
     };
+
+    // In raw mode, the kernel does not translate Ctrl+C into SIGINT — the
+    // 0x03 byte is delivered to the data stream and handled below. But if
+    // a SIGINT comes from elsewhere (another process via `kill -INT`, IDE
+    // stop button, etc.), restore cooked mode before the default handler
+    // exits the process; otherwise the user's terminal stays in raw mode.
+    const onSignal = () => {
+      cleanup();
+      reject(new Error("aborted by SIGINT"));
+    };
+    process.once("SIGINT", onSignal);
 
     const onData = (chunk: string) => {
       for (const ch of chunk) {

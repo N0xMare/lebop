@@ -83,12 +83,18 @@ export const RELATIONS_FIELDS_FRAGMENT = /* GraphQL */ `
 /**
  * Linear's IssueFilter doesn't expose `identifier`, but `issue(id: ...)` accepts either
  * a UUID or a TEAM-NN identifier. Multi-alias query = one HTTP round-trip for N issues.
+ *
+ * Throws on empty `identifiers` — an empty selection set returns an invalid GraphQL
+ * document that Linear rejects with an unhelpful error.
  */
 export function buildPullIssuesQuery(
   identifiers: string[],
   withComments: boolean,
   withRelations = false,
 ): string {
+  if (identifiers.length === 0) {
+    throw new Error("buildPullIssuesQuery: cannot build a query with zero identifiers");
+  }
   const fragments = ["...IssueFields"];
   if (withComments) fragments.push("...CommentFields");
   if (withRelations) fragments.push("...RelationFields");

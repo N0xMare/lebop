@@ -9,7 +9,7 @@
  *
  * Both support a `max` cap (default 10_000) so a runaway query can't pull
  * the entire workspace into memory by accident, and a `pageSize` (default
- * 100; Linear's per-request max is 250).
+ * 250 — Linear's per-request maximum).
  *
  * Each page request is wrapped with `withRetry` so transient 5xx errors and
  * 429 rate limits are handled automatically.
@@ -17,11 +17,14 @@
 
 import { withRetry } from "./retry.ts";
 
-const DEFAULT_PAGE_SIZE = 100;
+// 250 is Linear's per-request maximum for most connections. Almost every
+// caller bumps the default to 250 explicitly anyway; making it the default
+// halves the round-trip count on common list operations.
+const DEFAULT_PAGE_SIZE = 250;
 const SAFETY_CAP = 10_000;
 
 export interface PaginateOpts {
-  /** Items per request. Linear's per-request maximum is 250. Default 100. */
+  /** Items per request. Linear's per-request maximum is 250. Default 250. */
   pageSize?: number;
   /** Hard cap on total items returned. Default 10_000 — set Number.POSITIVE_INFINITY to disable. */
   max?: number;
@@ -68,7 +71,11 @@ export async function paginateConnection<T>(
     const page = await withRetry(() =>
       fetchPage(after === undefined ? { first } : { first, after }),
     );
-    out.push(...page.nodes);
+    // Defensive clamp: even if the server returns more nodes than `first`
+    // requested (shouldn't happen but observed across other GraphQL APIs),
+    // never exceed `max` overall.
+    out.push(...page.nodes.slice(0, max - out.length));
+    if (out.length >= max) break;
     if (!page.pageInfo.hasNextPage || !page.pageInfo.endCursor) break;
     after = page.pageInfo.endCursor;
   }
@@ -102,7 +109,8 @@ export async function paginateRaw<T, R>(
     );
     const conn = pickConnection(response);
     if (!conn) break;
-    out.push(...conn.nodes);
+    out.push(...conn.nodes.slice(0, max - out.length));
+    if (out.length >= max) break;
     if (!conn.pageInfo.hasNextPage || !conn.pageInfo.endCursor) break;
     after = conn.pageInfo.endCursor;
   }

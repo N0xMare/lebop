@@ -69,7 +69,14 @@ export function registerStatus(program: Command): void {
       // Detect stale entries: remote `updatedAt` newer than local `_server.updated_at`.
       // Only check clean entries — modified ones already need attention regardless.
       // Skipped with `--no-remote` (faster; offline-friendly).
-      const staleIds = new Set<string>();
+      interface StaleEntry {
+        id: string;
+        metadata: IssueMetadata;
+        changes: IssueChange[];
+        server_updated_at: string;
+        remote_updated_at: string;
+      }
+      const staleEntries: StaleEntry[] = [];
       const staleErrors: { id: string; error: string }[] = [];
       const checkRemote = opts.remote !== false && cleanIssues.length > 0;
       if (checkRemote) {
@@ -85,8 +92,14 @@ export function registerStatus(program: Command): void {
             if (!entry) return;
             const remote = response.data[`a${i}`];
             if (!remote) return; // missing-remote — surface elsewhere
-            if (Date.parse(remote.updatedAt) > Date.parse(entry.metadata._server.updated_at)) {
-              staleIds.add(id);
+            const localT = Date.parse(entry.metadata._server.updated_at);
+            const remoteT = Date.parse(remote.updatedAt);
+            if (remoteT > localT) {
+              staleEntries.push({
+                ...entry,
+                server_updated_at: entry.metadata._server.updated_at,
+                remote_updated_at: remote.updatedAt,
+              });
             }
           });
         } catch (err) {
@@ -94,8 +107,8 @@ export function registerStatus(program: Command): void {
           staleErrors.push({ id: "*", error: (err as Error).message });
         }
       }
-      const staleEntries = cleanIssues.filter((r) => staleIds.has(r.id));
-      const trulyCleanIssues = cleanIssues.filter((r) => !staleIds.has(r.id));
+      const staleIdSet = new Set(staleEntries.map((r) => r.id));
+      const trulyCleanIssues = cleanIssues.filter((r) => !staleIdSet.has(r.id));
 
       if (opts.json) {
         process.stdout.write(
@@ -116,7 +129,12 @@ export function registerStatus(program: Command): void {
                   fields: r.changes.map((c) => c.field),
                 })),
               },
-              stale: staleEntries.map((r) => r.id),
+              stale: staleEntries.map((r) => ({
+                identifier: r.id,
+                kind: "issue",
+                server_updated_at: r.server_updated_at,
+                remote_updated_at: r.remote_updated_at,
+              })),
               stale_check: checkRemote ? (staleErrors.length > 0 ? "errored" : "ok") : "skipped",
               clean: {
                 issues: trulyCleanIssues.map((r) => r.id),
