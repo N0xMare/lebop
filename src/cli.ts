@@ -13,6 +13,7 @@ import { registerProjects } from "./commands/projects.ts";
 import { registerPull } from "./commands/pull.ts";
 import { registerPush } from "./commands/push.ts";
 import { registerRaw } from "./commands/raw.ts";
+import { registerRelation } from "./commands/relation.ts";
 import { registerSet } from "./commands/set.ts";
 import { registerShow } from "./commands/show.ts";
 import { registerStatus } from "./commands/status.ts";
@@ -58,6 +59,7 @@ export async function run(rawArgv: string[]): Promise<void> {
 
   registerComment(program);
   registerSet(program);
+  registerRelation(program);
 
   registerNew(program);
   registerArchive(program);

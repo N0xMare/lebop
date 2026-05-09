@@ -596,6 +596,19 @@ lebop comment <ID> --stdin           # body from stdin
 
 Direct mutation; no cache round-trip. Comment edit/delete is deferred.
 
+### 8.6a `relation` — first-class link mutations
+
+```
+lebop relation add <id> <kind> <other> [--json]
+lebop relation delete <id> <kind> <other> [--json]
+lebop relation list <id> [--json]
+```
+
+Per-pair relation management. Equivalent to `set links` but easier to read
+for one-offs and a cleaner shape for MCP tools. Kinds:
+`blocks | blocked-by | duplicates | duplicated-by | related`. Use
+`lebop raw` for the undocumented `similar` kind.
+
 ### 8.7 `set <field> <ID> <value...>`
 
 Single-shot point edit. Resolves names → UUIDs; uses fresh server-side
