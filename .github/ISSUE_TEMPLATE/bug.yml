@@ -1,0 +1,74 @@
+name: Bug report
+description: lebop did something unexpected
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug.
+
+        Before filing: check if `lebop --version` is current and search
+        existing issues. If this involves a Linear API token leak or
+        other security concern, please follow `SECURITY.md` instead.
+
+  - type: input
+    id: lebop-version
+    attributes:
+      label: lebop version
+      description: Output of `lebop --version`
+      placeholder: e.g. 0.1.0
+    validations:
+      required: true
+
+  - type: input
+    id: bun-version
+    attributes:
+      label: Bun version
+      description: Output of `bun --version`
+      placeholder: e.g. 1.1.42
+    validations:
+      required: true
+
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Surface
+      description: Which surface produced the bug?
+      options:
+        - CLI
+        - MCP server
+        - plan apply / lint
+        - other
+    validations:
+      required: true
+
+  - type: textarea
+    id: command
+    attributes:
+      label: Command run
+      description: The exact `lebop ...` command (or MCP tool call) you ran. Redact tokens + private identifiers.
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: What happened
+      description: Output, error message, stack trace.
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else?
+      description: Reproduction steps, related issues, environment quirks.

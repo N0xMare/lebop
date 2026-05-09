@@ -1,0 +1,44 @@
+name: Feature request
+description: Suggest a new command, MCP tool, or capability
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before filing: skim `docs/spec.md` §3 (positioning) and §13 (roadmap)
+        to see if the idea is already in scope or deliberately out-of-scope.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem are you trying to solve?
+      description: Describe the workflow that's currently painful or impossible.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: A specific command shape, MCP tool, or behavior. Include example invocations.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Existing CLI flags, `lebop raw`, pairing with another tool, etc.
+
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Which surface?
+      options:
+        - CLI
+        - MCP server
+        - plan apply / lint
+        - core lib (consumed by both)
+        - docs
+    validations:
+      required: true

@@ -1,0 +1,87 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            target: bun-darwin-arm64
+            asset: lebop-darwin-arm64
+          - os: macos-13
+            target: bun-darwin-x64
+            asset: lebop-darwin-x64
+          - os: ubuntu-latest
+            target: bun-linux-x64
+            asset: lebop-linux-x64
+          - os: ubuntu-24.04-arm
+            target: bun-linux-arm64
+            asset: lebop-linux-arm64
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: install deps
+        run: bun install --frozen-lockfile
+
+      - name: compile
+        run: |
+          bun build ./bin/lebop \
+            --compile \
+            --target=${{ matrix.target }} \
+            --outfile ${{ matrix.asset }}
+
+      - name: sha256
+        run: |
+          shasum -a 256 ${{ matrix.asset }} > ${{ matrix.asset }}.sha256
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: |
+            ${{ matrix.asset }}
+            ${{ matrix.asset }}.sha256
+          if-no-files-found: error
+          retention-days: 1
+
+  release:
+    name: publish release
+    runs-on: ubuntu-latest
+    needs: build
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: aggregate SHA256SUMS
+        working-directory: dist
+        run: |
+          cat *.sha256 > SHA256SUMS
+          rm *.sha256
+
+      - name: create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ github.ref_name }}" \
+            --title "${{ github.ref_name }}" \
+            --notes-file <(awk '/^## \[/{if(p)exit; p=1} p' CHANGELOG.md) \
+            dist/*
