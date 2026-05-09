@@ -123,8 +123,7 @@ function registerTools(server: McpServer): void {
         workspace: z.string().optional().describe("Target a specific workspace slug."),
       },
     },
-    async (args) => {
-      withWorkspace(args.workspace);
+    safe(async (args) => {
       const limit = args.limit ?? 50;
       const max = limit === 0 ? Number.POSITIVE_INFINITY : limit;
       const issues = await listIssues({
@@ -155,7 +154,7 @@ function registerTools(server: McpServer): void {
           },
         ],
       };
-    },
+    }),
   );
 
   // ---------- add_relation ----------
@@ -171,8 +170,7 @@ function registerTools(server: McpServer): void {
         workspace: z.string().optional(),
       },
     },
-    async (args) => {
-      withWorkspace(args.workspace);
+    safe(async (args) => {
       const upperFrom = args.from.toUpperCase();
       const upperTo = args.to.toUpperCase();
       const [self, target] = await Promise.all([
@@ -200,7 +198,7 @@ function registerTools(server: McpServer): void {
           },
         ],
       };
-    },
+    }),
   );
 
   // ---------- list_relations ----------
@@ -214,8 +212,7 @@ function registerTools(server: McpServer): void {
         workspace: z.string().optional(),
       },
     },
-    async (args) => {
-      withWorkspace(args.workspace);
+    safe(async (args) => {
       const upper = args.identifier.toUpperCase();
       const result = await listRelations(upper);
       return {
@@ -226,7 +223,7 @@ function registerTools(server: McpServer): void {
           },
         ],
       };
-    },
+    }),
   );
 
   // ---------- labels ----------
@@ -245,15 +242,14 @@ function registerTools(server: McpServer): void {
         workspace: z.string().optional(),
       },
     },
-    async (args) => {
-      withWorkspace(args.workspace);
+    safe(async (args) => {
       const labels = await listLabels({
         team: args.workspace_only || args.all ? undefined : args.team,
         workspaceOnly: args.workspace_only,
         all: args.all,
       });
       return text({ schema_version: 1, count: labels.length, labels });
-    },
+    }),
   );
 
   server.registerTool(
@@ -270,8 +266,7 @@ function registerTools(server: McpServer): void {
         workspace: z.string().optional(),
       },
     },
-    async (args) => {
-      withWorkspace(args.workspace);
+    safe(async (args) => {
       const label = await createLabel({
         name: args.name,
         teamId: args.team_id,
@@ -279,7 +274,7 @@ function registerTools(server: McpServer): void {
         description: args.description,
       });
       return text({ schema_version: 1, label });
-    },
+    }),
   );
 
   server.registerTool(
@@ -294,11 +289,10 @@ function registerTools(server: McpServer): void {
         workspace: z.string().optional(),
       },
     },
-    async (args) => {
-      withWorkspace(args.workspace);
+    safe(async (args) => {
       const success = await deleteLabel(args.id);
       return text({ schema_version: 1, id: args.id, success });
-    },
+    }),
   );
 
   server.registerTool(
@@ -312,11 +306,10 @@ function registerTools(server: McpServer): void {
         workspace: z.string().optional(),
       },
     },
-    async (args) => {
-      withWorkspace(args.workspace);
+    safe(async (args) => {
       const label = await resolveLabelByName(args.name, args.team);
       return text({ schema_version: 1, label });
-    },
+    }),
   );
 
   // ---------- milestones ----------
@@ -330,8 +323,7 @@ function registerTools(server: McpServer): void {
         workspace: z.string().optional(),
       },
     },
-    async (args) => {
-      withWorkspace(args.workspace);
+    safe(async (args) => {
       let projectId: string | undefined;
       if (args.project) {
         const resolved = await resolveProjectId(args.project);
@@ -340,7 +332,7 @@ function registerTools(server: McpServer): void {
       }
       const milestones = await listMilestones({ projectId });
       return text({ schema_version: 1, count: milestones.length, milestones });
-    },
+    }),
   );
 
   server.registerTool(
@@ -353,11 +345,10 @@ function registerTools(server: McpServer): void {
         workspace: z.string().optional(),
       },
     },
-    async (args) => {
-      withWorkspace(args.workspace);
+    safe(async (args) => {
       const milestone = await getMilestone(args.id);
       return text({ schema_version: 1, milestone });
-    },
+    }),
   );
 
   server.registerTool(
@@ -374,8 +365,7 @@ function registerTools(server: McpServer): void {
         workspace: z.string().optional(),
       },
     },
-    async (args) => {
-      withWorkspace(args.workspace);
+    safe(async (args) => {
       const projectId = await resolveProjectId(args.project);
       if (!projectId) throw new Error(`project not found: ${args.project}`);
       const milestone = await createMilestone({
@@ -386,7 +376,7 @@ function registerTools(server: McpServer): void {
         sortOrder: args.sort_order,
       });
       return text({ schema_version: 1, milestone });
-    },
+    }),
   );
 
   server.registerTool(
@@ -407,8 +397,7 @@ function registerTools(server: McpServer): void {
         workspace: z.string().optional(),
       },
     },
-    async (args) => {
-      withWorkspace(args.workspace);
+    safe(async (args) => {
       const input: Parameters<typeof updateMilestone>[1] = {};
       if (args.name !== undefined) input.name = args.name;
       if (args.description !== undefined) input.description = args.description;
@@ -424,7 +413,7 @@ function registerTools(server: McpServer): void {
       }
       const milestone = await updateMilestone(args.id, input);
       return text({ schema_version: 1, milestone });
-    },
+    }),
   );
 
   server.registerTool(
@@ -437,11 +426,10 @@ function registerTools(server: McpServer): void {
         workspace: z.string().optional(),
       },
     },
-    async (args) => {
-      withWorkspace(args.workspace);
+    safe(async (args) => {
       const success = await deleteMilestone(args.id);
       return text({ schema_version: 1, id: args.id, success });
-    },
+    }),
   );
 
   // ---------- projects ----------
@@ -457,13 +445,12 @@ function registerTools(server: McpServer): void {
         workspace: z.string().optional(),
       },
     },
-    async (args) => {
-      withWorkspace(args.workspace);
+    safe(async (args) => {
       const limit = args.limit ?? 50;
       const max = limit === 0 ? Number.POSITIVE_INFINITY : limit;
       const records = await listProjects({ team: args.team, state: args.state, max });
       return text({ schema_version: 1, count: records.length, projects: records });
-    },
+    }),
   );
 
   server.registerTool(
@@ -476,11 +463,10 @@ function registerTools(server: McpServer): void {
         workspace: z.string().optional(),
       },
     },
-    async (args) => {
-      withWorkspace(args.workspace);
+    safe(async (args) => {
       const project = await getProject(args.id);
       return text({ schema_version: 1, project });
-    },
+    }),
   );
 
   server.registerTool(
@@ -499,8 +485,7 @@ function registerTools(server: McpServer): void {
         workspace: z.string().optional(),
       },
     },
-    async (args) => {
-      withWorkspace(args.workspace);
+    safe(async (args) => {
       const project = await createProject({
         name: args.name,
         teamIds: args.team_ids,
@@ -511,7 +496,7 @@ function registerTools(server: McpServer): void {
         targetDate: args.target_date,
       });
       return text({ schema_version: 1, project });
-    },
+    }),
   );
 
   server.registerTool(
@@ -530,8 +515,7 @@ function registerTools(server: McpServer): void {
         workspace: z.string().optional(),
       },
     },
-    async (args) => {
-      withWorkspace(args.workspace);
+    safe(async (args) => {
       const input: Parameters<typeof updateProject>[1] = {};
       if (args.name !== undefined) input.name = args.name;
       if (args.description !== undefined) input.description = args.description;
@@ -544,7 +528,7 @@ function registerTools(server: McpServer): void {
       }
       const project = await updateProject(args.id, input);
       return text({ schema_version: 1, project });
-    },
+    }),
   );
 
   server.registerTool(
@@ -557,11 +541,10 @@ function registerTools(server: McpServer): void {
         workspace: z.string().optional(),
       },
     },
-    async (args) => {
-      withWorkspace(args.workspace);
+    safe(async (args) => {
       const success = await deleteProject(args.id);
       return text({ schema_version: 1, id: args.id, success });
-    },
+    }),
   );
 
   // ---------- project updates (with health) ----------
@@ -575,13 +558,12 @@ function registerTools(server: McpServer): void {
         workspace: z.string().optional(),
       },
     },
-    async (args) => {
-      withWorkspace(args.workspace);
+    safe(async (args) => {
       const projectId = await resolveProjectId(args.project);
       if (!projectId) throw new Error(`project not found: ${args.project}`);
       const updates = await listProjectUpdates(projectId);
       return text({ schema_version: 1, project_id: projectId, count: updates.length, updates });
-    },
+    }),
   );
 
   server.registerTool(
@@ -597,8 +579,7 @@ function registerTools(server: McpServer): void {
         workspace: z.string().optional(),
       },
     },
-    async (args) => {
-      withWorkspace(args.workspace);
+    safe(async (args) => {
       const projectId = await resolveProjectId(args.project);
       if (!projectId) throw new Error(`project not found: ${args.project}`);
       const update = await createProjectUpdate({
@@ -607,7 +588,7 @@ function registerTools(server: McpServer): void {
         health: args.health as ProjectHealth | undefined,
       });
       return text({ schema_version: 1, project_update: update });
-    },
+    }),
   );
 
   // ---------- initiatives ----------
@@ -624,8 +605,7 @@ function registerTools(server: McpServer): void {
         workspace: z.string().optional(),
       },
     },
-    async (args) => {
-      withWorkspace(args.workspace);
+    safe(async (args) => {
       const limit = args.limit ?? 50;
       const max = limit === 0 ? Number.POSITIVE_INFINITY : limit;
       const initiatives = await listInitiatives({
@@ -635,7 +615,7 @@ function registerTools(server: McpServer): void {
         max,
       });
       return text({ schema_version: 1, count: initiatives.length, initiatives });
-    },
+    }),
   );
 
   server.registerTool(
@@ -648,13 +628,12 @@ function registerTools(server: McpServer): void {
         workspace: z.string().optional(),
       },
     },
-    async (args) => {
-      withWorkspace(args.workspace);
+    safe(async (args) => {
       const id = await resolveInitiativeId(args.id_or_name);
       if (!id) return text({ schema_version: 1, initiative: null });
       const initiative = await getInitiative(id);
       return text({ schema_version: 1, initiative });
-    },
+    }),
   );
 
   server.registerTool(
@@ -673,8 +652,7 @@ function registerTools(server: McpServer): void {
         workspace: z.string().optional(),
       },
     },
-    async (args) => {
-      withWorkspace(args.workspace);
+    safe(async (args) => {
       const initiative = await createInitiative({
         name: args.name,
         description: args.description,
@@ -685,7 +663,7 @@ function registerTools(server: McpServer): void {
         icon: args.icon,
       });
       return text({ schema_version: 1, initiative });
-    },
+    }),
   );
 
   server.registerTool(
@@ -705,8 +683,7 @@ function registerTools(server: McpServer): void {
         workspace: z.string().optional(),
       },
     },
-    async (args) => {
-      withWorkspace(args.workspace);
+    safe(async (args) => {
       const input: Parameters<typeof updateInitiative>[1] = {};
       if (args.name !== undefined) input.name = args.name;
       if (args.description !== undefined) input.description = args.description;
@@ -718,7 +695,7 @@ function registerTools(server: McpServer): void {
       if (Object.keys(input).length === 0) throw new Error("nothing to update");
       const initiative = await updateInitiative(args.id, input);
       return text({ schema_version: 1, initiative });
-    },
+    }),
   );
 
   server.registerTool(
@@ -728,11 +705,10 @@ function registerTools(server: McpServer): void {
       description: "NOT retry-wrapped.",
       inputSchema: { id: z.string(), workspace: z.string().optional() },
     },
-    async (args) => {
-      withWorkspace(args.workspace);
+    safe(async (args) => {
       const success = await archiveInitiative(args.id);
       return text({ schema_version: 1, id: args.id, success });
-    },
+    }),
   );
 
   server.registerTool(
@@ -742,11 +718,10 @@ function registerTools(server: McpServer): void {
       description: "NOT retry-wrapped.",
       inputSchema: { id: z.string(), workspace: z.string().optional() },
     },
-    async (args) => {
-      withWorkspace(args.workspace);
+    safe(async (args) => {
       const success = await unarchiveInitiative(args.id);
       return text({ schema_version: 1, id: args.id, success });
-    },
+    }),
   );
 
   server.registerTool(
@@ -756,11 +731,10 @@ function registerTools(server: McpServer): void {
       description: "NOT retry-wrapped.",
       inputSchema: { id: z.string(), workspace: z.string().optional() },
     },
-    async (args) => {
-      withWorkspace(args.workspace);
+    safe(async (args) => {
       const success = await deleteInitiative(args.id);
       return text({ schema_version: 1, id: args.id, success });
-    },
+    }),
   );
 
   server.registerTool(
@@ -775,8 +749,7 @@ function registerTools(server: McpServer): void {
         workspace: z.string().optional(),
       },
     },
-    async (args) => {
-      withWorkspace(args.workspace);
+    safe(async (args) => {
       const initiativeId = await resolveInitiativeId(args.initiative);
       if (!initiativeId) throw new Error(`initiative not found: ${args.initiative}`);
       const projectId = await resolveProjectId(args.project);
@@ -787,7 +760,7 @@ function registerTools(server: McpServer): void {
         sortOrder: args.sort_order,
       });
       return text({ schema_version: 1, edge_id: result.id });
-    },
+    }),
   );
 
   server.registerTool(
@@ -801,15 +774,14 @@ function registerTools(server: McpServer): void {
         workspace: z.string().optional(),
       },
     },
-    async (args) => {
-      withWorkspace(args.workspace);
+    safe(async (args) => {
       const initiativeId = await resolveInitiativeId(args.initiative);
       if (!initiativeId) throw new Error(`initiative not found: ${args.initiative}`);
       const projectId = await resolveProjectId(args.project);
       if (!projectId) throw new Error(`project not found: ${args.project}`);
       const success = await initiativeRemoveProject({ initiativeId, projectId });
       return text({ schema_version: 1, success });
-    },
+    }),
   );
 
   server.registerTool(
@@ -822,8 +794,7 @@ function registerTools(server: McpServer): void {
         workspace: z.string().optional(),
       },
     },
-    async (args) => {
-      withWorkspace(args.workspace);
+    safe(async (args) => {
       const initiativeId = await resolveInitiativeId(args.initiative);
       if (!initiativeId) throw new Error(`initiative not found: ${args.initiative}`);
       const updates = await listInitiativeUpdates(initiativeId);
@@ -833,7 +804,7 @@ function registerTools(server: McpServer): void {
         count: updates.length,
         updates,
       });
-    },
+    }),
   );
 
   server.registerTool(
@@ -848,8 +819,7 @@ function registerTools(server: McpServer): void {
         workspace: z.string().optional(),
       },
     },
-    async (args) => {
-      withWorkspace(args.workspace);
+    safe(async (args) => {
       const initiativeId = await resolveInitiativeId(args.initiative);
       if (!initiativeId) throw new Error(`initiative not found: ${args.initiative}`);
       const update = await createInitiativeUpdate({
@@ -858,7 +828,7 @@ function registerTools(server: McpServer): void {
         health: args.health as InitiativeHealth | undefined,
       });
       return text({ schema_version: 1, initiative_update: update });
-    },
+    }),
   );
 
   // ---------- cycles ----------
@@ -873,13 +843,12 @@ function registerTools(server: McpServer): void {
         workspace: z.string().optional(),
       },
     },
-    async (args) => {
-      withWorkspace(args.workspace);
+    safe(async (args) => {
       const limit = args.limit ?? 50;
       const max = limit === 0 ? Number.POSITIVE_INFINITY : limit;
       const cycles = await listCycles({ team: args.team, max });
       return text({ schema_version: 1, count: cycles.length, cycles });
-    },
+    }),
   );
 
   server.registerTool(
@@ -889,11 +858,10 @@ function registerTools(server: McpServer): void {
       description: "Returns null if not found.",
       inputSchema: { id: z.string(), workspace: z.string().optional() },
     },
-    async (args) => {
-      withWorkspace(args.workspace);
+    safe(async (args) => {
       const cycle = await getCycle(args.id);
       return text({ schema_version: 1, cycle });
-    },
+    }),
   );
 
   // ---------- documents ----------
@@ -908,8 +876,7 @@ function registerTools(server: McpServer): void {
         workspace: z.string().optional(),
       },
     },
-    async (args) => {
-      withWorkspace(args.workspace);
+    safe(async (args) => {
       let projectId: string | undefined;
       if (args.project) {
         const resolved = await resolveProjectId(args.project);
@@ -920,7 +887,7 @@ function registerTools(server: McpServer): void {
       const max = limit === 0 ? Number.POSITIVE_INFINITY : limit;
       const documents = await listDocuments({ projectId, max });
       return text({ schema_version: 1, count: documents.length, documents });
-    },
+    }),
   );
 
   server.registerTool(
@@ -930,11 +897,10 @@ function registerTools(server: McpServer): void {
       description: "Returns null if not found.",
       inputSchema: { id: z.string(), workspace: z.string().optional() },
     },
-    async (args) => {
-      withWorkspace(args.workspace);
+    safe(async (args) => {
       const document = await getDocument(args.id);
       return text({ schema_version: 1, document });
-    },
+    }),
   );
 
   server.registerTool(
@@ -950,8 +916,7 @@ function registerTools(server: McpServer): void {
         workspace: z.string().optional(),
       },
     },
-    async (args) => {
-      withWorkspace(args.workspace);
+    safe(async (args) => {
       const projectId = await resolveProjectId(args.project);
       if (!projectId) throw new Error(`project not found: ${args.project}`);
       const document = await createDocument({
@@ -961,7 +926,7 @@ function registerTools(server: McpServer): void {
         icon: args.icon,
       });
       return text({ schema_version: 1, document });
-    },
+    }),
   );
 
   server.registerTool(
@@ -977,8 +942,7 @@ function registerTools(server: McpServer): void {
         workspace: z.string().optional(),
       },
     },
-    async (args) => {
-      withWorkspace(args.workspace);
+    safe(async (args) => {
       const input: Parameters<typeof updateDocument>[1] = {};
       if (args.title !== undefined) input.title = args.title;
       if (args.content !== undefined) input.content = args.content;
@@ -986,7 +950,7 @@ function registerTools(server: McpServer): void {
       if (Object.keys(input).length === 0) throw new Error("nothing to update");
       const document = await updateDocument(args.id, input);
       return text({ schema_version: 1, document });
-    },
+    }),
   );
 
   server.registerTool(
@@ -996,11 +960,10 @@ function registerTools(server: McpServer): void {
       description: "NOT retry-wrapped.",
       inputSchema: { id: z.string(), workspace: z.string().optional() },
     },
-    async (args) => {
-      withWorkspace(args.workspace);
+    safe(async (args) => {
       const success = await deleteDocument(args.id);
       return text({ schema_version: 1, id: args.id, success });
-    },
+    }),
   );
 
   // ---------- agent sessions ----------
@@ -1016,8 +979,7 @@ function registerTools(server: McpServer): void {
         workspace: z.string().optional(),
       },
     },
-    async (args) => {
-      withWorkspace(args.workspace);
+    safe(async (args) => {
       const limit = args.limit ?? 50;
       const max = limit === 0 ? Number.POSITIVE_INFINITY : limit;
       const sessions = await listAgentSessions({
@@ -1026,7 +988,7 @@ function registerTools(server: McpServer): void {
         max,
       });
       return text({ schema_version: 1, count: sessions.length, agent_sessions: sessions });
-    },
+    }),
   );
 
   server.registerTool(
@@ -1036,11 +998,10 @@ function registerTools(server: McpServer): void {
       description: "Returns null if not found.",
       inputSchema: { id: z.string(), workspace: z.string().optional() },
     },
-    async (args) => {
-      withWorkspace(args.workspace);
+    safe(async (args) => {
       const session = await getAgentSession(args.id);
       return text({ schema_version: 1, agent_session: session });
-    },
+    }),
   );
 
   // ---------- team members ----------
@@ -1055,14 +1016,13 @@ function registerTools(server: McpServer): void {
         workspace: z.string().optional(),
       },
     },
-    async (args) => {
-      withWorkspace(args.workspace);
+    safe(async (args) => {
       const members = await listTeamMembers({
         teamKey: args.team_key,
         includeInactive: args.include_inactive,
       });
       return text({ schema_version: 1, team: args.team_key, count: members.length, members });
-    },
+    }),
   );
 
   // ---------- lint_text ----------
@@ -1077,7 +1037,7 @@ function registerTools(server: McpServer): void {
         content: z.string().describe("Markdown content to lint."),
       },
     },
-    async (args) => {
+    safe(async (args) => {
       const { warnings } = lintContent(args.content, {});
       return {
         content: [
@@ -1100,7 +1060,7 @@ function registerTools(server: McpServer): void {
           },
         ],
       };
-    },
+    }),
   );
 }
 
@@ -1109,15 +1069,60 @@ function registerTools(server: McpServer): void {
  * `loadAuthForWorkspace` env-var path picks it up. The cached LinearClient
  * map is keyed by slug, so per-workspace selection works correctly.
  *
- * Note: this mutates process.env. For an MCP server handling concurrent
- * tool calls, this is racy — Node's stdio MCP transport processes requests
- * serially, so we're fine for now. A per-call workspace context (passed
- * through withClient explicitly) is a future enhancement.
+ * Returns a restore function; callers must invoke it in a `finally` to
+ * avoid sticky state across tool calls (request A with workspace=foo
+ * shouldn't leak `foo` into request B that doesn't pass `workspace`).
+ *
+ * The stdio MCP transport processes requests serially, so this isn't a
+ * concurrency hazard within one connection — but the cross-call leak is
+ * a real bug independent of concurrency.
  */
-function withWorkspace(workspace: string | undefined): void {
-  if (workspace) {
-    process.env.LEBOP_WORKSPACE = workspace;
-  }
+function withWorkspace(workspace: string | undefined): () => void {
+  const prev = process.env.LEBOP_WORKSPACE;
+  if (workspace) process.env.LEBOP_WORKSPACE = workspace;
+  return () => {
+    if (prev === undefined) {
+      // biome-ignore lint/performance/noDelete: env vars need real delete; setting to undefined would coerce to "undefined" string
+      delete process.env.LEBOP_WORKSPACE;
+    } else {
+      process.env.LEBOP_WORKSPACE = prev;
+    }
+  };
+}
+
+/**
+ * Wrap an MCP tool handler so any thrown error becomes a structured
+ * `{content, isError: true}` response with `LebopError.code` + `hint`
+ * preserved. The MCP SDK's default catch path serializes only
+ * `error.message`, dropping the structured taxonomy this codebase took
+ * pains to build (spec §13.3 promises the contract).
+ *
+ * Also handles per-call `workspace` selection: applies the override before
+ * the handler runs and restores the prior `LEBOP_WORKSPACE` env in the
+ * `finally` block. Prevents one tool call from leaking its workspace
+ * into the next.
+ */
+type ToolHandlerArgs = Record<string, unknown>;
+type ToolHandlerResult = {
+  content: { type: "text"; text: string }[];
+  isError?: boolean;
+};
+function safe<A extends ToolHandlerArgs>(
+  fn: (args: A) => Promise<ToolHandlerResult>,
+): (args: A) => Promise<ToolHandlerResult> {
+  return async (args) => {
+    const restore = withWorkspace(args.workspace as string | undefined);
+    try {
+      return await fn(args);
+    } catch (err) {
+      return {
+        content: [{ type: "text", text: formatToolError(err) }],
+        isError: true,
+      };
+    } finally {
+      restore();
+    }
+  };
 }
 
 /**
