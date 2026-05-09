@@ -1,6 +1,7 @@
 import type { LinearClient } from "@linear/sdk";
 import type { Command } from "commander";
 import { resolveConfig } from "../lib/config.ts";
+import { paginateConnection } from "../lib/paginate.ts";
 import { linear } from "../lib/sdk.ts";
 
 type IssueFilter = NonNullable<Parameters<LinearClient["issues"]>[0]>["filter"];
@@ -18,7 +19,7 @@ export function registerList(program: Command): void {
     .option("--label <name>", "repeatable", collect, [])
     .option("--priority <n>")
     .option("--updated-since <when>", "e.g. 7d | 24h | ISO timestamp")
-    .option("--limit <n>", "default 50", "50")
+    .option("--limit <n>", "default 50; pass 0 for no limit", "50")
     .option("--json", "emit structured issue records")
     .action(async (opts: ListOpts) => {
       const config = await resolveConfig({ teamOverride: opts.team });
@@ -50,11 +51,16 @@ export function registerList(program: Command): void {
         filter.updatedAt = { gte: parseRelative(opts.updatedSince) };
       }
 
-      const limit = Math.max(1, Math.min(250, Number.parseInt(opts.limit ?? "50", 10)));
-      const issues = await client.issues({ filter, first: limit });
+      const requested = Number.parseInt(opts.limit ?? "50", 10);
+      // `--limit 0` ⇒ no user-specified cap; the paginator's safety cap (10k) still applies.
+      const max = requested === 0 ? Number.POSITIVE_INFINITY : Math.max(1, requested);
+      const issues = await paginateConnection(
+        ({ first, after }) => client.issues({ filter, first, after }),
+        { max, pageSize: 250 },
+      );
 
       const records = await Promise.all(
-        issues.nodes.map(async (i) => {
+        issues.map(async (i) => {
           const [state, assignee] = await Promise.all([i.state, i.assignee]);
           return {
             identifier: i.identifier,

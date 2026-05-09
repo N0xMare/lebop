@@ -1,5 +1,6 @@
 import type { Command } from "commander";
 import { resolveConfig } from "../lib/config.ts";
+import { paginateConnection } from "../lib/paginate.ts";
 import { linear } from "../lib/sdk.ts";
 
 export function registerProjects(program: Command): void {
@@ -23,8 +24,10 @@ export function registerProjects(program: Command): void {
         return;
       }
 
-      const projects = await team.projects({ first: 250 });
-      let records = projects.nodes.map((p) => ({
+      const projects = await paginateConnection(({ first, after }) =>
+        team.projects({ first, after }),
+      );
+      let records = projects.map((p) => ({
         id: p.id,
         name: p.name,
         state: p.state,

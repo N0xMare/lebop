@@ -1,4 +1,5 @@
 import type { Command } from "commander";
+import { paginateConnection } from "../lib/paginate.ts";
 import { linear } from "../lib/sdk.ts";
 
 export function registerTeams(program: Command): void {
@@ -8,8 +9,8 @@ export function registerTeams(program: Command): void {
     .option("--json", "emit structured team records")
     .action(async (opts: { json?: boolean }) => {
       const client = await linear();
-      const teams = await client.teams({ first: 250 });
-      const records = teams.nodes.map((t) => ({
+      const teams = await paginateConnection(({ first, after }) => client.teams({ first, after }));
+      const records = teams.map((t) => ({
         key: t.key,
         name: t.name,
         id: t.id,

@@ -1,8 +1,14 @@
 import { createTwoFilesPatch } from "diff";
 import type { TeamMetadata } from "./cache.ts";
+import { paginateRaw } from "./paginate.ts";
 import type { IssueFile, LinkKey, ParsedPlan, ProjectFile } from "./planTypes.ts";
 import { LINK_KEYS } from "./planTypes.ts";
-import { type FetchedIssue, type FetchedProject, buildPullIssuesQuery } from "./pullQuery.ts";
+import {
+  type FetchedIssue,
+  type FetchedProject,
+  PULL_PROJECT_HEADER_QUERY,
+  buildPullIssuesQuery,
+} from "./pullQuery.ts";
 import { resolveLabelIds, resolvePriority, resolveStateId } from "./resolve.ts";
 import { linear } from "./sdk.ts";
 
@@ -50,22 +56,32 @@ export interface PlanDiffResult {
   has_drift: boolean;
 }
 
-const PROJECT_READ_QUERY = /* GraphQL */ `
-  query ReadProject($id: String!) {
+/**
+ * Issues-in-project listing for diff/pull workflows. Just identifier + title;
+ * the rest of the project metadata is read separately from the plan files.
+ * Always paginated via `paginateRaw` so projects with >250 issues work.
+ */
+const PROJECT_ISSUES_QUERY = /* GraphQL */ `
+  query PlanProjectIssues($id: String!, $first: Int!, $after: String) {
     project(id: $id) {
-      id
-      name
-      description
-      content
-      state
-      url
-      updatedAt
-      issues(first: 250) {
+      issues(first: $first, after: $after) {
         nodes { identifier title }
+        pageInfo { hasNextPage endCursor }
       }
     }
   }
 `;
+
+interface ProjectIssuesResponse {
+  data: {
+    project: {
+      issues: {
+        nodes: { identifier: string; title: string }[];
+        pageInfo: { hasNextPage: boolean; endCursor: string | null };
+      };
+    } | null;
+  };
+}
 
 // ---------- public entry ----------
 
@@ -86,22 +102,24 @@ export async function diffPlan(
   if (project.linear_id && project.status !== "missing-remote" && project.status !== "error") {
     try {
       const client = await linear();
-      const response = (await client.client.rawRequest(PROJECT_READ_QUERY, {
-        id: project.linear_id,
-      })) as {
-        data: {
-          project:
-            | (FetchedProject & { issues: { nodes: { identifier: string; title: string }[] } })
-            | null;
-        };
-      };
-      const remote = response.data.project;
-      if (remote) {
-        const planned = new Set(plan.issues.map((i) => i.frontmatter.linear_id).filter(Boolean));
-        for (const node of remote.issues.nodes) {
-          if (!planned.has(node.identifier)) {
-            extraRemote.push({ identifier: node.identifier, title: node.title });
-          }
+      const linearId = project.linear_id;
+      const remoteIssues = await paginateRaw<
+        { identifier: string; title: string },
+        ProjectIssuesResponse
+      >(
+        ({ first, after }) =>
+          client.client.rawRequest(PROJECT_ISSUES_QUERY, {
+            id: linearId,
+            first,
+            after,
+          }) as Promise<ProjectIssuesResponse>,
+        (response) => response.data.project?.issues ?? null,
+        { pageSize: 250 },
+      );
+      const planned = new Set(plan.issues.map((i) => i.frontmatter.linear_id).filter(Boolean));
+      for (const node of remoteIssues) {
+        if (!planned.has(node.identifier)) {
+          extraRemote.push({ identifier: node.identifier, title: node.title });
         }
       }
     } catch {
@@ -132,9 +150,9 @@ async function diffProject(project: ProjectFile): Promise<PlanProjectDiff> {
   }
   try {
     const client = await linear();
-    const response = (await client.client.rawRequest(PROJECT_READ_QUERY, {
+    const response = (await client.client.rawRequest(PULL_PROJECT_HEADER_QUERY, {
       id: fm.linear_id,
-    })) as { data: { project: FetchedProject | null } };
+    })) as { data: { project: Omit<FetchedProject, "issues"> | null } };
     const remote = response.data.project;
     if (!remote) {
       return {

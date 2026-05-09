@@ -22,10 +22,12 @@ import { resolveConfig } from "../lib/config.ts";
 import { diffIssueMetadata, diffProjectMetadata } from "../lib/diff.ts";
 import { rewriteNotFound } from "../lib/errors.ts";
 import { expandIds } from "../lib/expand.ts";
+import { paginateRaw } from "../lib/paginate.ts";
 import {
   type FetchedIssue,
   type FetchedProject,
-  PULL_PROJECT_QUERY,
+  PULL_PROJECT_HEADER_QUERY,
+  PULL_PROJECT_ISSUES_QUERY,
   buildPullIssuesQuery,
 } from "../lib/pullQuery.ts";
 import { linear } from "../lib/sdk.ts";
@@ -55,18 +57,37 @@ export function registerPull(program: Command): void {
       if (opts.project || opts.projectId) {
         const projectId =
           opts.projectId ?? (await lookupProjectId(client, config.team, opts.project ?? ""));
-        const response = (await client.client.rawRequest(PULL_PROJECT_QUERY, {
+        const headerResponse = (await client.client.rawRequest(PULL_PROJECT_HEADER_QUERY, {
           id: projectId,
-        })) as {
-          data: { project: FetchedProject | null };
-        };
-        const project = response.data.project;
-        if (!project) {
+        })) as { data: { project: Omit<FetchedProject, "issues"> | null } };
+        const header = headerResponse.data.project;
+        if (!header) {
           throw new Error(`project not found: ${opts.project ?? opts.projectId}`);
         }
+        type IssuesPage = {
+          data: {
+            project: {
+              issues: {
+                nodes: { identifier: string; title?: string }[];
+                pageInfo: { hasNextPage: boolean; endCursor: string | null };
+              };
+            } | null;
+          };
+        };
+        const issueNodes = await paginateRaw<{ identifier: string; title?: string }, IssuesPage>(
+          ({ first, after }) =>
+            client.client.rawRequest(PULL_PROJECT_ISSUES_QUERY, {
+              id: projectId,
+              first,
+              after,
+            }) as Promise<IssuesPage>,
+          (response) => response.data.project?.issues ?? null,
+          { pageSize: 250 },
+        );
+        const project: FetchedProject = { ...header, issues: { nodes: issueNodes } };
         projectPulled = {
           project,
-          added_issue_ids: project.issues.nodes.map((n) => n.identifier),
+          added_issue_ids: issueNodes.map((n) => n.identifier),
         };
         issueIds.push(...projectPulled.added_issue_ids);
       }
@@ -129,6 +150,16 @@ export function registerPull(program: Command): void {
             }
           } else {
             fetched.push(node);
+          }
+        }
+        if (withComments) {
+          const overflow = fetched.filter((i) => i.comments?.pageInfo.hasNextPage);
+          if (overflow.length > 0) {
+            const ids = overflow.map((i) => i.identifier).join(", ");
+            const plural = overflow.length === 1 ? "" : "s";
+            process.stderr.write(
+              `${chalk.yellow("warning:")} ${overflow.length} issue${plural} have more than 250 comments; only the first 250 were fetched (${ids})\n`,
+            );
           }
         }
         for (const issue of fetched) {

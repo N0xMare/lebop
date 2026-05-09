@@ -1,9 +1,15 @@
 import { join } from "node:path";
 import { stringify as stringifyYaml } from "yaml";
 import type { TeamMetadata } from "./cache.ts";
+import { paginateRaw } from "./paginate.ts";
 import type { IssueFile, LinkKey, ParsedPlan, ProjectFile } from "./planTypes.ts";
 import { LINK_KEYS } from "./planTypes.ts";
-import { type FetchedIssue, type FetchedProject, buildPullIssuesQuery } from "./pullQuery.ts";
+import {
+  type FetchedIssue,
+  type FetchedProject,
+  PULL_PROJECT_HEADER_QUERY,
+  buildPullIssuesQuery,
+} from "./pullQuery.ts";
 import { labelNameById, priorityName } from "./resolve.ts";
 import { linear } from "./sdk.ts";
 
@@ -31,22 +37,31 @@ export interface PullOpts {
   includeNew?: boolean;
 }
 
-const PROJECT_READ_QUERY = /* GraphQL */ `
-  query ReadProject($id: String!) {
+/**
+ * Issues-in-project listing for the new-on-remote import path.
+ * Always paginated so projects with >250 issues work.
+ */
+const PROJECT_ISSUES_QUERY = /* GraphQL */ `
+  query PlanProjectIssues($id: String!, $first: Int!, $after: String) {
     project(id: $id) {
-      id
-      name
-      description
-      content
-      state
-      url
-      updatedAt
-      issues(first: 250) {
+      issues(first: $first, after: $after) {
         nodes { identifier title }
+        pageInfo { hasNextPage endCursor }
       }
     }
   }
 `;
+
+interface ProjectIssuesResponse {
+  data: {
+    project: {
+      issues: {
+        nodes: { identifier: string; title: string }[];
+        pageInfo: { hasNextPage: boolean; endCursor: string | null };
+      };
+    } | null;
+  };
+}
 
 // ---------- public entry ----------
 
@@ -72,30 +87,32 @@ export async function pullPlan(
   ) {
     try {
       const client = await linear();
-      const resp = (await client.client.rawRequest(PROJECT_READ_QUERY, {
-        id: projectResult.linear_id,
-      })) as {
-        data: {
-          project:
-            | (FetchedProject & { issues: { nodes: { identifier: string; title: string }[] } })
-            | null;
-        };
-      };
-      const remote = resp.data.project;
-      if (remote) {
-        const plannedIds = new Set(plan.issues.map((i) => i.frontmatter.linear_id).filter(Boolean));
-        const existingSlugs = new Set(plan.issues.map((i) => i.slug));
-        for (const node of remote.issues.nodes) {
-          if (plannedIds.has(node.identifier)) continue;
-          if (opts.includeNew) {
-            const result = await importNewIssue(plan, node.identifier, existingSlugs, teamMetadata);
-            if (result) {
-              newImports.push(result);
-              existingSlugs.add(slugFromPath(result.path));
-            }
-          } else {
-            skippedNew.push({ identifier: node.identifier, title: node.title });
+      const linearId = projectResult.linear_id;
+      const remoteIssues = await paginateRaw<
+        { identifier: string; title: string },
+        ProjectIssuesResponse
+      >(
+        ({ first, after }) =>
+          client.client.rawRequest(PROJECT_ISSUES_QUERY, {
+            id: linearId,
+            first,
+            after,
+          }) as Promise<ProjectIssuesResponse>,
+        (response) => response.data.project?.issues ?? null,
+        { pageSize: 250 },
+      );
+      const plannedIds = new Set(plan.issues.map((i) => i.frontmatter.linear_id).filter(Boolean));
+      const existingSlugs = new Set(plan.issues.map((i) => i.slug));
+      for (const node of remoteIssues) {
+        if (plannedIds.has(node.identifier)) continue;
+        if (opts.includeNew) {
+          const result = await importNewIssue(plan, node.identifier, existingSlugs, teamMetadata);
+          if (result) {
+            newImports.push(result);
+            existingSlugs.add(slugFromPath(result.path));
           }
+        } else {
+          skippedNew.push({ identifier: node.identifier, title: node.title });
         }
       }
     } catch {
@@ -115,9 +132,9 @@ async function pullProject(project: ProjectFile): Promise<PullResult["project"]>
   }
   try {
     const client = await linear();
-    const resp = (await client.client.rawRequest(PROJECT_READ_QUERY, {
+    const resp = (await client.client.rawRequest(PULL_PROJECT_HEADER_QUERY, {
       id: fm.linear_id,
-    })) as { data: { project: FetchedProject | null } };
+    })) as { data: { project: Omit<FetchedProject, "issues"> | null } };
     const remote = resp.data.project;
     if (!remote) {
       return { name: fm.name, linear_id: fm.linear_id, status: "missing-remote" };

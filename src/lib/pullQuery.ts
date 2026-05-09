@@ -41,7 +41,7 @@ export const ISSUE_FIELDS_FRAGMENT = /* GraphQL */ `
 
 export const COMMENTS_FIELDS_FRAGMENT = /* GraphQL */ `
   fragment CommentFields on Issue {
-    comments(first: 100) {
+    comments(first: 250) {
       nodes {
         id
         body
@@ -52,6 +52,10 @@ export const COMMENTS_FIELDS_FRAGMENT = /* GraphQL */ `
           name
           email
         }
+      }
+      pageInfo {
+        hasNextPage
+        endCursor
       }
     }
   }
@@ -108,8 +112,12 @@ export function buildPullIssuesQuery(
   `;
 }
 
-export const PULL_PROJECT_QUERY = /* GraphQL */ `
-  query PullProject($id: String!) {
+/**
+ * Project header (no issues sub-list). Pair with `PULL_PROJECT_ISSUES_QUERY`
+ * to walk all child issues regardless of count.
+ */
+export const PULL_PROJECT_HEADER_QUERY = /* GraphQL */ `
+  query PullProjectHeader($id: String!) {
     project(id: $id) {
       id
       name
@@ -118,9 +126,25 @@ export const PULL_PROJECT_QUERY = /* GraphQL */ `
       state
       url
       updatedAt
-      issues(first: 250) {
+    }
+  }
+`;
+
+/**
+ * Paginated issues-in-a-project query. Use with `paginateRaw` and a
+ * `pageSize` ≤ 250 (Linear's per-request maximum).
+ */
+export const PULL_PROJECT_ISSUES_QUERY = /* GraphQL */ `
+  query PullProjectIssues($id: String!, $first: Int!, $after: String) {
+    project(id: $id) {
+      issues(first: $first, after: $after) {
         nodes {
           identifier
+          title
+        }
+        pageInfo {
+          hasNextPage
+          endCursor
         }
       }
     }
@@ -150,6 +174,7 @@ export interface FetchedIssue {
       updatedAt: string;
       user: { id: string; name: string; email: string } | null;
     }[];
+    pageInfo: { hasNextPage: boolean; endCursor: string | null };
   };
   relations?: {
     nodes: {
@@ -175,5 +200,6 @@ export interface FetchedProject {
   state: string;
   url: string;
   updatedAt: string;
-  issues: { nodes: { identifier: string }[] };
+  /** Populated by callers after paginating PULL_PROJECT_ISSUES_QUERY. */
+  issues: { nodes: { identifier: string; title?: string }[] };
 }
