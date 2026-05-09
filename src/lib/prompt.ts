@@ -1,3 +1,8 @@
+/**
+ * Hidden-input TTY prompt for `lebop auth login`. **TTY-only — do not import
+ * from the MCP server or any non-CLI code path.** Falls back to reading from
+ * stdin (for piped input like `echo $TOKEN | lebop auth login`).
+ */
 export async function promptHidden(message: string): Promise<string> {
   if (!process.stdin.isTTY) {
     const data = await Bun.stdin.text();

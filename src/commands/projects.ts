@@ -19,7 +19,8 @@ export function registerProjects(program: Command): void {
       const team = teams.nodes[0];
       if (!team) {
         process.stderr.write(`team not found: ${config.team}\n`);
-        process.exit(1);
+        process.exitCode = 1;
+        return;
       }
 
       const projects = await team.projects({ first: 250 });

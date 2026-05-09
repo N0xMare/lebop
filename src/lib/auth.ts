@@ -3,6 +3,7 @@ import { chmodSync, existsSync, unlinkSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import { LinearClient } from "@linear/sdk";
+import { AuthError } from "./errors.ts";
 import { AUTH_FILE, LEBOP_HOME } from "./paths.ts";
 import type { AuthFile, Viewer } from "./types.ts";
 
@@ -14,14 +15,18 @@ export async function loadAuth(): Promise<AuthFile | null> {
   try {
     const data = (await file.json()) as unknown;
     if (!isAuthFile(data)) {
-      throw new Error(
-        `auth file at ${AUTH_FILE} has unexpected shape — run \`lebop auth login\` to recreate`,
+      throw new AuthError(
+        `auth file at ${AUTH_FILE} has unexpected shape`,
+        "run `lebop auth login` to recreate",
       );
     }
     return data;
   } catch (err) {
-    if (err instanceof Error && err.message.includes("lebop auth login")) throw err;
-    throw new Error(`failed to read ${AUTH_FILE}: ${(err as Error).message}`);
+    if (err instanceof AuthError) throw err;
+    throw new AuthError(
+      `failed to read ${AUTH_FILE}: ${(err as Error).message}`,
+      "the file may be corrupted; run `lebop auth login` to recreate",
+    );
   }
 }
 
@@ -68,11 +73,12 @@ export async function validateToken(token: string): Promise<Viewer> {
       msg.toLowerCase().includes("authentication") ||
       msg.toLowerCase().includes("unauthorized")
     ) {
-      throw new Error(
-        "token rejected by Linear — paste the full `lin_api_...` value from Settings → API",
+      throw new AuthError(
+        "token rejected by Linear",
+        "paste the full `lin_api_...` value from Settings → API",
       );
     }
-    throw new Error(`failed to validate token: ${msg}`);
+    throw new AuthError(`failed to validate token: ${msg}`);
   }
 }
 
@@ -83,13 +89,18 @@ export function importFromSchpet(): string {
       stdio: ["ignore", "pipe", "pipe"],
     }).trim();
     if (!token) {
-      throw new Error("`linear auth token` returned empty — run `linear auth login` first");
+      throw new AuthError(
+        "`linear auth token` returned empty",
+        "run `linear auth login` first to authenticate @schpet/linear-cli",
+      );
     }
     return token;
   } catch (err) {
+    if (err instanceof AuthError) throw err;
     const msg = (err as Error).message ?? String(err);
-    throw new Error(
-      `could not import from @schpet/linear-cli: ${msg}. Install it (https://github.com/schpet/linear-cli) and run \`linear auth login\`, or use \`lebop auth login\` with a Linear personal API key.`,
+    throw new AuthError(
+      `could not import from @schpet/linear-cli: ${msg}`,
+      "install it (https://github.com/schpet/linear-cli) and run `linear auth login`, or use `lebop auth login` with a Linear personal API key",
     );
   }
 }

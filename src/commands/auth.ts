@@ -31,7 +31,8 @@ export function registerAuth(program: Command): void {
 
       if (!token) {
         process.stderr.write(`${chalk.red("no token provided")}\n`);
-        process.exit(1);
+        process.exitCode = 1;
+        return;
       }
 
       const viewer = await validateToken(token);
@@ -65,7 +66,8 @@ export function registerAuth(program: Command): void {
         process.stderr.write(
           `${chalk.red("no credentials stored.")} run ${chalk.cyan("lebop auth login")}\n`,
         );
-        process.exit(1);
+        process.exitCode = 1;
+        return;
       }
 
       let viewer = stored.viewer;

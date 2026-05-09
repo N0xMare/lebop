@@ -99,7 +99,8 @@ export function registerPull(program: Command): void {
           process.stderr.write(
             `  push them with ${chalk.cyan("lebop push")} or re-run with ${chalk.cyan("--refresh")}\n`,
           );
-          process.exit(1);
+          process.exitCode = 1;
+          return;
         }
       }
 

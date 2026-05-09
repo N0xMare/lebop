@@ -4,9 +4,14 @@ import {
   readTeamMetadata,
   writeTeamMetadata,
 } from "./cache.ts";
+import { LebopError } from "./errors.ts";
 import { linear } from "./sdk.ts";
 
-export class ResolveError extends Error {}
+export class ResolveError extends LebopError {
+  constructor(message: string, hint?: string) {
+    super(message, "resolve_error", hint);
+  }
+}
 
 /**
  * Run `use(metadata)`; if it throws ResolveError (i.e. a name → UUID lookup missed),

@@ -17,6 +17,7 @@ import { registerShow } from "./commands/show.ts";
 import { registerStatus } from "./commands/status.ts";
 import { registerTeams } from "./commands/teams.ts";
 import { preprocessSetArgv } from "./lib/argvPrep.ts";
+import { LebopError } from "./lib/errors.ts";
 
 export async function run(rawArgv: string[]): Promise<void> {
   const argv = preprocessSetArgv(rawArgv);
@@ -53,8 +54,13 @@ export async function run(rawArgv: string[]): Promise<void> {
   try {
     await program.parseAsync(argv);
   } catch (err) {
-    const msg = (err as Error).message ?? String(err);
-    process.stderr.write(`${chalk.red("error:")} ${msg}\n`);
+    if (err instanceof LebopError) {
+      process.stderr.write(`${chalk.red(`error[${err.code}]:`)} ${err.message}\n`);
+      if (err.hint) process.stderr.write(`  ${chalk.cyan("hint:")} ${err.hint}\n`);
+    } else {
+      const msg = (err as Error).message ?? String(err);
+      process.stderr.write(`${chalk.red("error:")} ${msg}\n`);
+    }
     process.exit(1);
   }
 }
