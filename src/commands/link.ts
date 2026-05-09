@@ -4,15 +4,6 @@ import { rewriteNotFound } from "../lib/errors.ts";
 import { withClient } from "../lib/sdk.ts";
 
 const ATTACH_URL_MUTATION = /* GraphQL */ `
-  mutation AttachLinkURL($input: AttachmentLinkUrlInput!) {
-    attachmentLinkURL(input: $input) {
-      success
-      attachment { id title url }
-    }
-  }
-`;
-
-const SIMPLE_ATTACH_URL_MUTATION = /* GraphQL */ `
   mutation AttachURL($issueId: String!, $url: String!, $title: String!) {
     attachmentLinkURL(issueId: $issueId, url: $url, title: $title) {
       success
@@ -45,7 +36,7 @@ export function registerLink(program: Command): void {
       try {
         // Linear's attachmentLinkURL takes positional-style args.
         const response = (await withClient((c) =>
-          c.client.rawRequest(SIMPLE_ATTACH_URL_MUTATION, {
+          c.client.rawRequest(ATTACH_URL_MUTATION, {
             issueId: fetched.id,
             url,
             title,
@@ -82,7 +73,3 @@ export function registerLink(program: Command): void {
       }
     });
 }
-
-// Suppress unused warning for the input-shape mutation we don't currently
-// use. Kept as a reference for the alternate API shape Linear also accepts.
-void ATTACH_URL_MUTATION;
