@@ -12,6 +12,8 @@ import { registerMilestone } from "./commands/milestone.ts";
 import { registerMine } from "./commands/mine.ts";
 import { registerNew } from "./commands/new.ts";
 import { registerPlan } from "./commands/plan.ts";
+import { registerProjectUpdate } from "./commands/project-update.ts";
+import { registerProject } from "./commands/project.ts";
 import { registerProjects } from "./commands/projects.ts";
 import { registerPull } from "./commands/pull.ts";
 import { registerPush } from "./commands/push.ts";
@@ -52,6 +54,8 @@ export async function run(rawArgv: string[]): Promise<void> {
   registerList(program);
   registerMine(program);
   registerProjects(program);
+  registerProject(program);
+  registerProjectUpdate(program);
   registerTeams(program);
 
   registerShow(program);

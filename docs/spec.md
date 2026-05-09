@@ -602,6 +602,31 @@ canonical form for what was previously `lebop comment <id>` — the bare
 form is gone, prefix with `add`. `list` is paginated and chronological;
 `update`/`delete` take the comment's UUID (visible in `list` output).
 
+### 8.4a `project` — manage Linear projects (CRUD)
+
+```
+lebop project list [--team KEY | --all-teams] [--state NAME] [--limit N] [--json]
+lebop project view <id> [--json]
+lebop project create <name> --team KEY [--description] [--content] [--state] [--start-date] [--target-date] [--json]
+lebop project update <id> [--name] [--description] [--content] [--state] [--start-date ISO|null] [--target-date ISO|null] [--json]
+lebop project delete <id> [--json]
+```
+
+Full project CRUD. `update --start-date null` clears the date.
+`view` shows description + content + lead + teams + dates.
+The legacy `lebop projects` (plural, list-only) is kept as an alias for
+`lebop project list`.
+
+### 8.4b `project-update` — project status updates with health
+
+```
+lebop project-update create <project> [--body | --body-file | --stdin] [--health onTrack|atRisk|offTrack] [--json]
+lebop project-update list <project> [--json]
+```
+
+`<project>` accepts a name or UUID. `--health` is the standard Linear
+status flag (mirrors linear-cli).
+
 ### 8.5a `label` — manage Linear labels
 
 ```

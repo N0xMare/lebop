@@ -26,6 +26,16 @@ import {
   resolveProjectId,
   updateMilestone,
 } from "../lib/milestones.ts";
+import {
+  type ProjectHealth,
+  createProject,
+  createProjectUpdate,
+  deleteProject,
+  getProject,
+  listProjectUpdates,
+  listProjects,
+  updateProject,
+} from "../lib/projects.ts";
 import { LINK_KINDS, type LinkKind, createLink, listRelations } from "../lib/relations.ts";
 import { withClient } from "../lib/sdk.ts";
 
@@ -406,6 +416,172 @@ function registerTools(server: McpServer): void {
       withWorkspace(args.workspace);
       const success = await deleteMilestone(args.id);
       return text({ schema_version: 1, id: args.id, success });
+    },
+  );
+
+  // ---------- projects ----------
+  server.registerTool(
+    "list_projects",
+    {
+      title: "List Linear projects",
+      description: "List projects scoped to a team (default) or workspace-wide.",
+      inputSchema: {
+        team: z.string().optional().describe("Team key. Omit for workspace-wide."),
+        state: z.string().optional(),
+        limit: z.number().int().min(0).optional(),
+        workspace: z.string().optional(),
+      },
+    },
+    async (args) => {
+      withWorkspace(args.workspace);
+      const limit = args.limit ?? 50;
+      const max = limit === 0 ? Number.POSITIVE_INFINITY : limit;
+      const records = await listProjects({ team: args.team, state: args.state, max });
+      return text({ schema_version: 1, count: records.length, projects: records });
+    },
+  );
+
+  server.registerTool(
+    "get_project",
+    {
+      title: "Get one project by UUID",
+      description: "Returns the project (with content + lead + teams) or null.",
+      inputSchema: {
+        id: z.string(),
+        workspace: z.string().optional(),
+      },
+    },
+    async (args) => {
+      withWorkspace(args.workspace);
+      const project = await getProject(args.id);
+      return text({ schema_version: 1, project });
+    },
+  );
+
+  server.registerTool(
+    "create_project",
+    {
+      title: "Create a project",
+      description: "Requires team_ids (UUIDs). NOT retry-wrapped (would duplicate).",
+      inputSchema: {
+        name: z.string(),
+        team_ids: z.array(z.string()).describe("Team UUIDs (NOT keys)."),
+        description: z.string().optional(),
+        content: z.string().optional(),
+        state: z.string().optional(),
+        start_date: z.string().optional(),
+        target_date: z.string().optional(),
+        workspace: z.string().optional(),
+      },
+    },
+    async (args) => {
+      withWorkspace(args.workspace);
+      const project = await createProject({
+        name: args.name,
+        teamIds: args.team_ids,
+        description: args.description,
+        content: args.content,
+        state: args.state,
+        startDate: args.start_date,
+        targetDate: args.target_date,
+      });
+      return text({ schema_version: 1, project });
+    },
+  );
+
+  server.registerTool(
+    "update_project",
+    {
+      title: "Update a project",
+      description: "Idempotent at the value level — safe to retry.",
+      inputSchema: {
+        id: z.string(),
+        name: z.string().optional(),
+        description: z.string().optional(),
+        content: z.string().optional(),
+        state: z.string().optional(),
+        start_date: z.union([z.string(), z.null()]).optional(),
+        target_date: z.union([z.string(), z.null()]).optional(),
+        workspace: z.string().optional(),
+      },
+    },
+    async (args) => {
+      withWorkspace(args.workspace);
+      const input: Parameters<typeof updateProject>[1] = {};
+      if (args.name !== undefined) input.name = args.name;
+      if (args.description !== undefined) input.description = args.description;
+      if (args.content !== undefined) input.content = args.content;
+      if (args.state !== undefined) input.state = args.state;
+      if (args.start_date !== undefined) input.startDate = args.start_date;
+      if (args.target_date !== undefined) input.targetDate = args.target_date;
+      if (Object.keys(input).length === 0) {
+        throw new Error("nothing to update — pass at least one field");
+      }
+      const project = await updateProject(args.id, input);
+      return text({ schema_version: 1, project });
+    },
+  );
+
+  server.registerTool(
+    "delete_project",
+    {
+      title: "Delete a project",
+      description: "By UUID. NOT retry-wrapped. Irreversible.",
+      inputSchema: {
+        id: z.string(),
+        workspace: z.string().optional(),
+      },
+    },
+    async (args) => {
+      withWorkspace(args.workspace);
+      const success = await deleteProject(args.id);
+      return text({ schema_version: 1, id: args.id, success });
+    },
+  );
+
+  // ---------- project updates (with health) ----------
+  server.registerTool(
+    "list_project_updates",
+    {
+      title: "List project status updates",
+      description: "Chronological status posts for one project.",
+      inputSchema: {
+        project: z.string().describe("Project name or UUID."),
+        workspace: z.string().optional(),
+      },
+    },
+    async (args) => {
+      withWorkspace(args.workspace);
+      const projectId = await resolveProjectId(args.project);
+      if (!projectId) throw new Error(`project not found: ${args.project}`);
+      const updates = await listProjectUpdates(projectId);
+      return text({ schema_version: 1, project_id: projectId, count: updates.length, updates });
+    },
+  );
+
+  server.registerTool(
+    "create_project_update",
+    {
+      title: "Post a project status update",
+      description:
+        "Optionally tagged with health (onTrack | atRisk | offTrack). NOT retry-wrapped.",
+      inputSchema: {
+        project: z.string().describe("Project name or UUID."),
+        body: z.string(),
+        health: z.enum(["onTrack", "atRisk", "offTrack"]).optional(),
+        workspace: z.string().optional(),
+      },
+    },
+    async (args) => {
+      withWorkspace(args.workspace);
+      const projectId = await resolveProjectId(args.project);
+      if (!projectId) throw new Error(`project not found: ${args.project}`);
+      const update = await createProjectUpdate({
+        projectId,
+        body: args.body,
+        health: args.health as ProjectHealth | undefined,
+      });
+      return text({ schema_version: 1, project_update: update });
     },
   );
 
