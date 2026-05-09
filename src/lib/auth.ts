@@ -53,9 +53,12 @@ export function deleteAuth(): boolean {
 export function linearClientFromToken(token: string): LinearClient {
   // PAKs start with `lin_api_` and go in Authorization header as-is.
   // OAuth bearer tokens need the `Bearer ` prefix, which @linear/sdk adds for `accessToken`.
+  // `LEBOP_API_URL` env var overrides the default Linear endpoint — used by
+  // integration tests pointing at a local mock server.
+  const apiUrl = process.env.LEBOP_API_URL;
   return token.startsWith("lin_api_")
-    ? new LinearClient({ apiKey: token })
-    : new LinearClient({ accessToken: token });
+    ? new LinearClient(apiUrl ? { apiKey: token, apiUrl } : { apiKey: token })
+    : new LinearClient(apiUrl ? { accessToken: token, apiUrl } : { accessToken: token });
 }
 
 export async function validateToken(token: string): Promise<Viewer> {
