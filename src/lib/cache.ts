@@ -13,6 +13,7 @@ export interface ServerSnapshot {
   state_name: string;
   state_type: string;
   priority: number;
+  estimate: number | null;
   label_ids: { id: string; name: string }[];
   assignee_id: string | null;
   assignee_name: string | null;
@@ -21,6 +22,8 @@ export interface ServerSnapshot {
   description_hash: string;
   project_id: string | null;
   project_name: string | null;
+  parent_id: string | null;
+  parent_identifier: string | null;
   updated_at: string;
 }
 
@@ -29,9 +32,11 @@ export interface IssueMetadata {
   title: string;
   state: string;
   priority: number;
+  estimate: number | null;
   labels: string[];
   assignee: string | null;
   project: string | null;
+  parent: string | null;
   _server: ServerSnapshot;
 }
 

@@ -21,6 +21,7 @@ export function buildIssueMetadata(issue: FetchedIssue): {
     state_name: issue.state.name,
     state_type: issue.state.type,
     priority: issue.priority,
+    estimate: issue.estimate ?? null,
     label_ids: labelList,
     assignee_id: issue.assignee?.id ?? null,
     assignee_name: issue.assignee?.name ?? null,
@@ -29,6 +30,8 @@ export function buildIssueMetadata(issue: FetchedIssue): {
     description_hash: sha256(description),
     project_id: issue.project?.id ?? null,
     project_name: issue.project?.name ?? null,
+    parent_id: issue.parent?.id ?? null,
+    parent_identifier: issue.parent?.identifier ?? null,
     updated_at: issue.updatedAt,
   };
   const metadata: IssueMetadata = {
@@ -36,9 +39,11 @@ export function buildIssueMetadata(issue: FetchedIssue): {
     title: issue.title,
     state: issue.state.name,
     priority: issue.priority,
+    estimate: issue.estimate ?? null,
     labels: labelList.map((l) => l.name).sort(),
     assignee: issue.assignee?.email ?? null,
     project: issue.project?.name ?? null,
+    parent: issue.parent?.identifier ?? null,
     _server: server,
   };
   return { metadata, description };

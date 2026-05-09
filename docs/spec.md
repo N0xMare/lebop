@@ -442,23 +442,40 @@ identifier: TEAM-123
 title: "example issue title"
 state: Todo                 # by name → resolved to stateId on push
 priority: 1                 # 0 none | 1 urgent | 2 high | 3 normal | 4 low
-estimate: 3                 # numeric points (optional)
+estimate: 3                 # numeric points; `null` clears
 labels:                     # by name → resolved to labelIds on push
   - area:backend
   - type:refactor
 assignee: null              # or email / name / @me
 project: Example Project    # by name, for readability
-parent: TEAM-100            # optional; bare TEAM-NN identifier
+parent: TEAM-100            # bare TEAM-NN identifier; `null` clears
 # ---- server-owned; do not edit ----
 _server:
   id: <uuid>
+  identifier: TEAM-123
   url: https://linear.app/<workspace-slug>/issue/TEAM-123/...
+  state_id: <uuid>
+  state_name: Todo
+  state_type: unstarted
+  priority: 1
+  estimate: 3
+  label_ids: [{ id: <uuid>, name: area:backend }, ...]
+  assignee_id: null
+  assignee_name: null
+  assignee_email: null
+  title: "example issue title"
+  description_hash: <sha256>
   project_id: <uuid>
+  project_name: Example Project
+  parent_id: <uuid>
+  parent_identifier: TEAM-100
   updated_at: "2026-01-01T00:00:00Z"   # used for CAS
 ```
 
 On push, everything under `_server:` is ignored except `updated_at` (the
-staleness check input).
+staleness check input). Editable top-level fields — including `estimate`
+and `parent` — round-trip cleanly: edit in-place, run `lebop status` to see
+the diff, `lebop push` to apply.
 
 ### 7.3 `cache/<repo-hash>/projects/<uuid>/content.md`
 

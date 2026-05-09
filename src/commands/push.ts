@@ -35,7 +35,7 @@ import {
   resolveStateId,
 } from "../lib/resolve.ts";
 import { withRetry } from "../lib/retry.ts";
-import { linear } from "../lib/sdk.ts";
+import { linear, withClient } from "../lib/sdk.ts";
 
 interface PushOpts {
   team?: string;
@@ -370,6 +370,9 @@ async function buildIssueUpdateInput(
       case "priority":
         input.priority = plan.metadata.priority;
         break;
+      case "estimate":
+        input.estimate = plan.metadata.estimate;
+        break;
       case "labels":
         input.labelIds = resolveLabelIds(teamMetadata, plan.metadata.labels);
         break;
@@ -378,6 +381,20 @@ async function buildIssueUpdateInput(
           ? await resolveAssigneeId(teamMetadata, plan.metadata.assignee)
           : null;
         break;
+      case "parent": {
+        // Linear's parentId wants a UUID, not the TEAM-NN identifier.
+        // null clears the parent link.
+        if (!plan.metadata.parent) {
+          input.parentId = null;
+        } else {
+          const parent = await withClient((c) => c.issue(plan.metadata.parent ?? ""));
+          if (!parent) {
+            throw new Error(`parent issue not found: ${plan.metadata.parent}`);
+          }
+          input.parentId = parent.id;
+        }
+        break;
+      }
     }
   }
   return input;

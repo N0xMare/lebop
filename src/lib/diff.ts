@@ -1,6 +1,14 @@
 import { type IssueMetadata, type ProjectMetadata, sha256 } from "./cache.ts";
 
-export type IssueField = "title" | "description" | "state" | "priority" | "labels" | "assignee";
+export type IssueField =
+  | "title"
+  | "description"
+  | "state"
+  | "priority"
+  | "estimate"
+  | "labels"
+  | "assignee"
+  | "parent";
 
 export interface IssueChange {
   field: IssueField;
@@ -29,6 +37,10 @@ export function diffIssueMetadata(metadata: IssueMetadata, description: string):
     changes.push({ field: "priority", from: s.priority, to: metadata.priority });
   }
 
+  if ((metadata.estimate ?? null) !== (s.estimate ?? null)) {
+    changes.push({ field: "estimate", from: s.estimate, to: metadata.estimate });
+  }
+
   const localLabels = [...metadata.labels].sort();
   const remoteLabels = s.label_ids.map((l) => l.name).sort();
   if (!arraysEqual(localLabels, remoteLabels)) {
@@ -39,6 +51,10 @@ export function diffIssueMetadata(metadata: IssueMetadata, description: string):
   const remoteAssignee = s.assignee_email ?? s.assignee_name;
   if ((localAssignee ?? null) !== (remoteAssignee ?? null)) {
     changes.push({ field: "assignee", from: remoteAssignee, to: localAssignee });
+  }
+
+  if ((metadata.parent ?? null) !== (s.parent_identifier ?? null)) {
+    changes.push({ field: "parent", from: s.parent_identifier, to: metadata.parent });
   }
 
   return changes;

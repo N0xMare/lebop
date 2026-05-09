@@ -8,9 +8,11 @@ function issueFixture(desc: string): IssueMetadata {
     title: "original title",
     state: "Backlog",
     priority: 0,
+    estimate: null,
     labels: ["type:test"],
     assignee: "alice@example.com",
     project: "Example",
+    parent: null,
     _server: {
       id: "u-1",
       identifier: "UE-1",
@@ -19,6 +21,7 @@ function issueFixture(desc: string): IssueMetadata {
       state_name: "Backlog",
       state_type: "backlog",
       priority: 0,
+      estimate: null,
       label_ids: [{ id: "l-1", name: "type:test" }],
       assignee_id: "m-1",
       assignee_name: "alice",
@@ -27,6 +30,8 @@ function issueFixture(desc: string): IssueMetadata {
       description_hash: sha256(desc),
       project_id: "p-1",
       project_name: "Example",
+      parent_id: null,
+      parent_identifier: null,
       updated_at: "2026-04-23T00:00:00.000Z",
     },
   };
@@ -82,6 +87,72 @@ describe("diffIssueMetadata", () => {
     ];
     meta.labels = ["priority:p1", "type:test"];
     expect(diffIssueMetadata(meta, "body")).toEqual([]);
+  });
+
+  it("detects estimate add", () => {
+    const meta = issueFixture("body");
+    meta.estimate = 5;
+    const changes = diffIssueMetadata(meta, "body");
+    expect(changes.find((c) => c.field === "estimate")).toEqual({
+      field: "estimate",
+      from: null,
+      to: 5,
+    });
+  });
+
+  it("detects estimate change", () => {
+    const meta = issueFixture("body");
+    meta._server.estimate = 3;
+    meta.estimate = 8;
+    const changes = diffIssueMetadata(meta, "body");
+    expect(changes.find((c) => c.field === "estimate")).toEqual({
+      field: "estimate",
+      from: 3,
+      to: 8,
+    });
+  });
+
+  it("detects estimate clear", () => {
+    const meta = issueFixture("body");
+    meta._server.estimate = 5;
+    meta.estimate = null;
+    const changes = diffIssueMetadata(meta, "body");
+    expect(changes.find((c) => c.field === "estimate")).toEqual({
+      field: "estimate",
+      from: 5,
+      to: null,
+    });
+  });
+
+  it("detects parent add", () => {
+    const meta = issueFixture("body");
+    meta.parent = "UE-100";
+    const changes = diffIssueMetadata(meta, "body");
+    expect(changes.find((c) => c.field === "parent")).toEqual({
+      field: "parent",
+      from: null,
+      to: "UE-100",
+    });
+  });
+
+  it("detects parent change", () => {
+    const meta = issueFixture("body");
+    meta._server.parent_identifier = "UE-100";
+    meta._server.parent_id = "u-100";
+    meta.parent = "UE-200";
+    const changes = diffIssueMetadata(meta, "body");
+    expect(changes.find((c) => c.field === "parent")).toEqual({
+      field: "parent",
+      from: "UE-100",
+      to: "UE-200",
+    });
+  });
+
+  it("ignores parent unchanged", () => {
+    const meta = issueFixture("body");
+    meta._server.parent_identifier = "UE-100";
+    meta.parent = "UE-100";
+    expect(diffIssueMetadata(meta, "body").find((c) => c.field === "parent")).toBeUndefined();
   });
 
   it("detects label add", () => {
