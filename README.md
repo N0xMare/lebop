@@ -1,5 +1,10 @@
 # lebop
 
+[![ci](https://github.com/N0xMare/lebop/actions/workflows/ci.yml/badge.svg)](https://github.com/N0xMare/lebop/actions/workflows/ci.yml)
+[![release](https://img.shields.io/github/v/release/N0xMare/lebop?include_prereleases&sort=semver)](https://github.com/N0xMare/lebop/releases/latest)
+[![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![bun](https://img.shields.io/badge/runtime-bun-fbf0df)](https://bun.sh)
+
 **Best-for-agents Linear tool.** Read, write, and plan Linear projects from your shell or an AI agent, without leaving your editor. Treats Linear issues as markdown files you can edit, diff, and apply — the same way you already work with code. Ships as a CLI and an MCP server sharing one library core.
 
 Two shapes:
@@ -14,22 +19,25 @@ Think: `git`, but for Linear.
 ## Quick start
 
 ```sh
-# 1. Install Bun if you don't have it
-curl -fsSL https://bun.sh/install | bash
+# Install (macOS / Linux, x64 / arm64; verifies SHA256 against the release):
+curl -fsSL https://raw.githubusercontent.com/N0xMare/lebop/main/scripts/install.sh | bash
 
-# 2. Clone + install lebop
-git clone <repo-url>
-cd lebop
-bun install
-bun link
-ln -sf "$HOME/.bun/bin/lebop" /opt/homebrew/bin/lebop   # macOS; /usr/local/bin on Linux
-
-# 3. Authenticate with a Linear Personal API Key (Settings → API in Linear)
+# Authenticate with a Linear Personal API Key (Settings → API in Linear):
 lebop auth login
 
-# 4. Try it
+# Try it:
 lebop teams
 lebop list --assignee me --state-type started --limit 10
+```
+
+The installer drops a single self-contained binary (no Bun runtime needed) at `~/.local/bin/lebop` if writable, otherwise `/usr/local/bin/lebop` (sudo). Override with `LEBOP_INSTALL_DIR=…`. Pin a specific version with `LEBOP_VERSION=v1.0.0`.
+
+**From source** (Bun required):
+
+```sh
+git clone https://github.com/N0xMare/lebop && cd lebop
+bun install && bun link
+ln -sf "$HOME/.bun/bin/lebop" /opt/homebrew/bin/lebop   # macOS; /usr/local/bin on Linux
 ```
 
 Per-user config lives at `~/.lebop/config.yaml`; auth at `~/.lebop/auth.json` (mode 0600); local cache at `~/.lebop/cache/<repo-hash>/`. **Your repo working tree stays pristine — all runtime state is in `~/.lebop/`.**
@@ -270,4 +278,4 @@ See [`docs/spec.md`](docs/spec.md) for the full motivation, design decisions, co
 
 ## License
 
-TBD — license decision pending. Tracked in the v1.0 OSS-readiness work (see `docs/spec.md` §13.4).
+MIT — see [`LICENSE`](LICENSE). Contributions welcome; see [`CONTRIBUTING.md`](CONTRIBUTING.md) and the [Code of Conduct](CODE_OF_CONDUCT.md). Token-handling + reporting policy in [`SECURITY.md`](SECURITY.md).

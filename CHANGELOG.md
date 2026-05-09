@@ -37,6 +37,17 @@ ships (`v1.0.0`), this section will be moved into a versioned entry below.
   `lebop status` shows modified / clean / stale (remote-newer) sections.
 - **Shell completions** (`lebop completions <bash|zsh|fish>`) emitting
   scripts that complete top-level subcommands.
+- **One-liner installer** at `scripts/install.sh`: detects OS+arch,
+  fetches the matching binary from the GitHub release, verifies SHA256,
+  installs to `~/.local/bin` or `/usr/local/bin`. Honors
+  `LEBOP_VERSION`, `LEBOP_INSTALL_DIR`, `LEBOP_REPO`.
+- **CI + release automation**: `.github/workflows/ci.yml` (biome → tsc
+  → vitest on push/PR) and `.github/workflows/release.yml` (tag-
+  triggered, 4-platform `bun build --compile`, attached to release with
+  `SHA256SUMS`).
+- **OSS hygiene baseline**: `LICENSE` (MIT), `CONTRIBUTING.md`,
+  `SECURITY.md`, `CODE_OF_CONDUCT.md` (Contributor Covenant 2.1), issue
+  + PR templates, `package.json` publish fields, README badges.
 - **241 tests** passing under both `bun test` and `vitest run`.
 
 ### Documentation

@@ -1501,24 +1501,34 @@ differentiator (`lint_text`).
 
 ### 13.4 OSS hygiene & distribution
 
-- `LICENSE` (MIT)
-- `CHANGELOG.md` (Keep-a-Changelog format), `CONTRIBUTING.md`,
+Shipped:
+
+- `LICENSE` (MIT), `CHANGELOG.md` (Keep-a-Changelog), `CONTRIBUTING.md`,
   `SECURITY.md`, `CODE_OF_CONDUCT.md` (Contributor Covenant 2.1)
-- `.github/workflows/ci.yml` (bun install → biome → tsc → vitest)
-- `.github/workflows/release.yml` (`bun build --compile --target=
-  bun-{darwin,linux}-{x64,arm64}` → 4 platform binaries, attached to
-  GitHub releases with SHA256SUMS)
+- `.github/workflows/ci.yml` (bun install → biome → tsc → vitest on
+  every push/PR)
+- `.github/workflows/release.yml` — tag-triggered, builds 4 platform
+  binaries (`bun build --compile --target=bun-{darwin,linux}-{x64,arm64}`),
+  attaches them to a GitHub release with aggregated `SHA256SUMS`
 - `.github/ISSUE_TEMPLATE/{bug.yml,feature.yml}` +
   `PULL_REQUEST_TEMPLATE.md`
-- `package.json` publish fields: `license`, `repository`, `keywords`,
-  `author`, `homepage`, `bugs`, `files`
-- README badges, asciinema cast or animated demo
-- One-line installer script: `curl -fsSL …/install.sh | sh` — picks the
-  right binary, verifies SHA256, drops in `/usr/local/bin/lebop`
+- `package.json` publish fields: `license`, `author`, `repository`,
+  `homepage`, `bugs`, `keywords`, `files`, `publishConfig`,
+  `typecheck` script
+- `scripts/install.sh` — one-liner installer: detects OS+arch, downloads
+  the matching binary, verifies SHA256 against `SHA256SUMS`, drops in
+  `~/.local/bin` (or `/usr/local/bin` with sudo). Honors
+  `LEBOP_VERSION`, `LEBOP_INSTALL_DIR`, `LEBOP_REPO`.
+- README badges (CI status, latest release, license, runtime)
+- `lebop completions <bash|zsh|fish>` (see §8.12)
 
-**No npm publish, no Homebrew tap at first release** — GitHub Releases +
-install script is the single distribution path. npm + brew tap are
-candidates for a follow-up release after public adoption signal.
+Deferred (post-first-release):
+
+- asciinema cast or animated demo in README — needs a working public
+  release to record against
+- npm publish + Homebrew tap — GitHub Releases + install script is the
+  single distribution path at first release. npm + brew are follow-ups
+  after public adoption signal.
 
 ---
 
