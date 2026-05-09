@@ -24,6 +24,7 @@
   },
   "dependencies": {
     "@linear/sdk": "^82.1.0",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "chalk": "^5.4.0",
     "commander": "^12.1.0",
     "diff": "^9.0.0",

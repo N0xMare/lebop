@@ -1236,11 +1236,24 @@ Full parity except interactive-only ergonomics deliberately out of scope (§3).
 | **Raw** | `--paginate`, `--variable k=v` (with `@file` for file-backed values) |
 | **Completions** | `lebop completions bash\|zsh\|fish` |
 
-### 13.3 MCP server (`lebop mcp`)
+### 13.3 MCP server (`lebop mcp`) — ✅ scaffolded
 
 `lebop mcp` runs an MCP server over **stdio** — right shape for binary
 distribution and matches Cursor / Claude Desktop / Windsurf expectations.
 HTTP+SSE transport is post-release for hosted/multi-user setups.
+
+**Initial vertical slice** (lands with the scaffold; expanded coverage
+follows as §13.2 commands ship):
+
+- `list_issues` — wraps `lib/listIssues.ts` (paginates + filters + retries)
+- `add_relation` — wraps `lib/relations.ts::createLink` (idempotent at the
+  tuple level, so safe to retry)
+- `list_relations` — wraps `lib/relations.ts::listRelations`
+- `lint_text` — wraps `lib/lint.ts` (lebop differentiator; neither
+  linear-cli nor Linear's MCP exposes this)
+
+Per-tool `workspace` arg targets a specific workspace via the existing
+`LEBOP_WORKSPACE` env path; defaults to the auth file's `default`.
 
 - **Auth:** bearer-token via existing `~/.lebop/auth.json`. OAuth dynamic
   client registration (like Linear's hosted MCP) is post-release.

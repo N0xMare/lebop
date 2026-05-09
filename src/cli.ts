@@ -6,6 +6,7 @@ import { registerComment } from "./commands/comment.ts";
 import { registerDiff } from "./commands/diff.ts";
 import { registerLint } from "./commands/lint.ts";
 import { registerList } from "./commands/list.ts";
+import { registerMcp } from "./commands/mcp.ts";
 import { registerMine } from "./commands/mine.ts";
 import { registerNew } from "./commands/new.ts";
 import { registerPlan } from "./commands/plan.ts";
@@ -67,6 +68,7 @@ export async function run(rawArgv: string[]): Promise<void> {
   registerPlan(program);
 
   registerRaw(program);
+  registerMcp(program);
 
   try {
     await program.parseAsync(argv);
