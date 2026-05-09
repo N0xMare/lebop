@@ -8,7 +8,6 @@ import { registerCompletions } from "./commands/completions.ts";
 import { registerCycle } from "./commands/cycle.ts";
 import { registerDiff } from "./commands/diff.ts";
 import { registerDocument } from "./commands/document.ts";
-import { registerHelpSearch } from "./commands/help-search.ts";
 import { registerInitiativeUpdate } from "./commands/initiative-update.ts";
 import { registerInitiative } from "./commands/initiative.ts";
 import { registerLabel } from "./commands/label.ts";
@@ -93,7 +92,6 @@ export async function run(rawArgv: string[]): Promise<void> {
   registerPlan(program);
 
   registerSchema(program);
-  registerHelpSearch(program);
   registerRaw(program);
   registerMcp(program);
   registerCompletions(program);

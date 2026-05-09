@@ -14,14 +14,14 @@ ships (`v1.0.0`), this section will be moved into a versioned entry below.
 
 ### Added
 
-- **CLI**: 34 top-level commands covering discovery (`list`, `mine`,
+- **CLI**: 33 top-level commands covering discovery (`list`, `mine`,
   `projects`, `teams`), lifecycle (`show`, `pull`, `push`, `status`,
   `diff`, `lint`), taxonomy + PM CRUD (`set`, `comment`, `label`,
   `milestone`, `project`, `project-update`, `initiative`,
   `initiative-update`, `cycle`, `document`, `agent-session`, `team`,
   `link`, `new`, `archive`, `unarchive`, `relation`), declarative
   authoring (`plan`), plus `auth`, `raw`, `mcp`, `schema`,
-  `help-search`, `completions`. See `docs/spec.md` §8.
+  `completions`. See `docs/spec.md` §8.
 - **MCP server** (`lebop mcp`): 41 tools wrapping the same lib core
   exposed by the CLI. stdio transport. Per-tool `workspace` arg + sticky-
   state-safe env restoration via `safe()` decorator. `LebopError` `code`
@@ -62,6 +62,26 @@ ships (`v1.0.0`), this section will be moved into a versioned entry below.
   server, Linear API facts, discovered quirks, roadmap.
 - README with quick start + verb mental model.
 - `claude/skills/lebop/SKILL.md` + slash commands for Claude Code agents.
+
+### Fixed
+
+- **Multi-workspace `default_team` leakage**: a global `default_team`
+  config entry would apply across every Linear workspace, breaking
+  commands like `projects` / `list` / `set` / `push` whenever the active
+  workspace didn't have a team with that key. New
+  `workspace_team_defaults: { <slug>: <KEY> }` field in
+  `~/.lebop/config.yaml` resolves the team per active workspace; legacy
+  `default_team` still works as the global fallback. Active workspace
+  resolves from `LEBOP_WORKSPACE` env (set by `--workspace`) or the auth
+  file's stored default.
+
+### Removed
+
+- **`lebop help-search`** — Linear no longer exposes the
+  `searchDocumentation` GraphQL field this command wrapped, so every
+  invocation errored. Removed cleanly; no replacement needed (Linear's
+  product help search lives outside the public API). Use `lebop raw` if
+  you need to query a similar field after Linear restores one.
 
 ### Known limitations (deliberate, deferred)
 

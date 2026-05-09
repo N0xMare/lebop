@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { parse as parseYaml } from "yaml";
+import { loadAuth } from "./auth.ts";
 import { CONFIG_FILE } from "./paths.ts";
 import type { RepoConfig, UserConfig } from "./types.ts";
 
@@ -42,6 +43,20 @@ export function hashRepoRoot(absPath: string): string {
   return createHash("sha256").update(absPath).digest("hex").slice(0, 12);
 }
 
+/**
+ * Resolve the active Linear workspace slug for team-default lookup. Order:
+ * 1. `LEBOP_WORKSPACE` env (set by the top-level `--workspace <slug>` hook)
+ * 2. The auth file's `default` workspace
+ * Returns `undefined` if neither exists; callers should still resolve auth
+ * separately via `loadAuthForWorkspace`.
+ */
+async function resolveActiveWorkspace(): Promise<string | undefined> {
+  const fromEnv = process.env.LEBOP_WORKSPACE;
+  if (fromEnv) return fromEnv;
+  const stored = await loadAuth().catch(() => null);
+  return stored?.default;
+}
+
 export async function resolveConfig(options?: {
   cwd?: string;
   teamOverride?: string;
@@ -55,10 +70,21 @@ export async function resolveConfig(options?: {
     repoConfig = userConfig.repos[repoRoot];
   }
 
-  const team = options?.teamOverride ?? repoConfig.team ?? userConfig.default_team;
+  // Per-workspace team default: looked up by active workspace slug. Sits
+  // between repo-config and the global default_team in precedence so that
+  // (a) explicit --team always wins, (b) repo overrides win over per-
+  // workspace, (c) per-workspace wins over the legacy global default.
+  const activeWorkspace = await resolveActiveWorkspace();
+  const workspaceTeam = activeWorkspace
+    ? userConfig.workspace_team_defaults?.[activeWorkspace]
+    : undefined;
+
+  const team = options?.teamOverride ?? repoConfig.team ?? workspaceTeam ?? userConfig.default_team;
   if (!team) {
     throw new Error(
-      "no Linear team resolved. pass --team KEY, or set `default_team` / a per-repo `team` in ~/.lebop/config.yaml",
+      "no Linear team resolved. pass --team KEY, set `default_team` (single-workspace) " +
+        "or `workspace_team_defaults: { <slug>: <KEY> }` (multi-workspace) in ~/.lebop/config.yaml, " +
+        "or set a per-repo `team`.",
     );
   }
 

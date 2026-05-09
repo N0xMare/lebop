@@ -188,7 +188,14 @@ If two people already applied in parallel: archive one set via `lebop archive <i
 `~/.lebop/config.yaml` is optional — `lebop` works with just auth. Config extends behavior per-repo:
 
 ```yaml
-default_team: UE                               # used when no per-repo override matches
+default_team: UE                               # global fallback (single-workspace setups)
+
+# Multi-workspace? Set per-workspace defaults instead — keyed by Linear
+# workspace slug (the urlKey shown in `lebop auth list`):
+workspace_team_defaults:
+  unlink-xyz: UE
+  noxor: NOX
+
 workspaces:
   UE:
     url_prefix: https://linear.app/unlink-xyz  # needed by L004 (bracket issue refs)

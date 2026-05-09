@@ -60,6 +60,18 @@ export interface WorkspaceConfig {
 
 export interface UserConfig {
   default_team?: string;
+  /**
+   * Per-workspace team defaults keyed by Linear workspace slug (the
+   * `urlKey` — what appears after `linear.app/` in URLs and in
+   * `lebop auth list`). Lets a single config sensibly drive multiple
+   * workspaces without `default_team` leaking across boundaries.
+   *
+   * Example:
+   *   workspace_team_defaults:
+   *     unlink-xyz: UE
+   *     noxor: NOX
+   */
+  workspace_team_defaults?: Record<string, string>;
   workspaces?: Record<string, WorkspaceConfig>;
   repos?: Record<string, RepoConfig>;
 }

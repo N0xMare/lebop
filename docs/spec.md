@@ -227,7 +227,15 @@ it when you want a default team, per-repo overrides, or repo-scoped lint
 rules:
 
 ```yaml
-default_team: TEAM                              # used when no per-repo override matches
+default_team: TEAM                              # global fallback (single-workspace setups)
+
+# Multi-workspace? Set per-workspace team defaults keyed by Linear
+# workspace slug (the urlKey — what appears after `linear.app/` and in
+# `lebop auth list`). Avoids `default_team` leaking across workspaces.
+workspace_team_defaults:
+  acme-corp: ACM
+  acme-side-project: SIDE
+
 workspaces:
   TEAM:
     url_prefix: https://linear.app/your-workspace-slug   # required by L004
@@ -243,9 +251,16 @@ repos:
       - { pattern: '\bpr-(\d+)\b', suggest: '[#$1]', message: "Use [#N] form" }
 ```
 
-Resolution: cwd → walk up for git root → look up by repo path → fall back to
-`default_team`. When cwd isn't in a git repo, the cache is keyed by
-`_global` and `default_team` is used.
+Team resolution precedence (first match wins):
+1. `--team KEY` flag on the command
+2. Per-repo `team` (matched on absolute git-root path)
+3. `workspace_team_defaults[<active-workspace-slug>]` — active workspace
+   resolved from `LEBOP_WORKSPACE` env (set by `--workspace <slug>`) or
+   the auth file's stored default
+4. `default_team` (legacy / single-workspace fallback)
+
+When cwd isn't in a git repo, the cache is keyed by `_global` and the
+above team resolution still applies.
 
 ### 4.5 Claude Code integration (optional)
 
@@ -817,16 +832,6 @@ Runs the standard introspection query and emits SDL (or raw introspection
 JSON with `--json`). Pairs with `lebop raw` for offline schema-aware
 development: dump once, point your editor at the SDL, write queries, then
 send them via `raw`.
-
-### 8.10b `help-search` — search Linear's product documentation
-
-```
-lebop help-search "<term>" [--json]
-```
-
-Passthrough to Linear's `searchDocumentation` query. Returns help-center
-articles matching the term — useful for "how do I do X in Linear" agent
-queries.
 
 ### 8.11 `raw` — GraphQL escape hatch
 
@@ -1418,7 +1423,6 @@ Full parity except interactive-only ergonomics deliberately out of scope (§3).
 | **Documents** | `document list\|view\|create\|update\|delete` (workspace, project, issue scoped; `--edit` opens `$EDITOR`) |
 | **Agent sessions** | `agent-session list\|view` — Linear's first-class agent feature |
 | **Teams** | `team members [team-key] [--all]` (lists active + optional inactive members) |
-| **Help search** | `lebop help-search "..."` (Linear product help passthrough) |
 | **Schema** | `lebop schema [-o file]` (offline GraphQL schema dump) |
 | **Raw** | `--paginate`, `--variable k=v` (with `@file` for file-backed values) |
 | **Completions** | `lebop completions bash\|zsh\|fish` |
@@ -1494,8 +1498,6 @@ primitives that agents can do via `lib_use_existing` patterns:
   output (limits, redaction) is settled.
 - `link_url_to_issue` — small wrapper around `attachmentLinkURL`. Lift
   from `commands/link.ts` next.
-- `search_documentation` — `lebop help-search` CLI verb exists; lift the
-  query into a lib function and wire as MCP.
 - Issue + comment CRUD as MCP tools (`create_issue`, `update_issue`,
   `archive_issue`, `unarchive_issue`, `add_comment`, `update_comment`,
   `delete_comment`, `list_comments`) — straightforward to add; deferred
