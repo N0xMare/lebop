@@ -26,6 +26,7 @@ import { paginateRaw } from "../lib/paginate.ts";
 import {
   type FetchedIssue,
   type FetchedProject,
+  MORE_COMMENTS_QUERY,
   PULL_PROJECT_HEADER_QUERY,
   PULL_PROJECT_ISSUES_QUERY,
   buildPullIssuesQuery,
@@ -153,13 +154,39 @@ export function registerPull(program: Command): void {
           }
         }
         if (withComments) {
+          // Issues with >250 comments hit the multi-alias fragment cap.
+          // Fetch the remaining pages per-issue, picking up from the existing
+          // endCursor so we don't re-fetch the first 250.
           const overflow = fetched.filter((i) => i.comments?.pageInfo.hasNextPage);
-          if (overflow.length > 0) {
-            const ids = overflow.map((i) => i.identifier).join(", ");
-            const plural = overflow.length === 1 ? "" : "s";
-            process.stderr.write(
-              `${chalk.yellow("warning:")} ${overflow.length} issue${plural} have more than 250 comments; only the first 250 were fetched (${ids})\n`,
+          for (const issue of overflow) {
+            const startCursor = issue.comments?.pageInfo.endCursor;
+            if (!startCursor || !issue.comments) continue;
+            type CommentsPage = {
+              data: {
+                issue: {
+                  comments: {
+                    nodes: NonNullable<FetchedIssue["comments"]>["nodes"];
+                    pageInfo: { hasNextPage: boolean; endCursor: string | null };
+                  };
+                } | null;
+              };
+            };
+            const more = await paginateRaw<
+              NonNullable<FetchedIssue["comments"]>["nodes"][number],
+              CommentsPage
+            >(
+              ({ first, after }) =>
+                client.client.rawRequest(MORE_COMMENTS_QUERY, {
+                  id: issue.identifier,
+                  first,
+                  after,
+                }) as Promise<CommentsPage>,
+              (response) => response.data.issue?.comments ?? null,
+              { pageSize: 250, initialAfter: startCursor },
             );
+            issue.comments.nodes.push(...more);
+            issue.comments.pageInfo.hasNextPage = false;
+            issue.comments.pageInfo.endCursor = null;
           }
         }
         for (const issue of fetched) {

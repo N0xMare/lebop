@@ -15,14 +15,18 @@ import {
   diffIssueMetadata,
   diffProjectMetadata,
 } from "../lib/diff.ts";
+import { buildCasQuery } from "../lib/pushMutations.ts";
+import { withRetry } from "../lib/retry.ts";
+import { linear } from "../lib/sdk.ts";
 
 export function registerStatus(program: Command): void {
   program
     .command("status")
     .description("git-like status for the current repo's lebop cache")
     .option("--team <key>", "override the resolved team")
+    .option("--no-remote", "skip the remote-staleness check (faster, no Linear API calls)")
     .option("--json", "emit structured status")
-    .action(async (opts: { team?: string; json?: boolean }) => {
+    .action(async (opts: { team?: string; json?: boolean; remote?: boolean }) => {
       const config = await resolveConfig({ teamOverride: opts.team });
 
       const issueIds = await listCachedIssues(config.repoHash);
@@ -62,6 +66,37 @@ export function registerStatus(program: Command): void {
           r !== null && r.changes.length === 0,
       );
 
+      // Detect stale entries: remote `updatedAt` newer than local `_server.updated_at`.
+      // Only check clean entries — modified ones already need attention regardless.
+      // Skipped with `--no-remote` (faster; offline-friendly).
+      const staleIds = new Set<string>();
+      const staleErrors: { id: string; error: string }[] = [];
+      const checkRemote = opts.remote !== false && cleanIssues.length > 0;
+      if (checkRemote) {
+        try {
+          const client = await linear();
+          const ids = cleanIssues.map((r) => r.id);
+          const query = buildCasQuery(ids);
+          const response = (await withRetry(() => client.client.rawRequest(query))) as {
+            data: Record<string, { id: string; identifier: string; updatedAt: string } | null>;
+          };
+          ids.forEach((id, i) => {
+            const entry = cleanIssues[i];
+            if (!entry) return;
+            const remote = response.data[`a${i}`];
+            if (!remote) return; // missing-remote — surface elsewhere
+            if (Date.parse(remote.updatedAt) > Date.parse(entry.metadata._server.updated_at)) {
+              staleIds.add(id);
+            }
+          });
+        } catch (err) {
+          // Best-effort: if the remote check fails, fall through to local-only status.
+          staleErrors.push({ id: "*", error: (err as Error).message });
+        }
+      }
+      const staleEntries = cleanIssues.filter((r) => staleIds.has(r.id));
+      const trulyCleanIssues = cleanIssues.filter((r) => !staleIds.has(r.id));
+
       if (opts.json) {
         process.stdout.write(
           `${JSON.stringify(
@@ -81,8 +116,10 @@ export function registerStatus(program: Command): void {
                   fields: r.changes.map((c) => c.field),
                 })),
               },
+              stale: staleEntries.map((r) => r.id),
+              stale_check: checkRemote ? (staleErrors.length > 0 ? "errored" : "ok") : "skipped",
               clean: {
-                issues: cleanIssues.map((r) => r.id),
+                issues: trulyCleanIssues.map((r) => r.id),
                 projects: cleanProjects.map((r) => r.id),
               },
             },
@@ -98,9 +135,10 @@ export function registerStatus(program: Command): void {
       );
 
       const totalModified = modifiedIssues.length + modifiedProjects.length;
-      const totalClean = cleanIssues.length + cleanProjects.length;
+      const totalStale = staleEntries.length;
+      const totalClean = trulyCleanIssues.length + cleanProjects.length;
 
-      if (totalModified === 0 && totalClean === 0) {
+      if (totalModified === 0 && totalStale === 0 && totalClean === 0) {
         process.stdout.write("cache is empty. run `lebop pull` to materialize issues.\n");
         return;
       }
@@ -120,13 +158,30 @@ export function registerStatus(program: Command): void {
         process.stdout.write("\n");
       }
 
+      if (totalStale > 0) {
+        process.stdout.write(
+          `${chalk.cyan("stale (remote newer — needs pull)")} (${totalStale}):\n`,
+        );
+        for (const r of staleEntries) {
+          process.stdout.write(`  ${chalk.bold(r.id)}\n`);
+        }
+        process.stdout.write(`  ${chalk.gray("run `lebop pull <id> --refresh` to update")}\n\n`);
+      }
+
       if (totalClean > 0) {
         process.stdout.write(`${chalk.green("clean")} (${totalClean}):\n`);
-        const ids = cleanIssues.map((r) => r.id);
+        const ids = trulyCleanIssues.map((r) => r.id);
         process.stdout.write(`  ${ids.join(" ")}\n`);
         for (const r of cleanProjects) {
           process.stdout.write(`  project/${r.metadata.name}\n`);
         }
+      }
+
+      if (staleErrors.length > 0) {
+        process.stdout.write(
+          `\n${chalk.yellow("note:")} remote-staleness check failed (${staleErrors[0]?.error ?? "unknown"}). ` +
+            `run with ${chalk.cyan("--no-remote")} to skip.\n`,
+        );
       }
     });
 }

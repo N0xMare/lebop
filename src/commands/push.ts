@@ -34,6 +34,7 @@ import {
   resolveLabelIds,
   resolveStateId,
 } from "../lib/resolve.ts";
+import { withRetry } from "../lib/retry.ts";
 import { linear } from "../lib/sdk.ts";
 
 interface PushOpts {
@@ -168,10 +169,12 @@ export function registerPush(program: Command): void {
           }
 
           try {
-            const response = (await client.client.rawRequest(ISSUE_UPDATE_MUTATION, {
-              id: plan.metadata._server.id,
-              input,
-            })) as { data: { issueUpdate: { success: boolean; issue: FetchedIssue } } };
+            const response = (await withRetry(() =>
+              client.client.rawRequest(ISSUE_UPDATE_MUTATION, {
+                id: plan.metadata._server.id,
+                input,
+              }),
+            )) as { data: { issueUpdate: { success: boolean; issue: FetchedIssue } } };
             const updated = response.data.issueUpdate.issue;
             // Linear re-renders markdown (blank lines around ---, etc.), so store the
             // server's normalized description — otherwise `description_hash` diverges
@@ -235,10 +238,12 @@ export function registerPush(program: Command): void {
             continue;
           }
           try {
-            const response = (await client.client.rawRequest(PROJECT_UPDATE_MUTATION, {
-              id: plan.metadata._server.id,
-              input,
-            })) as {
+            const response = (await withRetry(() =>
+              client.client.rawRequest(PROJECT_UPDATE_MUTATION, {
+                id: plan.metadata._server.id,
+                input,
+              }),
+            )) as {
               data: { projectUpdate: { success: boolean; project: FetchedProject } };
             };
             const updated = response.data.projectUpdate.project;
@@ -332,7 +337,7 @@ async function detectStaleIssues(plans: IssuePlan[]): Promise<Set<string>> {
   if (plans.length === 0) return new Set();
   const client = await linear();
   const query = buildCasQuery(plans.map((p) => p.identifier));
-  const response = (await client.client.rawRequest(query)) as {
+  const response = (await withRetry(() => client.client.rawRequest(query))) as {
     data: Record<string, { id: string; identifier: string; updatedAt: string } | null>;
   };
   const stale = new Set<string>();

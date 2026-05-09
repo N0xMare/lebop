@@ -10,7 +10,12 @@
  * Both support a `max` cap (default 10_000) so a runaway query can't pull
  * the entire workspace into memory by accident, and a `pageSize` (default
  * 100; Linear's per-request max is 250).
+ *
+ * Each page request is wrapped with `withRetry` so transient 5xx errors and
+ * 429 rate limits are handled automatically.
  */
+
+import { withRetry } from "./retry.ts";
 
 const DEFAULT_PAGE_SIZE = 100;
 const SAFETY_CAP = 10_000;
@@ -20,6 +25,13 @@ export interface PaginateOpts {
   pageSize?: number;
   /** Hard cap on total items returned. Default 10_000 — set Number.POSITIVE_INFINITY to disable. */
   max?: number;
+  /**
+   * Cursor to start from. Useful when continuing a partial paginated read —
+   * e.g. the multi-alias issue query returned the first page of comments
+   * inline, and you want to fetch the rest starting from its `endCursor`.
+   * Default undefined (start from the beginning).
+   */
+  initialAfter?: string;
 }
 
 interface PageInfo {
@@ -48,12 +60,14 @@ export async function paginateConnection<T>(
   const pageSize = opts.pageSize ?? DEFAULT_PAGE_SIZE;
   const max = opts.max ?? SAFETY_CAP;
   const out: T[] = [];
-  let after: string | undefined;
+  let after: string | undefined = opts.initialAfter;
 
   while (out.length < max) {
     const remaining = max - out.length;
     const first = Math.min(pageSize, remaining);
-    const page = await fetchPage(after === undefined ? { first } : { first, after });
+    const page = await withRetry(() =>
+      fetchPage(after === undefined ? { first } : { first, after }),
+    );
     out.push(...page.nodes);
     if (!page.pageInfo.hasNextPage || !page.pageInfo.endCursor) break;
     after = page.pageInfo.endCursor;
@@ -78,12 +92,14 @@ export async function paginateRaw<T, R>(
   const pageSize = opts.pageSize ?? DEFAULT_PAGE_SIZE;
   const max = opts.max ?? SAFETY_CAP;
   const out: T[] = [];
-  let after: string | undefined;
+  let after: string | undefined = opts.initialAfter;
 
   while (out.length < max) {
     const remaining = max - out.length;
     const first = Math.min(pageSize, remaining);
-    const response = await fetchPage(after === undefined ? { first } : { first, after });
+    const response = await withRetry(() =>
+      fetchPage(after === undefined ? { first } : { first, after }),
+    );
     const conn = pickConnection(response);
     if (!conn) break;
     out.push(...conn.nodes);

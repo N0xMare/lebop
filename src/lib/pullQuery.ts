@@ -113,6 +113,35 @@ export function buildPullIssuesQuery(
 }
 
 /**
+ * Continuation comments fetch for any issue whose multi-alias `comments`
+ * fragment hit the 250-per-page cap. Use with `paginateRaw` and
+ * `initialAfter` set to the original `pageInfo.endCursor`.
+ */
+export const MORE_COMMENTS_QUERY = /* GraphQL */ `
+  query MoreComments($id: String!, $first: Int!, $after: String) {
+    issue(id: $id) {
+      comments(first: $first, after: $after) {
+        nodes {
+          id
+          body
+          createdAt
+          updatedAt
+          user {
+            id
+            name
+            email
+          }
+        }
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+      }
+    }
+  }
+`;
+
+/**
  * Project header (no issues sub-list). Pair with `PULL_PROJECT_ISSUES_QUERY`
  * to walk all child issues regardless of count.
  */
