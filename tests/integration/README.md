@@ -2,7 +2,8 @@
 
 These tests spawn `bin/lebop` as a child process and assert against
 real stdout / stderr / exit codes. The harness mocks Linear's GraphQL
-endpoint via a local `Bun.serve` instance; the SDK is pointed at it via
+endpoint via a local `node:http` server (so it works under both
+`vitest run` and `bun test`); the SDK is pointed at it via
 `LEBOP_API_URL`. Auth is faked by writing a valid `auth.json` to a temp
 `LEBOP_HOME`.
 
@@ -66,3 +67,16 @@ argv preprocessing, top-level error handler, exit codes, NO_COLOR
 behavior. End-to-end subprocess tests catch these. The cost is per-test
 binary boot (~50–100ms); keep the suite small + targeted, and let
 lib-level tests (`tests/*.test.ts`) cover unit-level logic.
+
+## Per-test isolation
+
+Each test should leave the harness clean for the next. Pattern:
+
+```ts
+afterEach(() => {
+  mock.reset();   // clear queued responses + request log
+});
+```
+
+Without this, a test that queues 3 responses but consumes 2 leaks the
+third into the next test.

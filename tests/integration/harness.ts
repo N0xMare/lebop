@@ -1,8 +1,9 @@
 /**
- * Integration-test harness. Spins up a local Bun.serve mock for Linear's
- * GraphQL endpoint, spawns `bin/lebop` as a child process with `LEBOP_HOME`
- * and `LEBOP_API_URL` overrides, captures stdout/stderr/exit, and returns
- * everything for assertion.
+ * Integration-test harness. Spins up a local mock for Linear's GraphQL
+ * endpoint via `node:http` (works under both `vitest run` and `bun test`),
+ * spawns `bin/lebop` as a child process with `LEBOP_HOME` and `LEBOP_API_URL`
+ * overrides, captures stdout/stderr/exit, and returns everything for
+ * assertion.
  *
  * Usage from a test file:
  *
@@ -30,6 +31,7 @@
 
 import { spawn } from "node:child_process";
 import { mkdtemp, writeFile } from "node:fs/promises";
+import { type AddressInfo, createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -58,52 +60,75 @@ export interface MockServer {
   respond: (response: MockResponse) => void;
   /** Get the body of the request that consumed `index`-th response. */
   requestAt: (index: number) => { query: string; variables: Record<string, unknown> } | undefined;
+  /** Reset the FIFO queue + request log. Use in `afterEach` to isolate tests. */
+  reset: () => void;
   /** Stop the server. */
   stop: () => Promise<void>;
 }
 
 /**
- * Boot a Bun.serve instance that responds to GraphQL POST requests with
- * queued mock responses (FIFO). Each call to `respond()` enqueues one
- * response; the next inbound request consumes it. Returns the server URL
- * (for `LEBOP_API_URL`) plus controls.
+ * Boot a `node:http` server that responds to GraphQL POST requests with
+ * queued mock responses (FIFO). Works under both `vitest run` (Node) and
+ * `bun test` (Bun). Each call to `respond()` enqueues one response; the
+ * next inbound request consumes it. Returns the server URL (for
+ * `LEBOP_API_URL`) plus controls.
  */
 export async function startMockLinear(): Promise<MockServer> {
   const queue: MockResponse[] = [];
   const log: { query: string; variables: Record<string, unknown> }[] = [];
 
-  // Bun-only: `Bun.serve` is the test fixture; tests run under `bun test`.
-  const server = Bun.serve({
-    port: 0,
-    async fetch(req) {
-      if (req.method !== "POST") {
-        return new Response("method not allowed", { status: 405 });
+  const server = createServer((req, res) => {
+    if (req.method !== "POST") {
+      res.writeHead(405);
+      res.end("method not allowed");
+      return;
+    }
+    const chunks: Buffer[] = [];
+    req.on("data", (chunk: Buffer) => chunks.push(chunk));
+    req.on("end", () => {
+      const raw = Buffer.concat(chunks).toString("utf8");
+      let body: { query?: string; variables?: Record<string, unknown> };
+      try {
+        body = JSON.parse(raw);
+      } catch {
+        res.writeHead(400, { "content-type": "application/json" });
+        res.end(JSON.stringify({ errors: [{ message: "bad request body" }] }));
+        return;
       }
-      const body = (await req.json()) as { query: string; variables?: Record<string, unknown> };
-      log.push({ query: body.query, variables: body.variables ?? {} });
+      log.push({ query: body.query ?? "", variables: body.variables ?? {} });
       const next = queue.shift();
       if (!next) {
-        return Response.json(
-          { errors: [{ message: "no mock response queued for this request" }] },
-          { status: 500 },
+        res.writeHead(500, { "content-type": "application/json" });
+        res.end(
+          JSON.stringify({ errors: [{ message: "no mock response queued for this request" }] }),
         );
+        return;
       }
       const payload: Record<string, unknown> = {};
       if (next.data !== undefined) payload.data = next.data;
       if (next.errors !== undefined) payload.errors = next.errors;
-      return Response.json(payload, { status: next.status ?? 200 });
-    },
+      res.writeHead(next.status ?? 200, { "content-type": "application/json" });
+      res.end(JSON.stringify(payload));
+    });
   });
 
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const port = (server.address() as AddressInfo).port;
+
   return {
-    url: `http://localhost:${server.port}/graphql`,
+    url: `http://127.0.0.1:${port}/graphql`,
     respond: (response) => {
       queue.push(response);
     },
     requestAt: (index) => log[index],
-    stop: async () => {
-      server.stop(true);
+    reset: () => {
+      queue.length = 0;
+      log.length = 0;
     },
+    stop: () =>
+      new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      }),
   };
 }
 

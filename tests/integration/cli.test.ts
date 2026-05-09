@@ -12,6 +12,13 @@ beforeAll(async () => {
   env = { LEBOP_HOME: lebopHome, LEBOP_API_URL: mock.url };
 });
 
+afterEach(() => {
+  // Clear any queued mock responses + request log so tests are independent.
+  // Without this, a test that queues N but consumes <N leaks the rest into
+  // the next test.
+  mock.reset();
+});
+
 afterAll(async () => {
   await mock.stop();
   await rm(lebopHome, { recursive: true, force: true });
