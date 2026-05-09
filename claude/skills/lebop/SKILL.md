@@ -20,7 +20,10 @@ If `which lebop` returns nothing, the tool isn't installed in this environment �
 | **Read** one issue inline | `show <id>` | no cache write; for "what is this?" |
 | **Edit** description / project content | `pull <id>` → edit `description.md` → `push` | round-trips through `~/.lebop/cache/` |
 | Change one field | `set <field> <id> <value>` | `title | state | priority | labels | assignee | links` |
-| Add a comment | `comment <id> --body "…"` (or `--body-file`, `--stdin`) | direct mutation, no cache |
+| Add a comment | `comment add <id> --body "…"` (or `--body-file`, `--stdin`; `--parent <comment-id>` for replies) | direct mutation, no cache |
+| List comments | `comment list <id>` | paginated, chronological |
+| Edit a comment | `comment update <comment-id> --body "…"` | by comment UUID (visible in `comment list`) |
+| Delete a comment | `comment delete <comment-id>` | by comment UUID |
 | Link issues | `set links <id> +blocks:<id2>` | also `+blocked-by`, `+related`, `+duplicates`, `+duplicated-by` |
 | Create an issue | `new --title "…" [--project … --state … --label …]` | |
 | Archive issue(s) | `archive <id…>` | reversible from Linear UI |

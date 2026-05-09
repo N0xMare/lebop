@@ -586,15 +586,21 @@ See §6.5.
 
 See §6.
 
-### 8.6 `comment`
+### 8.6 `comment` — full CRUD
 
 ```
-lebop comment <ID> --body "text"
-lebop comment <ID> --body-file FILE
-lebop comment <ID> --stdin           # body from stdin
+lebop comment add <ID> [--body TEXT | --body-file FILE | --stdin]
+                       [--parent COMMENT-UUID]      # reply (threads)
+                       [--json]
+lebop comment list <ID> [--json]
+lebop comment update <COMMENT-UUID> [--body TEXT | --body-file FILE | --stdin] [--json]
+lebop comment delete <COMMENT-UUID> [--json]
 ```
 
-Direct mutation; no cache round-trip. Comment edit/delete is deferred.
+Direct mutations on comments; no cache round-trip. `add` is the new
+canonical form for what was previously `lebop comment <id>` — the bare
+form is gone, prefix with `add`. `list` is paginated and chronological;
+`update`/`delete` take the comment's UUID (visible in `list` output).
 
 ### 8.6a `relation` — first-class link mutations
 
