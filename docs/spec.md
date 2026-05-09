@@ -662,6 +662,38 @@ lebop cycle view <id> [--json]
 
 Read-only. Cycle scheduling lives in the Linear UI.
 
+### 8.4f `document` — Linear documents (CRUD)
+
+```
+lebop document list [--project NAME-OR-ID] [--limit N] [--json]
+lebop document view <id> [--json]
+lebop document create <title> --project NAME-OR-ID [--content | --content-file | --stdin] [--icon NAME] [--json]
+lebop document update <id> [--title] [--content | --content-file | --stdin] [--icon] [--json]
+lebop document delete <id> [--json]
+```
+
+Documents must be attached to a project (Linear's API requires `projectId`
+on create). `view` includes the full content body.
+
+### 8.4g `agent-session` — Linear agent sessions (read-only)
+
+```
+lebop agent-session list [--status NAME] [--issue-id UUID] [--limit N] [--json]
+lebop agent-session view <id> [--json]
+```
+
+Read-only access to Linear's first-class agent-activity surface. lebop
+doesn't create or end sessions; that's the agent's job.
+
+### 8.4h `team` — team-scoped operations
+
+```
+lebop team members [team-key] [--all] [--json]
+```
+
+Currently only `members` ships. `team create / delete / autolinks` are
+managed in the Linear UI. Plural `lebop teams` remains the canonical list.
+
 ### 8.5a `label` — manage Linear labels
 
 ```

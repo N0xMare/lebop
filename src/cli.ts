@@ -1,10 +1,12 @@
 import chalk from "chalk";
 import { Command } from "commander";
+import { registerAgentSession } from "./commands/agent-session.ts";
 import { registerArchive } from "./commands/archive.ts";
 import { registerAuth } from "./commands/auth.ts";
 import { registerComment } from "./commands/comment.ts";
 import { registerCycle } from "./commands/cycle.ts";
 import { registerDiff } from "./commands/diff.ts";
+import { registerDocument } from "./commands/document.ts";
 import { registerInitiativeUpdate } from "./commands/initiative-update.ts";
 import { registerInitiative } from "./commands/initiative.ts";
 import { registerLabel } from "./commands/label.ts";
@@ -26,6 +28,7 @@ import { registerSchema } from "./commands/schema.ts";
 import { registerSet } from "./commands/set.ts";
 import { registerShow } from "./commands/show.ts";
 import { registerStatus } from "./commands/status.ts";
+import { registerTeam } from "./commands/team.ts";
 import { registerTeams } from "./commands/teams.ts";
 import { registerUnarchive } from "./commands/unarchive.ts";
 import { preprocessSetArgv } from "./lib/argvPrep.ts";
@@ -76,6 +79,9 @@ export async function run(rawArgv: string[]): Promise<void> {
   registerInitiative(program);
   registerInitiativeUpdate(program);
   registerCycle(program);
+  registerDocument(program);
+  registerAgentSession(program);
+  registerTeam(program);
 
   registerNew(program);
   registerArchive(program);

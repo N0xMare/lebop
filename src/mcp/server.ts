@@ -14,7 +14,15 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
+import { getAgentSession, listAgentSessions } from "../lib/agentSessions.ts";
 import { getCycle, listCycles } from "../lib/cycles.ts";
+import {
+  createDocument,
+  deleteDocument,
+  getDocument,
+  listDocuments,
+  updateDocument,
+} from "../lib/documents.ts";
 import { LebopError } from "../lib/errors.ts";
 import {
   type InitiativeHealth,
@@ -54,6 +62,7 @@ import {
 } from "../lib/projects.ts";
 import { LINK_KINDS, type LinkKind, createLink, listRelations } from "../lib/relations.ts";
 import { withClient } from "../lib/sdk.ts";
+import { listTeamMembers } from "../lib/teamMembers.ts";
 
 export async function startMcpServer(): Promise<void> {
   const server = new McpServer({
@@ -884,6 +893,175 @@ function registerTools(server: McpServer): void {
       withWorkspace(args.workspace);
       const cycle = await getCycle(args.id);
       return text({ schema_version: 1, cycle });
+    },
+  );
+
+  // ---------- documents ----------
+  server.registerTool(
+    "list_documents",
+    {
+      title: "List Linear documents",
+      description: "Pass project (name or UUID) to filter to one project's docs.",
+      inputSchema: {
+        project: z.string().optional(),
+        limit: z.number().int().min(0).optional(),
+        workspace: z.string().optional(),
+      },
+    },
+    async (args) => {
+      withWorkspace(args.workspace);
+      let projectId: string | undefined;
+      if (args.project) {
+        const resolved = await resolveProjectId(args.project);
+        if (!resolved) throw new Error(`project not found: ${args.project}`);
+        projectId = resolved;
+      }
+      const limit = args.limit ?? 50;
+      const max = limit === 0 ? Number.POSITIVE_INFINITY : limit;
+      const documents = await listDocuments({ projectId, max });
+      return text({ schema_version: 1, count: documents.length, documents });
+    },
+  );
+
+  server.registerTool(
+    "get_document",
+    {
+      title: "Get one document by UUID (with content)",
+      description: "Returns null if not found.",
+      inputSchema: { id: z.string(), workspace: z.string().optional() },
+    },
+    async (args) => {
+      withWorkspace(args.workspace);
+      const document = await getDocument(args.id);
+      return text({ schema_version: 1, document });
+    },
+  );
+
+  server.registerTool(
+    "create_document",
+    {
+      title: "Create a document",
+      description: "Must be attached to a project. NOT retry-wrapped.",
+      inputSchema: {
+        title: z.string(),
+        project: z.string().describe("Project name or UUID."),
+        content: z.string().optional(),
+        icon: z.string().optional(),
+        workspace: z.string().optional(),
+      },
+    },
+    async (args) => {
+      withWorkspace(args.workspace);
+      const projectId = await resolveProjectId(args.project);
+      if (!projectId) throw new Error(`project not found: ${args.project}`);
+      const document = await createDocument({
+        title: args.title,
+        projectId,
+        content: args.content,
+        icon: args.icon,
+      });
+      return text({ schema_version: 1, document });
+    },
+  );
+
+  server.registerTool(
+    "update_document",
+    {
+      title: "Update a document",
+      description: "Idempotent at the value level — safe to retry.",
+      inputSchema: {
+        id: z.string(),
+        title: z.string().optional(),
+        content: z.string().optional(),
+        icon: z.string().optional(),
+        workspace: z.string().optional(),
+      },
+    },
+    async (args) => {
+      withWorkspace(args.workspace);
+      const input: Parameters<typeof updateDocument>[1] = {};
+      if (args.title !== undefined) input.title = args.title;
+      if (args.content !== undefined) input.content = args.content;
+      if (args.icon !== undefined) input.icon = args.icon;
+      if (Object.keys(input).length === 0) throw new Error("nothing to update");
+      const document = await updateDocument(args.id, input);
+      return text({ schema_version: 1, document });
+    },
+  );
+
+  server.registerTool(
+    "delete_document",
+    {
+      title: "Delete a document permanently",
+      description: "NOT retry-wrapped.",
+      inputSchema: { id: z.string(), workspace: z.string().optional() },
+    },
+    async (args) => {
+      withWorkspace(args.workspace);
+      const success = await deleteDocument(args.id);
+      return text({ schema_version: 1, id: args.id, success });
+    },
+  );
+
+  // ---------- agent sessions ----------
+  server.registerTool(
+    "list_agent_sessions",
+    {
+      title: "List Linear agent sessions",
+      description: "Read-only. Filter by status or scope to one issue.",
+      inputSchema: {
+        status: z.string().optional(),
+        issue_id: z.string().optional().describe("Issue UUID."),
+        limit: z.number().int().min(0).optional(),
+        workspace: z.string().optional(),
+      },
+    },
+    async (args) => {
+      withWorkspace(args.workspace);
+      const limit = args.limit ?? 50;
+      const max = limit === 0 ? Number.POSITIVE_INFINITY : limit;
+      const sessions = await listAgentSessions({
+        status: args.status,
+        issueId: args.issue_id,
+        max,
+      });
+      return text({ schema_version: 1, count: sessions.length, agent_sessions: sessions });
+    },
+  );
+
+  server.registerTool(
+    "get_agent_session",
+    {
+      title: "Get one agent session by UUID",
+      description: "Returns null if not found.",
+      inputSchema: { id: z.string(), workspace: z.string().optional() },
+    },
+    async (args) => {
+      withWorkspace(args.workspace);
+      const session = await getAgentSession(args.id);
+      return text({ schema_version: 1, agent_session: session });
+    },
+  );
+
+  // ---------- team members ----------
+  server.registerTool(
+    "list_team_members",
+    {
+      title: "List members of a team",
+      description: "Pass include_inactive=true to see deactivated users.",
+      inputSchema: {
+        team_key: z.string(),
+        include_inactive: z.boolean().optional(),
+        workspace: z.string().optional(),
+      },
+    },
+    async (args) => {
+      withWorkspace(args.workspace);
+      const members = await listTeamMembers({
+        teamKey: args.team_key,
+        includeInactive: args.include_inactive,
+      });
+      return text({ schema_version: 1, team: args.team_key, count: members.length, members });
     },
   );
 
