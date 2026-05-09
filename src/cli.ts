@@ -4,9 +4,11 @@ import { registerArchive } from "./commands/archive.ts";
 import { registerAuth } from "./commands/auth.ts";
 import { registerComment } from "./commands/comment.ts";
 import { registerDiff } from "./commands/diff.ts";
+import { registerLabel } from "./commands/label.ts";
 import { registerLint } from "./commands/lint.ts";
 import { registerList } from "./commands/list.ts";
 import { registerMcp } from "./commands/mcp.ts";
+import { registerMilestone } from "./commands/milestone.ts";
 import { registerMine } from "./commands/mine.ts";
 import { registerNew } from "./commands/new.ts";
 import { registerPlan } from "./commands/plan.ts";
@@ -15,6 +17,7 @@ import { registerPull } from "./commands/pull.ts";
 import { registerPush } from "./commands/push.ts";
 import { registerRaw } from "./commands/raw.ts";
 import { registerRelation } from "./commands/relation.ts";
+import { registerSchema } from "./commands/schema.ts";
 import { registerSet } from "./commands/set.ts";
 import { registerShow } from "./commands/show.ts";
 import { registerStatus } from "./commands/status.ts";
@@ -61,12 +64,15 @@ export async function run(rawArgv: string[]): Promise<void> {
   registerComment(program);
   registerSet(program);
   registerRelation(program);
+  registerLabel(program);
+  registerMilestone(program);
 
   registerNew(program);
   registerArchive(program);
   registerUnarchive(program);
   registerPlan(program);
 
+  registerSchema(program);
   registerRaw(program);
   registerMcp(program);
 

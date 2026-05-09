@@ -15,8 +15,17 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { LebopError } from "../lib/errors.ts";
+import { createLabel, deleteLabel, listLabels, resolveLabelByName } from "../lib/labels.ts";
 import { lintContent } from "../lib/lint.ts";
 import { listIssues } from "../lib/listIssues.ts";
+import {
+  createMilestone,
+  deleteMilestone,
+  getMilestone,
+  listMilestones,
+  resolveProjectId,
+  updateMilestone,
+} from "../lib/milestones.ts";
 import { LINK_KINDS, type LinkKind, createLink, listRelations } from "../lib/relations.ts";
 import { withClient } from "../lib/sdk.ts";
 
@@ -185,6 +194,221 @@ function registerTools(server: McpServer): void {
     },
   );
 
+  // ---------- labels ----------
+  server.registerTool(
+    "list_labels",
+    {
+      title: "List Linear labels",
+      description: "List labels in a team, workspace-only, or all visible.",
+      inputSchema: {
+        team: z
+          .string()
+          .optional()
+          .describe("Team key. Omit + workspace_only=true for workspace labels."),
+        workspace_only: z.boolean().optional(),
+        all: z.boolean().optional(),
+        workspace: z.string().optional(),
+      },
+    },
+    async (args) => {
+      withWorkspace(args.workspace);
+      const labels = await listLabels({
+        team: args.workspace_only || args.all ? undefined : args.team,
+        workspaceOnly: args.workspace_only,
+        all: args.all,
+      });
+      return text({ schema_version: 1, count: labels.length, labels });
+    },
+  );
+
+  server.registerTool(
+    "create_label",
+    {
+      title: "Create a Linear label",
+      description:
+        "Create a team-scoped or workspace-scoped label. NOT retry-wrapped (would duplicate).",
+      inputSchema: {
+        name: z.string(),
+        team_id: z.string().optional().describe("Team UUID (NOT key). Omit for workspace-scoped."),
+        color: z.string().optional().describe("Hex color (e.g. '#ff0000')."),
+        description: z.string().optional(),
+        workspace: z.string().optional(),
+      },
+    },
+    async (args) => {
+      withWorkspace(args.workspace);
+      const label = await createLabel({
+        name: args.name,
+        teamId: args.team_id,
+        color: args.color,
+        description: args.description,
+      });
+      return text({ schema_version: 1, label });
+    },
+  );
+
+  server.registerTool(
+    "delete_label",
+    {
+      title: "Delete a Linear label",
+      description: "Delete by UUID. NOT retry-wrapped (would not-found after success).",
+      inputSchema: {
+        id: z
+          .string()
+          .describe("Label UUID. Use lookup_label_by_name first if you only have the name."),
+        workspace: z.string().optional(),
+      },
+    },
+    async (args) => {
+      withWorkspace(args.workspace);
+      const success = await deleteLabel(args.id);
+      return text({ schema_version: 1, id: args.id, success });
+    },
+  );
+
+  server.registerTool(
+    "lookup_label_by_name",
+    {
+      title: "Resolve a label name to a UUID",
+      description: "Returns the matching label or null. Useful before delete_label.",
+      inputSchema: {
+        name: z.string(),
+        team: z.string().optional(),
+        workspace: z.string().optional(),
+      },
+    },
+    async (args) => {
+      withWorkspace(args.workspace);
+      const label = await resolveLabelByName(args.name, args.team);
+      return text({ schema_version: 1, label });
+    },
+  );
+
+  // ---------- milestones ----------
+  server.registerTool(
+    "list_milestones",
+    {
+      title: "List project milestones",
+      description: "List milestones; pass project to filter to one project (name or UUID).",
+      inputSchema: {
+        project: z.string().optional().describe("Project name or UUID."),
+        workspace: z.string().optional(),
+      },
+    },
+    async (args) => {
+      withWorkspace(args.workspace);
+      let projectId: string | undefined;
+      if (args.project) {
+        const resolved = await resolveProjectId(args.project);
+        if (!resolved) throw new Error(`project not found: ${args.project}`);
+        projectId = resolved;
+      }
+      const milestones = await listMilestones({ projectId });
+      return text({ schema_version: 1, count: milestones.length, milestones });
+    },
+  );
+
+  server.registerTool(
+    "get_milestone",
+    {
+      title: "Get one milestone by UUID",
+      description: "Returns the milestone or null.",
+      inputSchema: {
+        id: z.string(),
+        workspace: z.string().optional(),
+      },
+    },
+    async (args) => {
+      withWorkspace(args.workspace);
+      const milestone = await getMilestone(args.id);
+      return text({ schema_version: 1, milestone });
+    },
+  );
+
+  server.registerTool(
+    "create_milestone",
+    {
+      title: "Create a project milestone",
+      description: "Create within a project (name or UUID). NOT retry-wrapped.",
+      inputSchema: {
+        name: z.string(),
+        project: z.string().describe("Project name or UUID."),
+        description: z.string().optional(),
+        target_date: z.string().optional().describe("ISO date, e.g. 2026-12-31."),
+        sort_order: z.number().optional(),
+        workspace: z.string().optional(),
+      },
+    },
+    async (args) => {
+      withWorkspace(args.workspace);
+      const projectId = await resolveProjectId(args.project);
+      if (!projectId) throw new Error(`project not found: ${args.project}`);
+      const milestone = await createMilestone({
+        name: args.name,
+        projectId,
+        description: args.description,
+        targetDate: args.target_date,
+        sortOrder: args.sort_order,
+      });
+      return text({ schema_version: 1, milestone });
+    },
+  );
+
+  server.registerTool(
+    "update_milestone",
+    {
+      title: "Update a milestone",
+      description: "Idempotent at the value level — safe to retry.",
+      inputSchema: {
+        id: z.string(),
+        name: z.string().optional(),
+        description: z.string().optional(),
+        target_date: z
+          .union([z.string(), z.null()])
+          .optional()
+          .describe("ISO date or null to clear."),
+        sort_order: z.number().optional(),
+        project: z.string().optional().describe("Move to a different project (name or UUID)."),
+        workspace: z.string().optional(),
+      },
+    },
+    async (args) => {
+      withWorkspace(args.workspace);
+      const input: Parameters<typeof updateMilestone>[1] = {};
+      if (args.name !== undefined) input.name = args.name;
+      if (args.description !== undefined) input.description = args.description;
+      if (args.target_date !== undefined) input.targetDate = args.target_date;
+      if (args.sort_order !== undefined) input.sortOrder = args.sort_order;
+      if (args.project) {
+        const projectId = await resolveProjectId(args.project);
+        if (!projectId) throw new Error(`project not found: ${args.project}`);
+        input.projectId = projectId;
+      }
+      if (Object.keys(input).length === 0) {
+        throw new Error("nothing to update — pass at least one field");
+      }
+      const milestone = await updateMilestone(args.id, input);
+      return text({ schema_version: 1, milestone });
+    },
+  );
+
+  server.registerTool(
+    "delete_milestone",
+    {
+      title: "Delete a milestone",
+      description: "By UUID. NOT retry-wrapped.",
+      inputSchema: {
+        id: z.string(),
+        workspace: z.string().optional(),
+      },
+    },
+    async (args) => {
+      withWorkspace(args.workspace);
+      const success = await deleteMilestone(args.id);
+      return text({ schema_version: 1, id: args.id, success });
+    },
+  );
+
   // ---------- lint_text ----------
   // Differentiator tool — neither linear-cli nor Linear's MCP has this.
   server.registerTool(
@@ -238,6 +462,16 @@ function withWorkspace(workspace: string | undefined): void {
   if (workspace) {
     process.env.LEBOP_WORKSPACE = workspace;
   }
+}
+
+/**
+ * Wrap any JSON-serializable payload as an MCP tool-call response with a
+ * single text content block. Keeps the registered tools terse.
+ */
+function text(payload: unknown): { content: { type: "text"; text: string }[] } {
+  return {
+    content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
+  };
 }
 
 /**

@@ -602,6 +602,33 @@ canonical form for what was previously `lebop comment <id>` — the bare
 form is gone, prefix with `add`. `list` is paginated and chronological;
 `update`/`delete` take the comment's UUID (visible in `list` output).
 
+### 8.5a `label` — manage Linear labels
+
+```
+lebop label list [--team KEY | --workspace-only | --all] [--json]
+lebop label create <name> [--team KEY | --workspace] [--color HEX] [--description TEXT] [--json]
+lebop label delete <name-or-id> [--team KEY] [--json]
+```
+
+Labels are either team-scoped (have a `team`) or workspace-scoped (no team).
+`list` defaults to the resolved team plus its visible workspace labels;
+`--workspace-only` filters to labels with no team scope; `--all` shows
+everything the token can see. `delete` accepts either a name (looked up in
+the resolved team scope) or a UUID directly.
+
+### 8.5b `milestone` — project milestones
+
+```
+lebop milestone list [--project NAME-OR-ID] [--json]
+lebop milestone view <id> [--json]
+lebop milestone create <name> --project NAME-OR-ID [--description TEXT] [--target-date ISO] [--sort-order N] [--json]
+lebop milestone update <id> [--name TEXT] [--description TEXT] [--target-date ISO|null] [--sort-order N] [--project NAME-OR-ID] [--json]
+lebop milestone delete <id> [--json]
+```
+
+Milestones belong to exactly one project. `update --target-date null` clears
+the date. `update --project NAME-OR-ID` moves a milestone between projects.
+
 ### 8.6a `relation` — first-class link mutations
 
 ```
@@ -671,6 +698,17 @@ and space-separated lists are supported.
 ### 8.10 `plan` — declarative authoring
 
 See §9.
+
+### 8.10a `schema` — dump Linear's GraphQL schema
+
+```
+lebop schema [-o FILE | --out FILE] [--json]
+```
+
+Runs the standard introspection query and emits SDL (or raw introspection
+JSON with `--json`). Pairs with `lebop raw` for offline schema-aware
+development: dump once, point your editor at the SDL, write queries, then
+send them via `raw`.
 
 ### 8.11 `raw` — GraphQL escape hatch
 
