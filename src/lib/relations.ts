@@ -1,4 +1,4 @@
-import { linear } from "./sdk.ts";
+import { linear, withClient } from "./sdk.ts";
 
 export type LinkKind = "blocks" | "blocked-by" | "duplicates" | "duplicated-by" | "related";
 
@@ -93,8 +93,9 @@ export async function createLink(
     direction === "forward"
       ? { type, issueId: selfUuid, relatedIssueId: targetUuid }
       : { type, issueId: targetUuid, relatedIssueId: selfUuid };
-  const client = await linear();
-  const response = (await client.client.rawRequest(CREATE_MUTATION, { input })) as {
+  // Server-side idempotent at the (issueId, relatedIssueId, type) tuple per
+  // spec §12.1 — same input → same relation UUID, no duplicate. Safe to retry.
+  const response = (await withClient((c) => c.client.rawRequest(CREATE_MUTATION, { input }))) as {
     data: { issueRelationCreate: { success: boolean; issueRelation: { id: string } } };
   };
   return { id: response.data.issueRelationCreate.issueRelation.id };
@@ -106,8 +107,9 @@ export async function findLink(
   kind: LinkKind,
 ): Promise<string | null> {
   const { type, direction } = LINK_KIND_TO_API[kind];
-  const client = await linear();
-  const response = (await client.client.rawRequest(FIND_QUERY, { id: selfIdentifier })) as {
+  const response = (await withClient((c) =>
+    c.client.rawRequest(FIND_QUERY, { id: selfIdentifier }),
+  )) as {
     data: {
       issue: {
         relations: {
@@ -138,6 +140,8 @@ export async function findLink(
 }
 
 export async function deleteLink(relationId: string): Promise<void> {
+  // Delete is NOT wrapped with retry — re-running after first success would
+  // surface as "not found" since the relation UUID is already gone.
   const client = await linear();
   await client.client.rawRequest(DELETE_MUTATION, { id: relationId });
 }
@@ -146,8 +150,9 @@ export async function listRelations(selfIdentifier: string): Promise<{
   outbound: { id: string; type: ApiType; otherIdentifier: string }[];
   inbound: { id: string; type: ApiType; otherIdentifier: string }[];
 }> {
-  const client = await linear();
-  const response = (await client.client.rawRequest(FIND_QUERY, { id: selfIdentifier })) as {
+  const response = (await withClient((c) =>
+    c.client.rawRequest(FIND_QUERY, { id: selfIdentifier }),
+  )) as {
     data: {
       issue: {
         relations: {

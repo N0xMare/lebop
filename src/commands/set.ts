@@ -22,7 +22,7 @@ import {
   resolveStateId,
   withFreshMetadataOnMiss,
 } from "../lib/resolve.ts";
-import { linear } from "../lib/sdk.ts";
+import { type linear, withClient } from "../lib/sdk.ts";
 
 const SUPPORTED_FIELDS = ["title", "state", "priority", "assignee", "labels", "links"] as const;
 type SupportedField = (typeof SUPPORTED_FIELDS)[number];
@@ -69,10 +69,9 @@ Examples:
       if (!value) throw new Error(`missing value for \`set ${field} ${id}\``);
 
       const config = await resolveConfig({ teamOverride: opts.team });
-      const client = await linear();
 
       // Fetch full issue first so we have current state (needed for labels delta).
-      const issueSummary = await client.issue(id);
+      const issueSummary = await withClient((c) => c.issue(id));
       if (!issueSummary) throw new Error(`issue not found: ${id}`);
 
       const input = await withFreshMetadataOnMiss(
@@ -81,10 +80,12 @@ Examples:
           buildInput(field as Exclude<SupportedField, "links">, value, valueArgs, issueSummary, md),
       );
 
-      const response = (await client.client.rawRequest(ISSUE_UPDATE_MUTATION, {
-        id: issueSummary.id,
-        input,
-      })) as { data: { issueUpdate: { success: boolean; issue: FetchedIssue } } };
+      const response = (await withClient((c) =>
+        c.client.rawRequest(ISSUE_UPDATE_MUTATION, {
+          id: issueSummary.id,
+          input,
+        }),
+      )) as { data: { issueUpdate: { success: boolean; issue: FetchedIssue } } };
 
       const updated = response.data.issueUpdate.issue;
 
@@ -193,9 +194,8 @@ async function handleLinks(id: string, valueArgs: string[], opts: SetOpts): Prom
 
   const deltas: LinkDelta[] = valueArgs.map(parseLinkToken);
   const config = await resolveConfig({ teamOverride: opts.team });
-  const client = await linear();
 
-  const selfIssue = await client.issue(id);
+  const selfIssue = await withClient((c) => c.issue(id));
   if (!selfIssue) throw new Error(`issue not found: ${id}`);
   const selfUuid = selfIssue.id;
   const selfIdentifier = selfIssue.identifier;
@@ -205,7 +205,7 @@ async function handleLinks(id: string, valueArgs: string[], opts: SetOpts): Prom
   const targetMap = new Map<string, string>();
   await Promise.all(
     uniqueTargets.map(async (ident) => {
-      const issue = await client.issue(ident);
+      const issue = await withClient((c) => c.issue(ident));
       if (!issue) throw new Error(`link target not found: ${ident}`);
       targetMap.set(ident, issue.id);
     }),
@@ -240,7 +240,7 @@ async function handleLinks(id: string, valueArgs: string[], opts: SetOpts): Prom
   const cached = await readIssue(config.repoHash, id);
   if (cached) {
     const refreshQuery = buildPullIssuesQuery([selfIdentifier], false);
-    const refresh = (await client.client.rawRequest(refreshQuery)) as {
+    const refresh = (await withClient((c) => c.client.rawRequest(refreshQuery))) as {
       data: Record<string, FetchedIssue | null>;
     };
     const fresh = refresh.data.a0;

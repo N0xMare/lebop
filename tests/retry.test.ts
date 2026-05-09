@@ -23,6 +23,36 @@ describe("classifyError", () => {
     it("classifies 'too many requests' as rate limit", () => {
       expect(classifyError(new Error("Too many requests"))).toBe("rate-limit");
     });
+
+    it("classifies via Linear SDK extensions.code (RATELIMITED)", () => {
+      // Mirrors the actual @linear/sdk thrown error shape per spec §12.1:
+      // top-level fields { data, errors, query, status, raw } — `errors` carries
+      // GraphQL `{message, extensions: {code}}` entries.
+      const err = Object.assign(new Error("the SDK message text could be anything"), {
+        errors: [{ message: "Some message", extensions: { code: "RATELIMITED" } }],
+        status: 200,
+      });
+      expect(classifyError(err)).toBe("rate-limit");
+    });
+
+    it("classifies via extensions.code variations", () => {
+      const cases = ["RATELIMITED", "RATE_LIMITED", "TOO_MANY_REQUESTS", "ratelimited"];
+      for (const code of cases) {
+        const err = Object.assign(new Error("opaque message"), {
+          errors: [{ message: "x", extensions: { code } }],
+        });
+        expect(classifyError(err)).toBe("rate-limit");
+      }
+    });
+
+    it("extensions.code wins over generic message", () => {
+      // If the message looks like 'authentication' (non-retryable) but extension
+      // code says RATELIMITED, treat as rate-limit.
+      const err = Object.assign(new Error("authentication failed"), {
+        errors: [{ message: "x", extensions: { code: "RATELIMITED" } }],
+      });
+      expect(classifyError(err)).toBe("rate-limit");
+    });
   });
 
   describe("transient errors", () => {
@@ -46,6 +76,23 @@ describe("classifyError", () => {
       expect(classifyError(new Error("fetch failed"))).toBe("transient");
       expect(classifyError(new Error("socket hang up"))).toBe("transient");
       expect(classifyError(new Error("Connect Timeout"))).toBe("transient");
+    });
+
+    it("classifies via Linear SDK extensions.code (INTERNAL_SERVER_ERROR)", () => {
+      const err = Object.assign(new Error("opaque"), {
+        errors: [{ message: "internal", extensions: { code: "INTERNAL_SERVER_ERROR" } }],
+      });
+      expect(classifyError(err)).toBe("transient");
+    });
+
+    it("classifies via extensions.code 5xx variants", () => {
+      const cases = ["SERVICE_UNAVAILABLE", "BAD_GATEWAY", "GATEWAY_TIMEOUT"];
+      for (const code of cases) {
+        const err = Object.assign(new Error("opaque"), {
+          errors: [{ message: "x", extensions: { code } }],
+        });
+        expect(classifyError(err)).toBe("transient");
+      }
     });
   });
 
@@ -72,6 +119,35 @@ describe("classifyError", () => {
       expect(classifyError(Object.assign(new Error("Bad Request"), { status: 400 }))).toBe(
         "non-retryable",
       );
+    });
+
+    it("doesn't retry on FORBIDDEN / UNAUTHENTICATED extension codes", () => {
+      // These would bubble up via the SDK's errors[].extensions.code shape; we don't
+      // explicitly recognize them as retryable, so they should propagate.
+      const err = Object.assign(new Error("forbidden"), {
+        errors: [{ message: "no", extensions: { code: "FORBIDDEN" } }],
+      });
+      expect(classifyError(err)).toBe("non-retryable");
+    });
+
+    it("ignores malformed error shape (missing extensions)", () => {
+      const err = Object.assign(new Error("Field 'foo' is not defined"), {
+        errors: [{ message: "Field 'foo' is not defined" }],
+      });
+      expect(classifyError(err)).toBe("non-retryable");
+    });
+
+    it("ignores empty errors array", () => {
+      const err = Object.assign(new Error("Field 'foo' is not defined"), { errors: [] });
+      expect(classifyError(err)).toBe("non-retryable");
+    });
+
+    it("handles non-string extensions.code", () => {
+      // GraphQL spec doesn't constrain code; defensive against unexpected types.
+      const err = Object.assign(new Error("opaque"), {
+        errors: [{ message: "x", extensions: { code: 42 } }],
+      });
+      expect(classifyError(err)).toBe("non-retryable");
     });
   });
 });

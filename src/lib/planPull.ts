@@ -11,7 +11,7 @@ import {
   buildPullIssuesQuery,
 } from "./pullQuery.ts";
 import { labelNameById, priorityName } from "./resolve.ts";
-import { linear } from "./sdk.ts";
+import { linear, withClient } from "./sdk.ts";
 
 export interface PullIssueResult {
   slug: string;
@@ -131,10 +131,9 @@ async function pullProject(project: ProjectFile): Promise<PullResult["project"]>
     return { name: fm.name, status: "skipped-no-id" };
   }
   try {
-    const client = await linear();
-    const resp = (await client.client.rawRequest(PULL_PROJECT_HEADER_QUERY, {
-      id: fm.linear_id,
-    })) as { data: { project: Omit<FetchedProject, "issues"> | null } };
+    const resp = (await withClient((c) =>
+      c.client.rawRequest(PULL_PROJECT_HEADER_QUERY, { id: fm.linear_id }),
+    )) as { data: { project: Omit<FetchedProject, "issues"> | null } };
     const remote = resp.data.project;
     if (!remote) {
       return { name: fm.name, linear_id: fm.linear_id, status: "missing-remote" };
@@ -170,9 +169,8 @@ async function pullIssue(issue: IssueFile, teamMetadata: TeamMetadata): Promise<
     return { slug: issue.slug, path: issue.path, status: "skipped-no-id" };
   }
   try {
-    const client = await linear();
     const query = buildPullIssuesQuery([fm.linear_id], false, true);
-    const resp = (await client.client.rawRequest(query)) as {
+    const resp = (await withClient((c) => c.client.rawRequest(query))) as {
       data: Record<string, FetchedIssue | null>;
     };
     const remote = resp.data.a0;
@@ -214,9 +212,8 @@ async function importNewIssue(
   teamMetadata: TeamMetadata,
 ): Promise<{ identifier: string; path: string; title: string } | null> {
   try {
-    const client = await linear();
     const query = buildPullIssuesQuery([identifier], false, true);
-    const resp = (await client.client.rawRequest(query)) as {
+    const resp = (await withClient((c) => c.client.rawRequest(query))) as {
       data: Record<string, FetchedIssue | null>;
     };
     const remote = resp.data.a0;

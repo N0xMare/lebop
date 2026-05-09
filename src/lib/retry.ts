@@ -71,14 +71,52 @@ export async function withRetry<T>(fn: () => Promise<T>, opts: RetryOpts = {}): 
  * `rate-limit` and `transient` are retryable; `non-retryable` propagates
  * immediately.
  *
+ * Lookup order:
+ *   1. `errors[].extensions.code` on the thrown error object — the structured
+ *      signal Linear's GraphQL surface returns (per spec §12.1, the SDK's
+ *      thrown error has a top-level `errors` array with `{message, extensions}`
+ *      entries). Most reliable across SDK versions.
+ *   2. HTTP status code on the error (`status` property).
+ *   3. Message string regex — fragile but catches errors that omit structured
+ *      metadata.
+ *
  * Exported for testing. Don't call from production code — use `withRetry`.
  */
 export function classifyError(err: unknown): ErrorClass {
+  // Check structured GraphQL extension codes first (most reliable signal).
+  // `@linear/sdk`'s thrown error has `data`, `errors`, `query`, `status`, `raw`
+  // top-level fields per spec §12.1. The `errors` array carries
+  // `{message, extensions: {code, ...}}` per GraphQL convention.
+  if (typeof err === "object" && err !== null) {
+    const errors = (err as { errors?: { extensions?: { code?: unknown } }[] }).errors;
+    if (Array.isArray(errors)) {
+      for (const e of errors) {
+        const code = e?.extensions?.code;
+        if (typeof code === "string") {
+          const upper = code.toUpperCase();
+          if (
+            upper === "RATELIMITED" ||
+            upper === "RATE_LIMITED" ||
+            upper === "TOO_MANY_REQUESTS"
+          ) {
+            return "rate-limit";
+          }
+          if (
+            upper === "INTERNAL_SERVER_ERROR" ||
+            upper === "SERVICE_UNAVAILABLE" ||
+            upper === "BAD_GATEWAY" ||
+            upper === "GATEWAY_TIMEOUT"
+          ) {
+            return "transient";
+          }
+        }
+      }
+    }
+  }
+
   if (!(err instanceof Error)) return "non-retryable";
 
   const msg = err.message.toLowerCase();
-  // SDK errors carry a top-level `status` field; checking via property access
-  // since `err` may have it from the linear-sdk's thrown error object.
   const status = (err as Error & { status?: number }).status;
 
   // Rate limiting (HTTP 429 or message indicators).

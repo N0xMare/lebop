@@ -16,7 +16,7 @@ import {
 import type { LintContext } from "./quirks.ts";
 import { createLink } from "./relations.ts";
 import { resolveAssigneeId, resolveLabelIds, resolvePriority, resolveStateId } from "./resolve.ts";
-import { linear } from "./sdk.ts";
+import { linear, withClient } from "./sdk.ts";
 
 // ---------- result types ----------
 
@@ -106,6 +106,8 @@ async function upsertProject(
     if (fm.description) input.description = fm.description;
     if (project.body.trim() !== "") input.content = project.body;
     try {
+      // projectCreate is NOT wrapped with retry — duplicate creation could
+      // result if the first attempt succeeded but the response was lost.
       const client = await linear();
       const response = (await client.client.rawRequest(PROJECT_CREATE_MUTATION, { input })) as {
         data: { projectCreate: { project: FetchedProject } };
@@ -121,10 +123,9 @@ async function upsertProject(
 
   // Update path.
   try {
-    const client = await linear();
-    const fetched = (await client.client.rawRequest(PROJECT_READ_QUERY, {
-      id: fm.linear_id,
-    })) as { data: { project: FetchedProject | null } };
+    const fetched = (await withClient((c) =>
+      c.client.rawRequest(PROJECT_READ_QUERY, { id: fm.linear_id }),
+    )) as { data: { project: FetchedProject | null } };
     const remote = fetched.data.project;
     if (!remote) {
       return { name: fm.name, status: "error", error: `project not found: ${fm.linear_id}` };
@@ -145,10 +146,9 @@ async function upsertProject(
       return { name: fm.name, linearId: fm.linear_id, status: "dry-run" };
     }
 
-    const response = (await client.client.rawRequest(PROJECT_UPDATE_MUTATION, {
-      id: fm.linear_id,
-      input,
-    })) as { data: { projectUpdate: { project: FetchedProject } } };
+    const response = (await withClient((c) =>
+      c.client.rawRequest(PROJECT_UPDATE_MUTATION, { id: fm.linear_id, input }),
+    )) as { data: { projectUpdate: { project: FetchedProject } } };
     const updated = response.data.projectUpdate.project;
     const { metadata } = buildProjectMetadata(updated);
     // Write back server-normalized body to the plan file.
@@ -226,6 +226,8 @@ async function upsertIssue(
         return { slug: issue.slug, path: issue.path, status: "dry-run" };
       }
 
+      // issueCreate is NOT wrapped with retry — duplicate creation could
+      // result if the first attempt succeeded but the response was lost.
       const client = await linear();
       const response = (await client.client.rawRequest(ISSUE_CREATE_MUTATION, { input })) as {
         data: { issueCreate: { issue: FetchedIssue } };
@@ -253,9 +255,8 @@ async function upsertIssue(
 
   // UPDATE path.
   try {
-    const client = await linear();
     const query = buildPullIssuesQuery([fm.linear_id], false);
-    const fetched = (await client.client.rawRequest(query)) as {
+    const fetched = (await withClient((c) => c.client.rawRequest(query))) as {
       data: Record<string, FetchedIssue | null>;
     };
     const remote = fetched.data.a0;
@@ -337,10 +338,9 @@ async function upsertIssue(
       };
     }
 
-    const response = (await client.client.rawRequest(ISSUE_UPDATE_MUTATION, {
-      id: remote.id,
-      input,
-    })) as { data: { issueUpdate: { issue: FetchedIssue } } };
+    const response = (await withClient((c) =>
+      c.client.rawRequest(ISSUE_UPDATE_MUTATION, { id: remote.id, input }),
+    )) as { data: { issueUpdate: { issue: FetchedIssue } } };
     const updated = response.data.issueUpdate.issue;
     // Write back server-normalized body so subsequent applies don't see spurious diffs.
     const { metadata } = buildIssueMetadata(updated);
@@ -378,8 +378,7 @@ async function resolveParentUuid(
   const asSlug = slugToId.get(parent);
   const identOrId = asSlug ?? parent;
   try {
-    const client = await linear();
-    const issue = await client.issue(identOrId);
+    const issue = await withClient((c) => c.issue(identOrId));
     return issue?.id ?? null;
   } catch {
     return null;
@@ -488,12 +487,11 @@ async function applyRelations(plan: ParsedPlan, opts: ApplyOpts): Promise<ApplyR
       }
     }
   }
-  const client = await linear();
   const uuidByIdentifier = new Map<string, string>();
   await Promise.all(
     Array.from(allIdentifiers).map(async (id) => {
       try {
-        const iss = await client.issue(id);
+        const iss = await withClient((c) => c.issue(id));
         if (iss) uuidByIdentifier.set(id, iss.id);
       } catch {
         /* mark as unresolvable; relation call will error with clean message */

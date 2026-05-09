@@ -10,7 +10,7 @@ import {
   buildPullIssuesQuery,
 } from "./pullQuery.ts";
 import { resolveLabelIds, resolvePriority, resolveStateId } from "./resolve.ts";
-import { linear } from "./sdk.ts";
+import { linear, withClient } from "./sdk.ts";
 
 export interface FieldDiff {
   field: string;
@@ -101,6 +101,9 @@ export async function diffPlan(
   const extraRemote: { identifier: string; title: string }[] = [];
   if (project.linear_id && project.status !== "missing-remote" && project.status !== "error") {
     try {
+      // paginateRaw wraps each page with withRetry internally; don't double-wrap
+      // the inner call site with withClient (would compound retries on
+      // exhaustion).
       const client = await linear();
       const linearId = project.linear_id;
       const remoteIssues = await paginateRaw<
@@ -149,10 +152,9 @@ async function diffProject(project: ProjectFile): Promise<PlanProjectDiff> {
     };
   }
   try {
-    const client = await linear();
-    const response = (await client.client.rawRequest(PULL_PROJECT_HEADER_QUERY, {
-      id: fm.linear_id,
-    })) as { data: { project: Omit<FetchedProject, "issues"> | null } };
+    const response = (await withClient((c) =>
+      c.client.rawRequest(PULL_PROJECT_HEADER_QUERY, { id: fm.linear_id }),
+    )) as { data: { project: Omit<FetchedProject, "issues"> | null } };
     const remote = response.data.project;
     if (!remote) {
       return {
@@ -233,9 +235,8 @@ async function diffIssue(
   }
 
   try {
-    const client = await linear();
     const query = buildPullIssuesQuery([fm.linear_id], false, true);
-    const resp = (await client.client.rawRequest(query)) as {
+    const resp = (await withClient((c) => c.client.rawRequest(query))) as {
       data: Record<string, FetchedIssue | null>;
     };
     const remote = resp.data.a0;

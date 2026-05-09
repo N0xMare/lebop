@@ -1,7 +1,7 @@
 import type { Command } from "commander";
 import { resolveConfig } from "../lib/config.ts";
 import { paginateConnection } from "../lib/paginate.ts";
-import { linear } from "../lib/sdk.ts";
+import { withClient } from "../lib/sdk.ts";
 
 export function registerProjects(program: Command): void {
   program
@@ -15,8 +15,7 @@ export function registerProjects(program: Command): void {
     .option("--json", "emit structured project records")
     .action(async (opts: { team?: string; state?: string; json?: boolean }) => {
       const config = await resolveConfig({ teamOverride: opts.team });
-      const client = await linear();
-      const teams = await client.teams({ filter: { key: { eq: config.team } } });
+      const teams = await withClient((c) => c.teams({ filter: { key: { eq: config.team } } }));
       const team = teams.nodes[0];
       if (!team) {
         process.stderr.write(`team not found: ${config.team}\n`);

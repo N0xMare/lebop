@@ -75,6 +75,8 @@ export function registerNew(program: Command): void {
       if (assigneeId !== undefined) input.assigneeId = assigneeId;
       if (projectId !== undefined) input.projectId = projectId;
 
+      // issueCreate is NOT wrapped with retry — duplicate creation could
+      // result if the first attempt succeeded but the response was lost.
       const client = await linear();
       const response = (await client.client.rawRequest(CREATE_MUTATION, { input })) as {
         data: {

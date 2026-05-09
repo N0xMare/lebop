@@ -1,5 +1,5 @@
 import type { Command } from "commander";
-import { linear } from "../lib/sdk.ts";
+import { withClient } from "../lib/sdk.ts";
 
 export function registerRaw(program: Command): void {
   program
@@ -11,8 +11,10 @@ export function registerRaw(program: Command): void {
       const query = await resolveQuery(queryArg, opts.queryFile);
       const variables = await resolveVariables(opts.variablesJson);
 
-      const client = await linear();
-      const response: unknown = await client.client.rawRequest(query, variables);
+      // `raw` queries are caller-defined; they may be reads or mutations. Wrap
+      // with retry under the assumption that callers passing creates accept
+      // the duplicate-on-retry-after-success risk (the escape hatch contract).
+      const response: unknown = await withClient((c) => c.client.rawRequest(query, variables));
 
       // rawRequest returns { data, errors?, ... } — unwrap for a clean result view.
       const payload = (response as { data?: unknown }).data ?? response;

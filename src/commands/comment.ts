@@ -1,6 +1,6 @@
 import chalk from "chalk";
 import type { Command } from "commander";
-import { linear } from "../lib/sdk.ts";
+import { linear, withClient } from "../lib/sdk.ts";
 
 export function registerComment(program: Command): void {
   program
@@ -16,10 +16,12 @@ export function registerComment(program: Command): void {
         throw new Error("empty comment body");
       }
 
-      const client = await linear();
-      const issue = await client.issue(id);
+      // Read is wrapped (idempotent); the comment-creation itself is NOT
+      // wrapped — retry-after-success would post a duplicate.
+      const issue = await withClient((c) => c.issue(id));
       if (!issue) throw new Error(`issue not found: ${id}`);
 
+      const client = await linear();
       const payload = await client.createComment({ issueId: issue.id, body });
       if (!payload.success) {
         throw new Error(`Linear rejected the comment on ${id}`);

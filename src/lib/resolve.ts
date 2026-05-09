@@ -5,7 +5,8 @@ import {
   writeTeamMetadata,
 } from "./cache.ts";
 import { LebopError } from "./errors.ts";
-import { linear } from "./sdk.ts";
+import { withRetry } from "./retry.ts";
+import { withClient } from "./sdk.ts";
 
 export class ResolveError extends LebopError {
   constructor(message: string, hint?: string) {
@@ -43,18 +44,17 @@ export async function getTeamMetadata(
   const cached = opts?.refresh ? null : await readTeamMetadata(repoHash, teamKey);
   if (cached && !isTeamMetadataStale(cached)) return cached;
 
-  const client = await linear();
-  const teams = await client.teams({ filter: { key: { eq: teamKey } } });
+  const teams = await withClient((c) => c.teams({ filter: { key: { eq: teamKey } } }));
   const team = teams.nodes[0];
   if (!team) {
     throw new ResolveError(`team not found: ${teamKey}`);
   }
 
   const [states, labels, members, projects] = await Promise.all([
-    team.states(),
-    team.labels(),
-    team.members(),
-    team.projects(),
+    withRetry(() => team.states()),
+    withRetry(() => team.labels()),
+    withRetry(() => team.members()),
+    withRetry(() => team.projects()),
   ]);
 
   const metadata: TeamMetadata = {
@@ -105,8 +105,7 @@ export async function resolveAssigneeId(
 ): Promise<string | null> {
   if (who === "null" || who === "none" || who === "") return null;
   if (who === "@me" || who === "me") {
-    const client = await linear();
-    const viewer = await client.viewer;
+    const viewer = await withClient((c) => c.viewer);
     return viewer.id;
   }
 

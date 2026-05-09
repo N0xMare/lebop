@@ -2,7 +2,7 @@ import chalk from "chalk";
 import type { Command } from "commander";
 import { rewriteNotFound } from "../lib/errors.ts";
 import { expandIds } from "../lib/expand.ts";
-import { linear } from "../lib/sdk.ts";
+import { linear, withClient } from "../lib/sdk.ts";
 
 interface ArchiveOpts {
   json?: boolean;
@@ -26,7 +26,9 @@ export function registerArchive(program: Command): void {
       const results: ArchiveResult[] = [];
       for (const ident of identifiers) {
         try {
-          const issue = await client.issue(ident);
+          // Read with retry; the archive itself is NOT wrapped — retry on
+          // already-archived issue would surface as a spurious not-found.
+          const issue = await withClient((c) => c.issue(ident));
           if (!issue) {
             results.push({ identifier: ident, status: "not-found" });
             continue;

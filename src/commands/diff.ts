@@ -6,7 +6,7 @@ import { readIssue } from "../lib/cache.ts";
 import { resolveConfig } from "../lib/config.ts";
 import { rewriteNotFound } from "../lib/errors.ts";
 import { type FetchedIssue, buildPullIssuesQuery } from "../lib/pullQuery.ts";
-import { linear } from "../lib/sdk.ts";
+import { withClient } from "../lib/sdk.ts";
 
 interface DiffOpts {
   team?: string;
@@ -38,11 +38,10 @@ export function registerDiff(program: Command): void {
       }
 
       // Fetch live remote.
-      const client = await linear();
       const query = buildPullIssuesQuery([upperId], false);
       let response: { data: Record<string, FetchedIssue | null> };
       try {
-        response = (await client.client.rawRequest(query)) as {
+        response = (await withClient((c) => c.client.rawRequest(query))) as {
           data: Record<string, FetchedIssue | null>;
         };
       } catch (err) {

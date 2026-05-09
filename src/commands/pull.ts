@@ -31,7 +31,8 @@ import {
   PULL_PROJECT_ISSUES_QUERY,
   buildPullIssuesQuery,
 } from "../lib/pullQuery.ts";
-import { linear } from "../lib/sdk.ts";
+import { withRetry } from "../lib/retry.ts";
+import { linear, withClient } from "../lib/sdk.ts";
 
 export function registerPull(program: Command): void {
   program
@@ -58,9 +59,9 @@ export function registerPull(program: Command): void {
       if (opts.project || opts.projectId) {
         const projectId =
           opts.projectId ?? (await lookupProjectId(client, config.team, opts.project ?? ""));
-        const headerResponse = (await client.client.rawRequest(PULL_PROJECT_HEADER_QUERY, {
-          id: projectId,
-        })) as { data: { project: Omit<FetchedProject, "issues"> | null } };
+        const headerResponse = (await withClient((c) =>
+          c.client.rawRequest(PULL_PROJECT_HEADER_QUERY, { id: projectId }),
+        )) as { data: { project: Omit<FetchedProject, "issues"> | null } };
         const header = headerResponse.data.project;
         if (!header) {
           throw new Error(`project not found: ${opts.project ?? opts.projectId}`);
@@ -343,14 +344,14 @@ async function writeProjectExport(
 }
 
 async function lookupProjectId(
-  client: Awaited<ReturnType<typeof linear>>,
+  _client: Awaited<ReturnType<typeof linear>>,
   teamKey: string,
   name: string,
 ): Promise<string> {
-  const teams = await client.teams({ filter: { key: { eq: teamKey } } });
+  const teams = await withClient((c) => c.teams({ filter: { key: { eq: teamKey } } }));
   const team = teams.nodes[0];
   if (!team) throw new Error(`team not found: ${teamKey}`);
-  const projects = await team.projects({ first: 250 });
+  const projects = await withRetry(() => team.projects({ first: 250 }));
   const match = projects.nodes.find((p) => p.name === name);
   if (!match) {
     const candidates = projects.nodes
@@ -388,15 +389,23 @@ async function rawRequestTolerant<T>(
   build: (ids: string[]) => string,
 ): Promise<{ data: Record<string, T | null>; errors: AliasError[] }> {
   try {
-    const r = (await client.client.rawRequest(build(identifiers))) as {
+    // Reads are idempotent — wrap the multi-alias attempt with retry so a
+    // transient 5xx doesn't immediately fall through to the N-round-trip
+    // per-id fallback path.
+    const r = (await withRetry(() => client.client.rawRequest(build(identifiers)))) as {
       data: Record<string, T | null>;
     };
     return { data: r.data ?? {}, errors: [] };
   } catch (err) {
-    // Per-id fallback: each request gets its own success/failure.
+    // Per-id fallback: each request gets its own success/failure. Each
+    // single-alias request is also retry-wrapped so a transient blip on one
+    // id doesn't kill the rest.
     const settled = await Promise.allSettled(
       identifiers.map(
-        (id) => client.client.rawRequest(build([id])) as Promise<{ data: { a0: T | null } }>,
+        (id) =>
+          withRetry(() => client.client.rawRequest(build([id]))) as Promise<{
+            data: { a0: T | null };
+          }>,
       ),
     );
     const data: Record<string, T | null> = {};

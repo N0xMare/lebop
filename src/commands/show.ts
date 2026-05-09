@@ -3,7 +3,7 @@ import type { Command } from "commander";
 import { buildComments, buildIssueMetadata } from "../lib/build.ts";
 import { rewriteNotFound } from "../lib/errors.ts";
 import { type FetchedIssue, buildPullIssuesQuery } from "../lib/pullQuery.ts";
-import { linear } from "../lib/sdk.ts";
+import { withClient } from "../lib/sdk.ts";
 
 export function registerShow(program: Command): void {
   program
@@ -17,10 +17,9 @@ export function registerShow(program: Command): void {
       const withComments = opts.comments !== false;
       const upperId = id.toUpperCase();
       const query = buildPullIssuesQuery([upperId], withComments, true);
-      const client = await linear();
       let response: { data: Record<string, FetchedIssue | null> };
       try {
-        response = (await client.client.rawRequest(query)) as {
+        response = (await withClient((c) => c.client.rawRequest(query))) as {
           data: Record<string, FetchedIssue | null>;
         };
       } catch (err) {
