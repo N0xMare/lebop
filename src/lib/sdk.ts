@@ -16,17 +16,3 @@ export async function linear(): Promise<LinearClient> {
   _client = linearClientFromToken(auth.token);
   return _client;
 }
-
-export function isAuthError(err: unknown): boolean {
-  const msg = (err as Error | undefined)?.message?.toLowerCase() ?? "";
-  return (
-    msg.includes("authentication") || msg.includes("unauthorized") || msg.includes("invalid bearer")
-  );
-}
-
-export function handleAuthError(): never {
-  process.stderr.write(
-    `${chalk.red("Linear rejected the stored token.")} it may have been revoked. run ${chalk.cyan("lebop auth login")} again.\n`,
-  );
-  process.exit(1);
-}

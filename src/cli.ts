@@ -26,7 +26,6 @@ export async function run(rawArgv: string[]): Promise<void> {
     .name("lebop")
     .description("agentic Linear CLI — pull/edit/push loop for coding agents")
     .version("0.1.0")
-    .option("--verbose", "verbose output")
     .showHelpAfterError();
 
   registerAuth(program);

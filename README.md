@@ -18,7 +18,7 @@ Think: `git`, but for Linear.
 curl -fsSL https://bun.sh/install | bash
 
 # 2. Clone + install lebop
-git clone git@github.com:N0xMare/lebop.git
+git clone <repo-url>
 cd lebop
 bun install
 bun link
@@ -33,6 +33,8 @@ lebop list --assignee me --state-type started --limit 10
 ```
 
 Per-user config lives at `~/.lebop/config.yaml`; auth at `~/.lebop/auth.json` (mode 0600); local cache at `~/.lebop/cache/<repo-hash>/`. **Your repo working tree stays pristine — all runtime state is in `~/.lebop/`.**
+
+Full setup, config, and command reference: [`docs/spec.md`](docs/spec.md).
 
 ---
 
@@ -134,7 +136,7 @@ lebop plan pull     plans/rpc-failover --include-new  # also import remote-only 
 
 Re-apply is idempotent — unchanged files stay unchanged. Parents get created before children (topological). Slug links auto-rewrite to `UE-XXX` once issues exist. Relations (`blocks` / `blocked_by` / `related` / `duplicates` / `duplicated_by`) honor Linear's single-record-per-pair semantics.
 
-See [`docs/plan-spec.md`](docs/plan-spec.md) for the full frontmatter schema, apply semantics, and edge cases.
+See [`docs/spec.md`](docs/spec.md#9-plan-workflow--declarative-authoring) for the full frontmatter schema, apply semantics, and edge cases.
 
 ### Diff + escape hatch
 
@@ -254,18 +256,16 @@ Complementary. They solve different problems:
 
 Use schpet for interactive one-offs (`linear branch`, `linear issue start`, browser-open). Use lebop for any bulk or agent-driven work.
 
-See [`docs/spec.md`](docs/spec.md) for the full motivation, design decisions, and rejected alternatives (local daemon, MCP server, webhook sync — all rejected for personal-scale).
+See [`docs/spec.md`](docs/spec.md) for the full motivation, design decisions, command reference, plan workflow, lint rule catalog, Linear API facts, and discovered quirks. Spec is the authoritative single doc.
 
 ---
 
-## Design docs
+## Documentation
 
-- [`docs/spec.md`](docs/spec.md) — stable architecture, file formats, prior-art facts.
-- [`docs/plan-spec.md`](docs/plan-spec.md) — declarative-planning design: frontmatter schema, apply semantics, idempotency rules.
-- [`docs/implementation-plan.md`](docs/implementation-plan.md) — living phase tracker with discovered quirks and progress log.
+- [`docs/spec.md`](docs/spec.md) — single source of truth: architecture, setup, full CLI reference, plan workflow, lint rules, Linear API facts, discovered quirks, v1.0 roadmap.
 
 ---
 
 ## License
 
-Personal tool, no license yet.
+TBD — license decision pending. Tracked in the v1.0 OSS-readiness work (see `docs/spec.md` §13.4).
