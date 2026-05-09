@@ -26,6 +26,8 @@ export function registerComment(program: Command): void {
       if (!payload.success) {
         throw new Error(`Linear rejected the comment on ${id}`);
       }
+      // payload.comment is a lazy getter (Promise<Comment> | undefined);
+      // left bare — it's purely informational (id + createdAt for output).
       const created = await payload.comment;
 
       if (opts.json) {

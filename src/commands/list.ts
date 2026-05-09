@@ -2,7 +2,7 @@ import type { LinearClient } from "@linear/sdk";
 import type { Command } from "commander";
 import { resolveConfig } from "../lib/config.ts";
 import { paginateConnection } from "../lib/paginate.ts";
-import { linear } from "../lib/sdk.ts";
+import { linear, withClient } from "../lib/sdk.ts";
 
 type IssueFilter = NonNullable<Parameters<LinearClient["issues"]>[0]>["filter"];
 
@@ -23,6 +23,10 @@ export function registerList(program: Command): void {
     .option("--json", "emit structured issue records")
     .action(async (opts: ListOpts) => {
       const config = await resolveConfig({ teamOverride: opts.team });
+      // Pre-fetch the cached client for use inside paginateConnection's fetcher
+      // and the lazy-getter section below. Inside paginate, we cannot wrap
+      // with withClient because paginate already retry-wraps internally —
+      // double-wrapping compounds retry budgets on rate-limit exhaustion.
       const client = await linear();
       const filter: NonNullable<IssueFilter> = {};
       filter.team = { key: { eq: config.team } };
@@ -39,7 +43,7 @@ export function registerList(program: Command): void {
       }
       if (opts.assignee) {
         if (opts.assignee === "me" || opts.assignee === "@me") {
-          const viewer = await client.viewer;
+          const viewer = await withClient((c) => c.viewer);
           filter.assignee = { id: { eq: viewer.id } };
         } else if (opts.assignee.includes("@")) {
           filter.assignee = { email: { eq: opts.assignee } };
@@ -61,6 +65,10 @@ export function registerList(program: Command): void {
 
       const records = await Promise.all(
         issues.map(async (i) => {
+          // i.state and i.assignee are SDK lazy getters that return
+          // `Promise<T> | undefined`. Awkward to retry-wrap cleanly; left
+          // bare. A transient blip mid-list surfaces as a hard error here —
+          // acceptable given list is read-only and easy to retry.
           const [state, assignee] = await Promise.all([i.state, i.assignee]);
           return {
             identifier: i.identifier,

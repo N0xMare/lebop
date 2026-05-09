@@ -5,6 +5,7 @@ import { dirname } from "node:path";
 import { LinearClient } from "@linear/sdk";
 import { AuthError } from "./errors.ts";
 import { AUTH_FILE, LEBOP_HOME } from "./paths.ts";
+import { withRetry } from "./retry.ts";
 import type { AuthFile, Viewer } from "./types.ts";
 
 const AUTH_SCHEMA_VERSION = 1 as const;
@@ -64,7 +65,10 @@ export function linearClientFromToken(token: string): LinearClient {
 export async function validateToken(token: string): Promise<Viewer> {
   const client = linearClientFromToken(token);
   try {
-    const viewer = await client.viewer;
+    // The validation read is itself idempotent — wrap with retry so a
+    // transient 5xx during `lebop auth login` doesn't surface as a
+    // misleading "token rejected".
+    const viewer = await withRetry(() => client.viewer);
     return {
       id: viewer.id,
       email: viewer.email,

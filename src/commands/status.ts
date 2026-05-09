@@ -16,8 +16,7 @@ import {
   diffProjectMetadata,
 } from "../lib/diff.ts";
 import { buildCasQuery } from "../lib/pushMutations.ts";
-import { withRetry } from "../lib/retry.ts";
-import { linear } from "../lib/sdk.ts";
+import { withClient } from "../lib/sdk.ts";
 
 export function registerStatus(program: Command): void {
   program
@@ -76,15 +75,16 @@ export function registerStatus(program: Command): void {
         server_updated_at: string;
         remote_updated_at: string;
       }
+      // Note: only issues are checked. Project staleness via CAS would
+      // need its own batched query — punted until first user need surfaces.
       const staleEntries: StaleEntry[] = [];
       const staleErrors: { id: string; error: string }[] = [];
       const checkRemote = opts.remote !== false && cleanIssues.length > 0;
       if (checkRemote) {
         try {
-          const client = await linear();
           const ids = cleanIssues.map((r) => r.id);
           const query = buildCasQuery(ids);
-          const response = (await withRetry(() => client.client.rawRequest(query))) as {
+          const response = (await withClient((c) => c.client.rawRequest(query))) as {
             data: Record<string, { id: string; identifier: string; updatedAt: string } | null>;
           };
           ids.forEach((id, i) => {
@@ -129,9 +129,10 @@ export function registerStatus(program: Command): void {
                   fields: r.changes.map((c) => c.field),
                 })),
               },
+              // `stale` is issue-only today (projects have no CAS); not
+              // tagging entries with `kind` until projects get covered too.
               stale: staleEntries.map((r) => ({
                 identifier: r.id,
-                kind: "issue",
                 server_updated_at: r.server_updated_at,
                 remote_updated_at: r.remote_updated_at,
               })),

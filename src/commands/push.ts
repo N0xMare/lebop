@@ -34,8 +34,7 @@ import {
   resolveLabelIds,
   resolveStateId,
 } from "../lib/resolve.ts";
-import { withRetry } from "../lib/retry.ts";
-import { linear, withClient } from "../lib/sdk.ts";
+import { withClient } from "../lib/sdk.ts";
 
 interface PushOpts {
   team?: string;
@@ -105,7 +104,6 @@ export function registerPush(program: Command): void {
 
       if (issuePlans.length > 0) {
         const metadata = await getTeamMetadata(config.repoHash, config.team);
-        const client = await linear();
         for (const plan of issuePlans) {
           if (staleIssues.has(plan.identifier)) {
             results.push({
@@ -169,8 +167,8 @@ export function registerPush(program: Command): void {
           }
 
           try {
-            const response = (await withRetry(() =>
-              client.client.rawRequest(ISSUE_UPDATE_MUTATION, {
+            const response = (await withClient((c) =>
+              c.client.rawRequest(ISSUE_UPDATE_MUTATION, {
                 id: plan.metadata._server.id,
                 input,
               }),
@@ -200,7 +198,6 @@ export function registerPush(program: Command): void {
       }
 
       if (projectPlans.length > 0) {
-        const client = await linear();
         for (const plan of projectPlans) {
           const input = buildProjectUpdateInput(plan);
 
@@ -238,8 +235,8 @@ export function registerPush(program: Command): void {
             continue;
           }
           try {
-            const response = (await withRetry(() =>
-              client.client.rawRequest(PROJECT_UPDATE_MUTATION, {
+            const response = (await withClient((c) =>
+              c.client.rawRequest(PROJECT_UPDATE_MUTATION, {
                 id: plan.metadata._server.id,
                 input,
               }),
@@ -335,9 +332,8 @@ async function collectPlans(repoHash: string, explicitIds: string[]): Promise<Pl
 
 async function detectStaleIssues(plans: IssuePlan[]): Promise<Set<string>> {
   if (plans.length === 0) return new Set();
-  const client = await linear();
   const query = buildCasQuery(plans.map((p) => p.identifier));
-  const response = (await withRetry(() => client.client.rawRequest(query))) as {
+  const response = (await withClient((c) => c.client.rawRequest(query))) as {
     data: Record<string, { id: string; identifier: string; updatedAt: string } | null>;
   };
   const stale = new Set<string>();

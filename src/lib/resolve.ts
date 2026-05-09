@@ -5,7 +5,6 @@ import {
   writeTeamMetadata,
 } from "./cache.ts";
 import { LebopError } from "./errors.ts";
-import { withRetry } from "./retry.ts";
 import { withClient } from "./sdk.ts";
 
 export class ResolveError extends LebopError {
@@ -50,11 +49,14 @@ export async function getTeamMetadata(
     throw new ResolveError(`team not found: ${teamKey}`);
   }
 
+  // Each sub-query uses withClient so retries target the cached singleton —
+  // identical behavior to wrapping with withRetry directly, but consistent
+  // with the rest of the codebase's read pattern.
   const [states, labels, members, projects] = await Promise.all([
-    withRetry(() => team.states()),
-    withRetry(() => team.labels()),
-    withRetry(() => team.members()),
-    withRetry(() => team.projects()),
+    withClient(() => team.states()),
+    withClient(() => team.labels()),
+    withClient(() => team.members()),
+    withClient(() => team.projects()),
   ]);
 
   const metadata: TeamMetadata = {
