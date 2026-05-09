@@ -111,6 +111,35 @@ describe("auth list / default / token", () => {
   });
 });
 
+describe("mine + unarchive (smoke)", () => {
+  it("mine appears in --help with sensible defaults", async () => {
+    const r = await runLebop(["mine", "--help"], env);
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toContain("list issues assigned to you");
+    expect(r.stdout).toContain("--all-states");
+    expect(r.stdout).toContain("--include-archived");
+  });
+
+  it("unarchive appears in --help with bulk-friendly shape", async () => {
+    const r = await runLebop(["unarchive", "--help"], env);
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toContain("unarchive one or more issues");
+    expect(r.stdout).toContain("<ids...>");
+  });
+
+  it("list --help shows all the rich filter flags", async () => {
+    const r = await runLebop(["list", "--help"], env);
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toContain("--search");
+    expect(r.stdout).toContain("--unassigned");
+    expect(r.stdout).toContain("--cycle");
+    expect(r.stdout).toContain("--milestone");
+    expect(r.stdout).toContain("--created-after");
+    expect(r.stdout).toContain("--include-archived");
+    expect(r.stdout).toContain("--all-teams");
+  });
+});
+
 describe("teams", () => {
   it("paginates and lists teams", async () => {
     mock.respond({

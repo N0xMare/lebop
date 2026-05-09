@@ -6,6 +6,7 @@ import { registerComment } from "./commands/comment.ts";
 import { registerDiff } from "./commands/diff.ts";
 import { registerLint } from "./commands/lint.ts";
 import { registerList } from "./commands/list.ts";
+import { registerMine } from "./commands/mine.ts";
 import { registerNew } from "./commands/new.ts";
 import { registerPlan } from "./commands/plan.ts";
 import { registerProjects } from "./commands/projects.ts";
@@ -16,6 +17,7 @@ import { registerSet } from "./commands/set.ts";
 import { registerShow } from "./commands/show.ts";
 import { registerStatus } from "./commands/status.ts";
 import { registerTeams } from "./commands/teams.ts";
+import { registerUnarchive } from "./commands/unarchive.ts";
 import { preprocessSetArgv } from "./lib/argvPrep.ts";
 import { LebopError } from "./lib/errors.ts";
 
@@ -43,6 +45,7 @@ export async function run(rawArgv: string[]): Promise<void> {
   registerAuth(program);
 
   registerList(program);
+  registerMine(program);
   registerProjects(program);
   registerTeams(program);
 
@@ -58,6 +61,7 @@ export async function run(rawArgv: string[]): Promise<void> {
 
   registerNew(program);
   registerArchive(program);
+  registerUnarchive(program);
   registerPlan(program);
 
   registerRaw(program);

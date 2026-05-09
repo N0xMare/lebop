@@ -535,15 +535,39 @@ See §4.3 for selection rules and the multi-workspace data model.
 ### 8.2 `list` — issue search
 
 ```
-lebop list [--team KEY] [--project NAME] [--project-id UUID]
-           [--state NAME] [--state-type triage|backlog|unstarted|started|completed|cancelled]
-           [--assignee me|EMAIL|NAME] [--label NAME ...]
-           [--priority 0..4] [--updated-since 7d|ISO]
-           [--limit N] [--json]
+lebop list [--team KEY | --all-teams]
+           [--project NAME | --project-id UUID]
+           [--state NAME] [--state-type triage|backlog|unstarted|started|completed|canceled]
+           [--assignee me|EMAIL|NAME|*] [--unassigned]
+           [--label NAME ...] [--priority 0..4]
+           [--cycle NAME-OR-ID] [--milestone NAME-OR-ID]
+           [--updated-since 7d|24h|ISO] [--created-after 7d|24h|ISO]
+           [--search TEXT]
+           [--include-archived]
+           [--limit N | --limit 0] [--json]
 ```
 
 Default output: one line per issue, `IDENT  [STATE]  TITLE  (assignee)`.
-Default limit 50, max 250.
+Default limit 50; `--limit 0` means "no user-specified cap" (the
+paginator's safety cap of 10k still applies).
+
+`--search` runs full-text against `searchableContent` (title + body).
+`--unassigned` and `--assignee` are mutually exclusive. `--all-teams`
+drops the team filter for cross-workspace queries.
+
+### 8.2a `mine` — your assigned work
+
+```
+lebop mine [--team KEY | --all-teams]
+           [--all-states] [--include-archived]
+           [--state-type TYPE] [--label NAME ...] [--priority 0..4]
+           [--cycle NAME-OR-ID] [--milestone NAME-OR-ID]
+           [--limit N] [--json]
+```
+
+Shorthand for `list --assignee me` with a default state filter (active
+states only — anything that isn't `completed` or `canceled`). Pass
+`--all-states` to include those, or `--state-type` to narrow further.
 
 ### 8.3 `projects` / `teams` — discovery
 
@@ -612,16 +636,18 @@ project miss. Returns the new identifier and URL on stdout.
 (v1.0 will add `--estimate`, `--parent`, `--milestone`, `--cycle`,
 `--due-date`.)
 
-### 8.9 `archive <IDS...>`
+### 8.9 `archive <IDS...>` / `unarchive <IDS...>`
 
 ```
 lebop archive TEAM-101 TEAM-102 [--json]
+lebop unarchive TEAM-101 TEAM-102 [--json]
 ```
 
-Archives one or more issues. Reversible from the Linear UI. Per-id status
-tracking — partial failures don't stop the run.
+Archives or unarchives one or more issues. Per-id status tracking —
+partial failures don't stop the run. Both ID ranges (`TEAM-101..TEAM-105`)
+and space-separated lists are supported.
 
-(v1.0 will add `--bulk-file FILE` and `--bulk-stdin` for large lists.)
+`--bulk-file FILE` / `--bulk-stdin` for large lists is a follow-up.
 
 ### 8.10 `plan` — declarative authoring
 
