@@ -1,6 +1,6 @@
 # lebop
 
-**Agentic Linear CLI.** Read, write, and plan Linear projects from your shell or an AI agent, without leaving your editor. Treats Linear issues as markdown files you can edit, diff, and apply — the same way you already work with code.
+**Best-for-agents Linear tool.** Read, write, and plan Linear projects from your shell or an AI agent, without leaving your editor. Treats Linear issues as markdown files you can edit, diff, and apply — the same way you already work with code. Ships as a CLI and an MCP server sharing one library core.
 
 Two shapes:
 
@@ -240,23 +240,25 @@ Option A is required if you want agents started BEFORE you edited your shell con
 
 ---
 
-## Why not just `@schpet/linear-cli`?
+## Why not just `@schpet/linear-cli` or Linear's MCP?
 
-Complementary. They solve different problems:
+**Best for agents, sufficient for humans.** lebop is built around the agent use case (bulk markdown editing, declarative `plan apply`, renderer-aware lint, CAS-protected push, MCP server). It deliberately skips interactive ergonomics that `@schpet/linear-cli` does well — `issue start` (state + branch), `pr` (gh-cli wrapper), browser-open shortcuts, jj/git issue inference.
 
-| | `@schpet/linear-cli` (`linear`) | `lebop` |
-|---|---|---|
-| Shape | Single-issue interactive CLI | Bulk + declarative + agentic |
-| Input | Flags for each field | Frontmatter + markdown files |
-| Round-trip | Per-command | Pull-edit-push, plan-diff-pull |
-| Mutation batching | Sequential CLI invocations | One call per plan or one multi-alias push |
-| CAS / staleness | None | `updatedAt` check; `--force` to bypass |
-| Markdown lint | None | 8 rules + repo-scoped config |
-| Declarative planning | Not a goal | Hero feature |
+| | `@schpet/linear-cli` | Linear MCP server | `lebop` |
+|---|---|---|---|
+| Shape | Interactive CLI | Hosted MCP | Agentic CLI **and** MCP, bulk + declarative |
+| Round-trip | Per-command | Per-tool-call | Pull-edit-push, plan-diff-pull |
+| Mutation batching | Sequential | Sequential | One call per plan or one multi-alias push |
+| CAS / staleness | None | None | `updatedAt` check; `--force` to bypass |
+| Markdown lint | None | None | 8 rules + repo-scoped config |
+| Declarative planning | Not a goal | Not exposed | Hero feature |
+| GraphQL escape hatch | Yes | No | Yes (`raw`) |
+| Local cache | No | No | Yes (`~/.lebop/cache/`) |
+| `issue start` / branch / `pr` | Yes | No | **Deliberately skipped** — pair with `linear-cli` |
 
-Use schpet for interactive one-offs (`linear branch`, `linear issue start`, browser-open). Use lebop for any bulk or agent-driven work.
+**For agent-driven work**, lebop replaces both `linear-cli` and the Linear MCP. **For solo human work**, pair lebop (bulk + plan + agent + CAS) with `linear-cli` (interactive single-issue flows).
 
-See [`docs/spec.md`](docs/spec.md) for the full motivation, design decisions, command reference, plan workflow, lint rule catalog, Linear API facts, and discovered quirks. Spec is the authoritative single doc.
+See [`docs/spec.md`](docs/spec.md) for the full motivation, design decisions, command reference, plan workflow, lint rule catalog, Linear API facts, discovered quirks, and roadmap to public release.
 
 ---
 

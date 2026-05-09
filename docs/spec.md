@@ -8,15 +8,20 @@ wins — open a PR fixing this doc.
 
 ## 1. What lebop is
 
-A TypeScript CLI that gives coding agents (and humans) a complete, efficient,
-correct interface to Linear. Two surfaces share a common lib core:
+A TypeScript tool that gives coding agents (and humans) a complete, efficient,
+correct interface to Linear. **Best for agents, sufficient for humans** — the
+design is optimized for AI/automation workflows; humans get a competent CLI
+but `@schpet/linear-cli` retains better interactive-only ergonomics
+(branch-aware `issue start`, `pr` integration, browser-open shortcuts).
+
+Two surfaces share a common lib core:
 
 - **`lebop` CLI** — verbs for ad-hoc ops (`list`, `show`, `set`, `comment`,
   `new`, `archive`), bulk round-trip (`pull` → edit files → `push`),
   declarative authoring (`plan apply`), and a GraphQL escape hatch (`raw`).
-- **`lebop mcp` server** *(v1.0; see §13)* — exposes the same surface as MCP
-  tools so non-CLI agents (Cursor, Windsurf, hosted Claude, IDEs) get the
-  same capabilities without shelling out.
+- **`lebop mcp` server** — exposes the same surface as MCP tools so non-CLI
+  agents (Cursor, Windsurf, hosted Claude, IDEs) get the same capabilities
+  without shelling out. See §13.3.
 
 One sentence: stateless tool over `@linear/sdk`, with markdown + YAML cache
 under `~/.lebop/cache/<repo-hash>/` for the bulk loop and direct mutations for
@@ -54,9 +59,7 @@ declarative authoring).
 
 ## 3. Scope
 
-### In scope
-
-CLI commands (all shipped):
+### In scope (shipped today)
 
 | Group | Commands |
 |---|---|
@@ -80,28 +83,54 @@ Plus the runtime substrate:
 - GraphQL escape hatch (`raw`)
 - Claude Code skill + slash commands (`claude/skills/lebop/`,
   `claude/commands/`)
+- Cursor pagination across all list operations (no silent truncation)
+- Structured error taxonomy (`LebopError` + 6 subtypes) — see §13.1
 
-In scope for v1.0 (see §13 for status):
+### In scope before public release (see §13)
 
-- MCP server (`lebop mcp`) wrapping the lib core
-- Bun-compiled standalone binaries (single-file, no runtime install)
-- Multi-workspace auth (`auth list / default / token`, `--workspace` flag)
-- `lebop schema` (offline GraphQL schema dump)
-- Issue relation CLI (`relation add / delete / list`)
-- Bulk `--bulk-file` / `--bulk-stdin` patterns on archive
-- Labels / projects / milestones CRUD
-- Documents (`list / get`)
-- Rich `list` filters (`--search`, `--unassigned`, `--cycle`, etc.)
+- **MCP server** (`lebop mcp`) wrapping the lib core
+- **Bun-compiled standalone binaries** (single-file, no runtime install)
+- **Multi-workspace auth** (`auth list / default / token / migrate`,
+  `--workspace` flag, system keyring storage)
+- **Full feature parity** with `@schpet/linear-cli` minus interactive-only
+  ergonomics — see §13.2 for the complete table
+- **First-class Linear PM verbs**: initiatives + initiative-update,
+  milestones, cycles (list/view), labels, documents (full CRUD),
+  agent-sessions, team members, project-update with `--health`
+- **Issue attach** (file upload) and **issue link** (URL attach)
+- **Comment edit/delete** + replies + attachments
+- **Rich `list` filters** (`--search`, `--unassigned`, `--cycle`,
+  `--milestone`, `--created-after`, `--include-archived`, `--all-teams`,
+  `--all-states`)
+- **`lebop schema`** (offline GraphQL schema dump)
+- **Shell completions** (bash/zsh/fish)
 
-### Out of scope
+### Out of scope (deliberate)
 
-- Comment edit/delete (deferred; only `comment add` ships today)
-- Linear webhook subscriptions
-- Multi-workspace content migration
-- UI — CLI + files + MCP only
-- Conflict merging on CAS — abort and require explicit `pull --refresh`
-- Sub-cycle features (cycles CRUD; `list --cycle` filter is in v1.0)
-- Initiatives, agent sessions, attachments — accessible via `raw`
+- **Interactive-only ergonomics from linear-cli** — `issue start` (state
+  change + branch creation), `pull-request` (gh-cli wrapper), `issue id` /
+  `describe` / `commits` (jj/git inference), `-w/--web` / `-a/--app` open
+  shortcuts. lebop is agent-first; pair with `@schpet/linear-cli` for
+  these flows if you do solo human work.
+- **Linear webhook subscriptions** — pull-on-demand model only
+- **Multi-workspace content migration**
+- **UI** — CLI + files + MCP only
+- **Conflict merging on CAS** — abort and require explicit `pull --refresh`
+- **Comment edit on existing comment via cache** — comments are read-only
+  in the cache; mutate via `comment update` direct command
+- **Watch mode / autopush** — explicit action only
+- **Cache-format schema migrations** — nuke cache and re-pull on format
+  change
+
+### Out of scope post-release (genuinely future, not pre-public)
+
+- App-actor OAuth (`actor=app` audit-trail separation)
+- MCP HTTP+SSE transport (stdio is the pre-release shape)
+- `lebop new --from <template>` template-driven scaffolding
+- Sort control on `list`
+- Default-template handling on `new`
+- `team create / delete / autolinks` (rare ops; `raw` covers)
+- Issue delete (`archive` is the supported path; destructive ops via `raw`)
 
 ---
 
@@ -1038,80 +1067,111 @@ Facts that cost time on first encounter. **Check here before re-deriving.**
 
 ---
 
-## 13. v1.0 roadmap — toward open-source release
+## 13. Roadmap to public release
 
 The shipped surface in §3 is functional and used in production by the
-author. v1.0 turns lebop into a polished, public OSS tool. Sequenced:
+author. The work below polishes lebop into a public open-source tool with
+**full feature parity** vs `@schpet/linear-cli` (modulo deliberately-skipped
+interactive-only ergonomics — see §3 out-of-scope) and a complete MCP server
+that exceeds what Linear's hosted MCP exposes.
+
+Versioning ramps to 1.0.0 only when this section is complete.
 
 ### 13.1 Robustness & internal foundations
 
-- Lib decoupling pass — verify `commands/*.ts` are thin shells over
-  `lib/*.ts` with structured returns; no `console.log`/`process.exit` in
-  lib (the MCP server consumes lib directly).
-- Structured error taxonomy: `LebopError` base + `AuthError`, `ConfigError`,
-  `ValidationError`, `CASError`, `NetworkError`, `RateLimitError`. Stable
-  `code` for programmatic consumers.
-- Cursor pagination everywhere — kill silent 250-item caps in `pullQuery`,
-  `list`, `projects`, `teams`, plan diff/pull project loops, and the
-  100-item comments cap.
-- Retry + rate-limit handling at the SDK boundary.
-- `status` shows "stale (remote newer)" by querying remote `updatedAt`.
-- CLI integration tests (currently zero — all 138 tests are lib-level).
+- ✅ **Lib decoupling pass** — `commands/*.ts` are thin shells over `lib/*.ts`
+  with structured returns. No `console.log`/`process.exit` in lib (only
+  `prompt.ts`, documented as TTY-only and not imported by MCP code paths).
+  The MCP server consumes lib directly.
+- ✅ **Structured error taxonomy** — `LebopError` base + `AuthError`,
+  `ConfigError`, `ValidationError`, `CASError`, `NetworkError`,
+  `RateLimitError`. Stable `code` field for programmatic consumers; `hint`
+  for user-facing remediation. CLI handler renders `error[code]: msg` +
+  `hint:` line; MCP server maps to MCP error responses.
+- ✅ **Cursor pagination everywhere** — `lib/paginate.ts` exposes
+  `paginateConnection` (SDK) and `paginateRaw` (GraphQL). All list ops walk
+  pages; comments fragment bumped 100→250 with overflow warning.
+- ⬜ **Retry + rate-limit handling** at the SDK boundary — wrap rawRequest
+  with exponential-backoff on `429` / `RATE_LIMITED`; throw
+  `RateLimitError` if exhausted; pair with `NetworkError` for transient
+  failures.
+- ⬜ **`status` shows "stale (remote newer)"** by querying remote `updatedAt`
+  (spec §6.3 promised this; not yet shipped).
+- ⬜ **CLI integration tests** under `tests/integration/` against a recorded
+  SDK fake. Currently 138 pass at lib level; zero CLI-level tests.
+- ⬜ **Per-issue paginated comment fetch** — for the rare >250-comments-per-
+  issue case. Today: warning emitted; full pagination is a follow-up.
 
-### 13.2 Feature parity (the high-leverage 50%)
+### 13.2 Feature parity with `@schpet/linear-cli`
+
+Full parity except interactive-only ergonomics deliberately out of scope (§3).
 
 | Surface | Add |
 |---|---|
-| **Auth** | `auth list`, `auth default`, `auth token`, `--workspace <slug>` on every command |
-| **Issues** | `mine`, `unarchive`, `set` accepts `estimate`/`parent`/`project`/`milestone`/`cycle`/`due-date`, `new` same |
+| **Auth** | `auth list`, `auth default`, `auth token`, `auth migrate`, system keyring credential storage with `--plaintext` opt-out, `--workspace <slug>` on every command |
+| **Issues** | `mine`, `unarchive`, `set` accepts `estimate` / `parent` / `project` / `milestone` / `cycle` / `due-date`, `new` same. `set description --description-file` (currently refused). |
+| **Issue attach + link** | `issue attach <id> <file> [--title --comment]` (file upload), `issue link <id> <url> [--title]` (URL attach) |
 | **List filters** | `--search`, `--search-comments`, `--unassigned`, `--cycle`, `--milestone`, `--created-after`, `--include-archived`, `--all-teams`, `--all-states` |
-| **Relations** | `relation add\|delete\|list <id> blocks\|blocked-by\|related\|duplicate <other>` |
-| **Comments** | `comment list`, `comment update`, `comment delete`, `comment add --parent` (replies), `comment --body-file` |
+| **Relations** | First-class verb: `relation add\|delete\|list <id> blocks\|blocked-by\|related\|duplicate <other>` (in addition to existing `set links` delta syntax) |
+| **Comments** | `comment list`, `comment update`, `comment delete`, `comment add --parent` (replies), `comment add --attach`, `comment --body-file` |
 | **Bulk** | `archive --bulk-file`, `archive --bulk-stdin` |
-| **Labels** | `label list\|create\|delete` |
+| **Labels** | `label list\|create\|delete` (workspace + team-scoped) |
 | **Projects** | `project create\|update\|delete\|view`, `project-update create\|list --health` |
 | **Milestones** | `milestone list\|view\|create\|update\|delete --project` |
-| **Documents** | `document list\|get` |
+| **Initiatives** | `initiative list\|view\|create\|update\|delete\|archive\|unarchive\|add-project\|remove-project`, `initiative-update create\|list --health` |
+| **Cycles** | `cycle list\|view` (CRUD via `raw` for now) |
+| **Documents** | `document list\|view\|create\|update\|delete` (workspace, project, issue scoped; `--edit` opens `$EDITOR`) |
+| **Agent sessions** | `agent-session list\|view` — Linear's first-class agent feature |
+| **Teams** | `team members [team-key] [--all]` (lists active + optional inactive members) |
 | **Help search** | `lebop help-search "..."` (Linear product help passthrough) |
-| **Schema** | `lebop schema [-o file]` (GraphQL dump) |
-| **Raw** | `--paginate`, `--variable k=v` (with `@file`) |
+| **Schema** | `lebop schema [-o file]` (offline GraphQL schema dump) |
+| **Raw** | `--paginate`, `--variable k=v` (with `@file` for file-backed values) |
 | **Completions** | `lebop completions bash\|zsh\|fish` |
-| **`--description-file`** parity | On `set description` (currently refused), `comment add/update` |
-
-Deferred to v1.1: system keyring, `auth migrate`, initiatives, cycles CRUD,
-agent-sessions, default-template handling, web/app open shortcuts, file/URL
-attachments, teams CRUD, sort control.
 
 ### 13.3 MCP server (`lebop mcp`)
 
-New entry: `lebop mcp` runs an MCP server over **stdio** (right shape for
-binary distribution; HTTP+SSE deferred to v1.1).
+`lebop mcp` runs an MCP server over **stdio** — right shape for binary
+distribution and matches Cursor / Claude Desktop / Windsurf expectations.
+HTTP+SSE transport is post-release for hosted/multi-user setups.
 
-- **Auth:** bearer-token via existing `~/.lebop/auth.json`. (OAuth dynamic
-  client registration like Linear's hosted MCP server is v1.1.)
+- **Auth:** bearer-token via existing `~/.lebop/auth.json`. OAuth dynamic
+  client registration (like Linear's hosted MCP) is post-release.
 - **Tools** (each wraps a `lib/` function — no logic duplication):
   - **Reads:** `list_issues`, `get_issue`, `list_my_issues`, `list_comments`,
-    `list_projects`, `get_project`, `list_teams`, `list_users`, `get_user`
-    (`id: "me"`), `list_labels`, `list_milestones`, `list_documents`,
-    `get_document`, `list_cycles`, `list_issue_statuses`,
+    `list_projects`, `get_project`, `list_teams`, `get_team`,
+    `list_team_members`, `list_users`, `get_user` (`id: "me"`),
+    `list_labels`, `list_milestones`, `list_documents`, `get_document`,
+    `list_cycles`, `get_cycle`, `list_issue_statuses`, `get_issue_status`,
+    `list_initiatives`, `get_initiative`, `list_initiative_updates`,
+    `list_project_updates`, `list_agent_sessions`, `get_agent_session`,
     `search_documentation`.
   - **Writes:** `create_issue`, `update_issue`, `archive_issue`,
-    `unarchive_issue`, `create_comment`, `update_comment`, `delete_comment`,
-    `create_project`, `update_project`, `create_label`, `delete_label`,
-    `create_milestone`, `update_milestone`, `add_relation`,
-    `delete_relation`.
-  - **Differentiators** (where lebop beats the Linear MCP): `raw_graphql`,
-    `lint_text`, `plan_validate`, `plan_apply`, `plan_diff`, `pull_issue`
-    (cache write), `push_changes` (CAS).
+    `unarchive_issue`, `create_comment`, `update_comment`,
+    `delete_comment`, `create_project`, `update_project`, `delete_project`,
+    `create_project_update`, `create_label`, `delete_label`,
+    `create_milestone`, `update_milestone`, `delete_milestone`,
+    `create_initiative`, `update_initiative`, `archive_initiative`,
+    `unarchive_initiative`, `delete_initiative`, `initiative_add_project`,
+    `initiative_remove_project`, `create_initiative_update`,
+    `create_document`, `update_document`, `delete_document`,
+    `add_relation`, `delete_relation`, `attach_file_to_issue`,
+    `link_url_to_issue`.
+  - **Differentiators** (where lebop exceeds Linear's MCP): `raw_graphql`,
+    `lint_text`, `plan_validate`, `plan_apply`, `plan_diff`, `plan_pull`,
+    `pull_issue` (cache write), `push_changes` (CAS-guarded), `lebop_diff`
+    (single-issue unified diff).
 - **Layout:** `src/mcp/server.ts` registers tools → `src/mcp/handlers/*.ts`
   thin wrappers over `lib/`. Uses `@modelcontextprotocol/sdk`.
-- The same SKILL.md teaches both surfaces; tool docs co-live.
+- **Errors** map `LebopError` → MCP error responses with the same `code`
+  field, so MCP clients see the structured taxonomy.
+- The same SKILL.md teaches both surfaces; tool docs co-live in the skill
+  markdown.
 
 ### 13.4 OSS hygiene & distribution
 
-- `LICENSE` (MIT recommended)
-- `CHANGELOG.md` (Keep-a-Changelog), `CONTRIBUTING.md`, `SECURITY.md`,
-  `CODE_OF_CONDUCT.md`
+- `LICENSE` (MIT)
+- `CHANGELOG.md` (Keep-a-Changelog format), `CONTRIBUTING.md`,
+  `SECURITY.md`, `CODE_OF_CONDUCT.md` (Contributor Covenant 2.1)
 - `.github/workflows/ci.yml` (bun install → biome → tsc → vitest)
 - `.github/workflows/release.yml` (`bun build --compile --target=
   bun-{darwin,linux}-{x64,arm64}` → 4 platform binaries, attached to
@@ -1124,24 +1184,30 @@ binary distribution; HTTP+SSE deferred to v1.1).
 - One-line installer script: `curl -fsSL …/install.sh | sh` — picks the
   right binary, verifies SHA256, drops in `/usr/local/bin/lebop`
 
-**No npm publish, no Homebrew tap for v1.0** — GitHub Releases + install
-script is the single distribution path.
+**No npm publish, no Homebrew tap at first release** — GitHub Releases +
+install script is the single distribution path. npm + brew tap are
+candidates for a follow-up release after public adoption signal.
 
 ---
 
-## 14. Future enhancements (post-v1.0)
+## 14. Out of scope post-public-release
+
+These are genuinely future, not pre-release:
 
 - **App-actor OAuth** — register a Linear OAuth app; use `actor=app` so
   agent mutations attribute to the app identity (separate from the human
   user) in Linear's audit log. Deferred until audit-trail noise becomes
   observable.
 - **MCP HTTP+SSE transport** — for hosted/multi-user MCP scenarios.
-- **System keyring credential storage** + `auth migrate` from plaintext.
-- **Initiatives + initiative-update** CRUD.
-- **Cycles CRUD** (today: filter only).
-- **File / URL attachments** on issues.
 - **`lebop new --from <template>`** — template-driven scaffolding.
-- **Comment edit/delete** — out-of-scope today; add when use-cases surface.
+- **Sort control** on `list` — minor ergonomics.
+- **Default-template handling** on `new` (`--no-use-default-template`).
+- **`team create` / `delete` / `autolinks`** — rare ops; `raw` covers.
+- **Comment edit on existing comment via cache** — comments stay read-only
+  in the cache; mutate via `comment update` direct command.
+- **Per-field CAS** — Linear API doesn't expose per-field versioning;
+  entity-level CAS is the safe failure mode.
+- **Watch mode / autopush** — explicit action only.
 
 ---
 
@@ -1153,7 +1219,7 @@ script is the single distribution path.
 - ~30 ms cold start vs ~150 ms for `tsx`/`ts-node`. Matters for repeated
   `lebop status` invocations.
 - `Bun.file` / `Bun.write` for atomic I/O; fewer dependencies.
-- `bun build --compile` produces single-file binaries — the v1.0
+- `bun build --compile` produces single-file binaries — the public-release
   distribution path.
 - `tsconfig.json` is strict: `noUncheckedIndexedAccess`, `module:
   "Preserve"`, `moduleResolution: "bundler"`.
@@ -1214,28 +1280,37 @@ emitting per-entity result objects.
 
 ## 16. Why not just `@schpet/linear-cli` or the Linear MCP?
 
-Complementary today; v1.0 lebop becomes the recommended one-stop shop.
+**Best for agents, sufficient for humans.** lebop is built around the agent
+use case — bulk markdown editing, declarative plans, lint, CAS, MCP. A
+human using lebop interactively gets a competent CLI, but lebop intentionally
+skips ergonomics linear-cli does well: `issue start` (state change + branch
+creation), `pull-request` (gh-cli wrapper), browser-open shortcuts, jj/git-
+aware issue inference.
+
+**For agent-driven work**, lebop replaces both `@schpet/linear-cli` and the
+official Linear MCP server. **For solo human work**, pair lebop (bulk + plan
++ agent + CAS) with linear-cli (interactive single-issue flows it specializes
+in).
 
 | | `@schpet/linear-cli` | Linear MCP server | lebop |
 |---|---|---|---|
-| Shape | Single-issue interactive CLI | Hosted MCP tools | Bulk + declarative + agentic CLI + MCP |
-| Input | Flags per field | Per-tool params | Frontmatter + markdown files (or flags, or MCP) |
+| Shape | Interactive CLI | Hosted MCP tools | Agentic CLI + MCP, bulk + declarative |
+| Input | Flags per field | Per-tool params | Markdown files, flags, MCP — caller's choice |
 | Round-trip | Per-command | Per-tool-call | Pull → edit → push, plan → diff → pull |
 | Mutation batching | Sequential CLI | Sequential tool calls | One call per plan or one multi-alias push |
 | CAS / staleness | None | None | `updatedAt` check; `--force` to bypass |
-| Markdown lint | None | None | 8 rules + repo-scoped config |
-| Declarative planning | Not a goal | Not exposed | **Hero feature** |
-| GraphQL escape hatch | Yes | No | Yes (`raw`) |
+| Markdown lint | None | None | 8 rules (L001–L006) + repo-scoped config |
+| Declarative planning | Not a goal | Not exposed | **Hero feature** (`plan apply`) |
+| GraphQL escape hatch | Yes (`api`) | No | Yes (`raw`) |
 | Local cache | No | No | Yes (`~/.lebop/cache/`) |
-| Distribution | npm | Hosted | Bun-compiled binaries (v1.0) |
-
-`linear-cli` remains valuable for interactive ergonomics it doesn't make
-sense to copy: `linear branch`, `linear issue start` (state-change + branch
-creation), `--web` open shortcuts. lebop covers the bulk + agent + CAS
-surfaces.
+| Distribution | npm | Hosted | Bun-compiled binaries via GitHub Releases |
+| `issue start` / branch creation / `pr` | Yes | No | **Deliberately skipped** — use linear-cli |
+| Multi-workspace `--workspace` flag | Yes | N/A (per-server) | Yes (post-pre-release work) |
+| File / URL attachments | Yes | No | Yes (post-pre-release work) |
+| Initiatives + agent-sessions | Yes | No | Yes (post-pre-release work) |
 
 The Linear MCP server's strength is zero-install OAuth in any MCP-aware
-tool; lebop's MCP server (v1.0) covers the same callers with the same auth
-ergonomics for the host (`lebop auth login` once, MCP tool calls inherit
-it) and a much wider tool surface — including the differentiators
-(`raw_graphql`, `plan_*`, `lint_text`).
+tool; lebop's MCP server runs over stdio with bearer-token auth from
+`~/.lebop/auth.json`, exposing a wider tool surface including the
+differentiators (`raw_graphql`, `plan_*`, `lint_text`, `pull_issue`,
+`push_changes` with CAS).
