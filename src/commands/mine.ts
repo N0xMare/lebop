@@ -30,21 +30,23 @@ export function registerMine(program: Command): void {
       const requested = Number.parseInt(opts.limit ?? "50", 10);
       const max = requested === 0 ? Number.POSITIVE_INFINITY : Math.max(1, requested);
 
-      // Default state-type filter: active states only.
-      // `--all-states` removes the filter entirely.
-      // An explicit `--state-type` overrides both.
-      const stateType = opts.stateType ?? (opts.allStates ? undefined : undefined);
-      // Active = anything but completed/canceled. Linear's IssueFilter only
-      // accepts a single state type via `eq`, so for "active states only" we
-      // can't pass a list — we use `state.type.nin` semantics via a workaround
-      // not supported. Workaround: skip server-side filter; client-side filter
-      // out completed/canceled in post.
+      // Default state filter: active states only (everything but completed +
+      // canceled). Pushed server-side via `state.type.in` so `--limit 50`
+      // actually returns up to 50 active issues, not 50 raw issues then a
+      // client-side filter. Explicit `--state-type` narrows further;
+      // `--all-states` drops the filter entirely.
+      const stateTypeIn =
+        opts.stateType || opts.allStates
+          ? undefined
+          : ["triage", "backlog", "unstarted", "started"];
+
       const records = await listIssues({
         resolvedTeam: opts.allTeams ? undefined : config.team,
         team: opts.team,
         allTeams: opts.allTeams,
         assignee: "me",
-        stateType,
+        stateType: opts.stateType,
+        stateTypeIn,
         label: opts.label,
         priority: opts.priority !== undefined ? Number.parseInt(opts.priority, 10) : undefined,
         cycle: opts.cycle,
@@ -53,21 +55,14 @@ export function registerMine(program: Command): void {
         max,
       });
 
-      // Client-side state filter when --all-states is not set and no explicit
-      // --state-type was given. Keeps active issues only.
-      const filtered =
-        opts.allStates || opts.stateType
-          ? records
-          : records.filter((r) => r.state_type !== "completed" && r.state_type !== "canceled");
-
       if (opts.json) {
         process.stdout.write(
           `${JSON.stringify(
             {
               schema_version: 1,
               team: opts.allTeams ? "*" : config.team,
-              count: filtered.length,
-              issues: filtered,
+              count: records.length,
+              issues: records,
             },
             null,
             2,
@@ -76,7 +71,7 @@ export function registerMine(program: Command): void {
         return;
       }
 
-      printHuman(filtered);
+      printHuman(records);
     });
 }
 

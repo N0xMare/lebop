@@ -57,13 +57,34 @@ export class RateLimitError extends LebopError {
 }
 
 /**
- * Linear's GraphQL surface returns a generic "Entity not found" error for any unknown
- * issue/project/team UUID or identifier. Surfaced verbatim, that's noisy and lacks the
- * one piece of context the caller needs: which id was missing.
+ * Linear's GraphQL surface signals "not found" for any unknown
+ * issue/project/team UUID or identifier. Surfaced verbatim, that's noisy
+ * and lacks the one piece of context the caller needs: which id was missing.
+ *
+ * Lookup order, mirroring `classifyError`:
+ *   1. Structured: `errors[].extensions.code` of `NOT_FOUND` (or variants)
+ *   2. Message-string regex on `Entity not found` (current Linear wording)
  *
  * Use at catch sites; pass through unrelated errors unchanged.
  */
 export function rewriteNotFound(err: unknown, identifier: string): Error {
+  // Check structured GraphQL extension codes first (resilient across SDK
+  // versions and future Linear wording changes).
+  if (typeof err === "object" && err !== null) {
+    const errors = (err as { errors?: { extensions?: { code?: unknown } }[] }).errors;
+    if (Array.isArray(errors)) {
+      for (const e of errors) {
+        const code = e?.extensions?.code;
+        if (typeof code === "string") {
+          const upper = code.toUpperCase();
+          if (upper === "NOT_FOUND" || upper === "ENTITY_NOT_FOUND" || upper === "NOTFOUND") {
+            return new ValidationError(`not found: ${identifier}`);
+          }
+        }
+      }
+    }
+  }
+
   const original = err instanceof Error ? err : new Error(String(err));
   if (/Entity not found/i.test(original.message)) {
     return new ValidationError(`not found: ${identifier}`);

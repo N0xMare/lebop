@@ -22,6 +22,11 @@ export async function listProjects(opts: {
   max?: number;
 }): Promise<ListedProject[]> {
   const client = await linear();
+  // Push state filter to GraphQL so `max` counts post-filter results.
+  // (`projects.state` is a String filter on the project's state name.)
+  const filter: Record<string, unknown> | undefined = opts.state
+    ? { state: { eq: opts.state } }
+    : undefined;
 
   if (opts.team) {
     // Team-scoped: walk team.projects
@@ -29,42 +34,36 @@ export async function listProjects(opts: {
     const team = teams.nodes[0];
     if (!team) throw new Error(`team not found: ${opts.team}`);
     const projects = await paginateConnection(
-      ({ first, after }) => team.projects({ first, after }),
+      ({ first, after }) => team.projects({ first, after, filter }),
       { max: opts.max },
     );
-    let records = projects.map((p) => ({
-      id: p.id,
-      name: p.name,
-      description: p.description ?? null,
-      state: p.state,
-      url: p.url,
-      updated_at: p.updatedAt.toISOString(),
-    }));
-    if (opts.state) {
-      const needle = opts.state.toLowerCase();
-      records = records.filter((p) => p.state.toLowerCase() === needle);
-    }
-    return records;
+    return projects.map(shapeProject);
   }
 
   // Workspace-wide listing
   const projects = await paginateConnection(
-    ({ first, after }) => client.projects({ first, after }),
+    ({ first, after }) => client.projects({ first, after, filter }),
     { max: opts.max },
   );
-  let records = projects.map((p) => ({
+  return projects.map(shapeProject);
+}
+
+function shapeProject(p: {
+  id: string;
+  name: string;
+  description: string | null;
+  state: string;
+  url: string;
+  updatedAt: Date;
+}): ListedProject {
+  return {
     id: p.id,
     name: p.name,
     description: p.description ?? null,
     state: p.state,
     url: p.url,
     updated_at: p.updatedAt.toISOString(),
-  }));
-  if (opts.state) {
-    const needle = opts.state.toLowerCase();
-    records = records.filter((p) => p.state.toLowerCase() === needle);
-  }
-  return records;
+  };
 }
 
 export interface FullProject {

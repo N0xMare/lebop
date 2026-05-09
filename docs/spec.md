@@ -1402,57 +1402,89 @@ Full parity except interactive-only ergonomics deliberately out of scope (§3).
 | **Raw** | `--paginate`, `--variable k=v` (with `@file` for file-backed values) |
 | **Completions** | `lebop completions bash\|zsh\|fish` |
 
-### 13.3 MCP server (`lebop mcp`) — ✅ scaffolded
+### 13.3 MCP server (`lebop mcp`) — ✅ shipped
 
 `lebop mcp` runs an MCP server over **stdio** — right shape for binary
 distribution and matches Cursor / Claude Desktop / Windsurf expectations.
 HTTP+SSE transport is post-release for hosted/multi-user setups.
 
-**Initial vertical slice** (lands with the scaffold; expanded coverage
-follows as §13.2 commands ship):
-
-- `list_issues` — wraps `lib/listIssues.ts` (paginates + filters + retries)
-- `add_relation` — wraps `lib/relations.ts::createLink` (idempotent at the
-  tuple level, so safe to retry)
-- `list_relations` — wraps `lib/relations.ts::listRelations`
-- `lint_text` — wraps `lib/lint.ts` (lebop differentiator; neither
-  linear-cli nor Linear's MCP exposes this)
-
-Per-tool `workspace` arg targets a specific workspace via the existing
-`LEBOP_WORKSPACE` env path; defaults to the auth file's `default`.
-
-- **Auth:** bearer-token via existing `~/.lebop/auth.json`. OAuth dynamic
+- **Auth**: bearer-token via existing `~/.lebop/auth.json`. OAuth dynamic
   client registration (like Linear's hosted MCP) is post-release.
-- **Tools** (each wraps a `lib/` function — no logic duplication):
-  - **Reads:** `list_issues`, `get_issue`, `list_my_issues`, `list_comments`,
-    `list_projects`, `get_project`, `list_teams`, `get_team`,
-    `list_team_members`, `list_users`, `get_user` (`id: "me"`),
-    `list_labels`, `list_milestones`, `list_documents`, `get_document`,
-    `list_cycles`, `get_cycle`, `list_issue_statuses`, `get_issue_status`,
-    `list_initiatives`, `get_initiative`, `list_initiative_updates`,
-    `list_project_updates`, `list_agent_sessions`, `get_agent_session`,
-    `search_documentation`.
-  - **Writes:** `create_issue`, `update_issue`, `archive_issue`,
-    `unarchive_issue`, `create_comment`, `update_comment`,
-    `delete_comment`, `create_project`, `update_project`, `delete_project`,
-    `create_project_update`, `create_label`, `delete_label`,
-    `create_milestone`, `update_milestone`, `delete_milestone`,
-    `create_initiative`, `update_initiative`, `archive_initiative`,
-    `unarchive_initiative`, `delete_initiative`, `initiative_add_project`,
-    `initiative_remove_project`, `create_initiative_update`,
-    `create_document`, `update_document`, `delete_document`,
-    `add_relation`, `delete_relation`, `attach_file_to_issue`,
-    `link_url_to_issue`.
-  - **Differentiators** (where lebop exceeds Linear's MCP): `raw_graphql`,
-    `lint_text`, `plan_validate`, `plan_apply`, `plan_diff`, `plan_pull`,
-    `pull_issue` (cache write), `push_changes` (CAS-guarded), `lebop_diff`
-    (single-issue unified diff).
-- **Layout:** `src/mcp/server.ts` registers tools → `src/mcp/handlers/*.ts`
-  thin wrappers over `lib/`. Uses `@modelcontextprotocol/sdk`.
-- **Errors** map `LebopError` → MCP error responses with the same `code`
-  field, so MCP clients see the structured taxonomy.
-- The same SKILL.md teaches both surfaces; tool docs co-live in the skill
-  markdown.
+- **Layout**: `src/mcp/server.ts` registers tools that delegate directly
+  to `lib/` functions — no logic duplication. Uses
+  `@modelcontextprotocol/sdk`.
+- **Per-call workspace selection**: every tool accepts an optional
+  `workspace` arg. The shared `safe()` decorator captures the prior
+  `LEBOP_WORKSPACE` env on entry, applies the override if provided, and
+  restores in `finally` — preventing one tool call from leaking workspace
+  state into the next.
+- **Errors**: every tool handler is wrapped with `safe()`, which catches
+  thrown errors and serializes via `formatToolError` into
+  `{content: [{type, text}], isError: true}` with `LebopError.code` +
+  `hint` preserved. MCP clients see the structured taxonomy.
+
+#### Shipped tools (41)
+
+**Issues** (1): `list_issues`
+
+**Relations** (2): `add_relation`, `list_relations`
+
+**Labels** (4): `list_labels`, `create_label`, `delete_label`,
+`lookup_label_by_name`
+
+**Milestones** (5): `list_milestones`, `get_milestone`, `create_milestone`,
+`update_milestone`, `delete_milestone`
+
+**Projects + project-updates** (7): `list_projects`, `get_project`,
+`create_project`, `update_project`, `delete_project`,
+`list_project_updates`, `create_project_update`
+
+**Initiatives + initiative-updates** (11): `list_initiatives`,
+`get_initiative`, `create_initiative`, `update_initiative`,
+`archive_initiative`, `unarchive_initiative`, `delete_initiative`,
+`initiative_add_project`, `initiative_remove_project`,
+`list_initiative_updates`, `create_initiative_update`
+
+**Cycles** (2): `list_cycles`, `get_cycle`
+
+**Documents** (5): `list_documents`, `get_document`, `create_document`,
+`update_document`, `delete_document`
+
+**Agent sessions** (2): `list_agent_sessions`, `get_agent_session`
+
+**Team members** (1): `list_team_members`
+
+**Differentiator** (1): `lint_text` — runs L001-L006 against arbitrary
+markdown. Neither linear-cli nor Linear's hosted MCP exposes this.
+
+#### Tools deliberately not yet shipped
+
+The CLI ships several verbs whose MCP tool wrappers are deferred — most
+either need a small lib-extraction first or are compositions of existing
+primitives that agents can do via `lib_use_existing` patterns:
+
+- `pull_issue`, `push_changes`, `lebop_diff` — would expose the cache
+  round-trip semantics. Need cache to be MCP-context-aware (current cache
+  keys by repo-hash, which doesn't apply when there's no host repo).
+- `plan_validate`, `plan_apply`, `plan_diff`, `plan_pull` — same reason;
+  plan files live on the agent's filesystem, not in the MCP server's
+  context.
+- `raw_graphql` — direct passthrough; defer until the contract for raw
+  output (limits, redaction) is settled.
+- `link_url_to_issue` — small wrapper around `attachmentLinkURL`. Lift
+  from `commands/link.ts` next.
+- `search_documentation` — `lebop help-search` CLI verb exists; lift the
+  query into a lib function and wire as MCP.
+- Issue + comment CRUD as MCP tools (`create_issue`, `update_issue`,
+  `archive_issue`, `unarchive_issue`, `add_comment`, `update_comment`,
+  `delete_comment`, `list_comments`) — straightforward to add; deferred
+  to keep the §13.3 scaffold minimal.
+- Team CRUD (`create_team`, `delete_team`) — out of scope per §3.
+
+These are tracked for a follow-up release after public launch — the
+current 41-tool surface covers reads + the high-leverage CRUD writes
+(initiatives, projects, labels, milestones, documents) plus the
+differentiator (`lint_text`).
 
 ### 13.4 OSS hygiene & distribution
 

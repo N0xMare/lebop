@@ -1,5 +1,6 @@
 import chalk from "chalk";
 import type { Command } from "commander";
+import { resolveBody } from "../lib/io.ts";
 import { resolveProjectId } from "../lib/milestones.ts";
 import { type ProjectHealth, createProjectUpdate, listProjectUpdates } from "../lib/projects.ts";
 
@@ -101,22 +102,4 @@ export function registerProjectUpdate(program: Command): void {
         );
       }
     });
-}
-
-async function resolveBody(opts: {
-  body?: string;
-  bodyFile?: string;
-  stdin?: boolean;
-}): Promise<string> {
-  const provided = [opts.body, opts.bodyFile, opts.stdin].filter(Boolean).length;
-  if (provided === 0) {
-    if (!process.stdin.isTTY) return (await Bun.stdin.text()).trim();
-    throw new Error("no body — pass --body, --body-file, or pipe to stdin");
-  }
-  if (provided > 1) {
-    throw new Error("pick one of --body / --body-file / --stdin");
-  }
-  if (opts.body) return opts.body;
-  if (opts.bodyFile) return (await Bun.file(opts.bodyFile).text()).trim();
-  return (await Bun.stdin.text()).trim();
 }

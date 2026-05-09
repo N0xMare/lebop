@@ -7,6 +7,7 @@ import {
   listDocuments,
   updateDocument,
 } from "../lib/documents.ts";
+import { resolveContent } from "../lib/io.ts";
 import { resolveProjectId } from "../lib/milestones.ts";
 
 export function registerDocument(program: Command): void {
@@ -166,17 +167,4 @@ export function registerDocument(program: Command): void {
       if (success) process.stdout.write(`${chalk.green("✓")} deleted ${chalk.bold(id)}\n`);
       else process.exitCode = 1;
     });
-}
-
-async function resolveContent(opts: {
-  content?: string;
-  contentFile?: string;
-  stdin?: boolean;
-}): Promise<string | undefined> {
-  const provided = [opts.content, opts.contentFile, opts.stdin].filter(Boolean).length;
-  if (provided > 1) throw new Error("pick one of --content / --content-file / --stdin");
-  if (provided === 0) return undefined;
-  if (opts.content) return opts.content;
-  if (opts.contentFile) return (await Bun.file(opts.contentFile).text()).trimEnd();
-  return (await Bun.stdin.text()).trimEnd();
 }

@@ -23,6 +23,14 @@ export interface ListIssuesOpts {
   state?: string;
   /** State type — `triage|backlog|unstarted|started|completed|canceled`. */
   stateType?: string;
+  /**
+   * Multiple state types. Passed to Linear as `state.type.in` for
+   * server-side filtering. Use this for "active states only" (etc.) so
+   * the paginator's `max` cap counts post-filter results, not pre-filter.
+   * Mutually exclusive with `stateType` — if both set, `stateType` wins
+   * (single eq is more specific).
+   */
+  stateTypeIn?: string[];
   /** `me`/`@me`, email, name, or `*` for "any assignee". */
   assignee?: string;
   /** Toggle: only unassigned issues. Mutually exclusive with `assignee`. */
@@ -79,7 +87,11 @@ export async function buildIssueFilter(
   if (opts.project) filter.project = { name: { eq: opts.project } };
   if (opts.projectId) filter.project = { id: { eq: opts.projectId } };
   if (opts.state) filter.state = { name: { eq: opts.state } };
-  if (opts.stateType) filter.state = { ...filter.state, type: { eq: opts.stateType } };
+  if (opts.stateType) {
+    filter.state = { ...filter.state, type: { eq: opts.stateType } };
+  } else if (opts.stateTypeIn && opts.stateTypeIn.length > 0) {
+    filter.state = { ...filter.state, type: { in: opts.stateTypeIn } };
+  }
   if (opts.priority !== undefined) filter.priority = { eq: opts.priority };
   if (opts.label && opts.label.length > 0) {
     filter.labels = { some: { name: { in: opts.label } } };

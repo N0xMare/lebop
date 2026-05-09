@@ -6,6 +6,7 @@ import {
   listInitiativeUpdates,
   resolveInitiativeId,
 } from "../lib/initiatives.ts";
+import { resolveBody } from "../lib/io.ts";
 
 const HEALTH_VALUES = ["onTrack", "atRisk", "offTrack"] as const;
 
@@ -93,20 +94,4 @@ export function registerInitiativeUpdate(program: Command): void {
         );
       }
     });
-}
-
-async function resolveBody(opts: {
-  body?: string;
-  bodyFile?: string;
-  stdin?: boolean;
-}): Promise<string> {
-  const provided = [opts.body, opts.bodyFile, opts.stdin].filter(Boolean).length;
-  if (provided === 0) {
-    if (!process.stdin.isTTY) return (await Bun.stdin.text()).trim();
-    throw new Error("no body — pass --body, --body-file, or pipe to stdin");
-  }
-  if (provided > 1) throw new Error("pick one of --body / --body-file / --stdin");
-  if (opts.body) return opts.body;
-  if (opts.bodyFile) return (await Bun.file(opts.bodyFile).text()).trim();
-  return (await Bun.stdin.text()).trim();
 }

@@ -53,12 +53,23 @@ interface LabelsPage {
 }
 
 export async function listLabels(opts: ListLabelsOpts): Promise<ListedLabel[]> {
-  // Build the filter. `team.key.eq` scopes to a team's labels (and Linear
-  // includes workspace-scoped labels visible to that team automatically).
-  // `workspaceOnly` returns labels whose team is null. `all` = no filter.
+  // Build the filter:
+  //   `--all`              → no filter (every visible label)
+  //   `--workspace-only`   → labels with no team scope
+  //   `--team KEY` (default) → labels in this team OR workspace-scoped
+  //
+  // Linear's IssueLabelFilter applies team filters strictly: `team.key.eq`
+  // only returns labels with a non-null team matching the key. To include
+  // workspace-scoped labels (no team) for a team-scoped query, use the
+  // `or:` filter combinator.
   const filter: Record<string, unknown> = {};
-  if (opts.team && !opts.all) filter.team = { key: { eq: opts.team } };
-  if (opts.workspaceOnly && !opts.all) filter.team = { null: true };
+  if (opts.all) {
+    // no filter
+  } else if (opts.workspaceOnly) {
+    filter.team = { null: true };
+  } else if (opts.team) {
+    filter.or = [{ team: { key: { eq: opts.team } } }, { team: { null: true } }];
+  }
 
   const client = await linear();
   return paginateRaw<ListedLabel, LabelsPage>(

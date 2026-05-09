@@ -64,7 +64,7 @@ lebop set priority UE-321 urgent                 # name or 0..4
 lebop set labels UE-321 +urgent -area:backend    # delta syntax
 lebop set assignee UE-321 @me
 lebop set links UE-321 +blocks:UE-322 +related:UE-323   # 5 link kinds
-lebop comment UE-321 --body "LGTM"
+lebop comment add UE-321 --body "LGTM"
 ```
 
 ### Edit a body (multi-line description / project content)

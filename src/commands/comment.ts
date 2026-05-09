@@ -1,5 +1,6 @@
 import chalk from "chalk";
 import type { Command } from "commander";
+import { resolveBody } from "../lib/io.ts";
 import { paginateRaw } from "../lib/paginate.ts";
 import { linear, withClient } from "../lib/sdk.ts";
 
@@ -203,20 +204,6 @@ interface AddOpts {
   stdin?: boolean;
   parent?: string;
   json?: boolean;
-}
-
-async function resolveBody(opts: AddOpts): Promise<string> {
-  const providedCount = [opts.body, opts.bodyFile, opts.stdin].filter(Boolean).length;
-  if (providedCount === 0) {
-    if (!process.stdin.isTTY) return (await Bun.stdin.text()).trim();
-    throw new Error("no body — pass --body, --body-file, or pipe to stdin");
-  }
-  if (providedCount > 1) {
-    throw new Error("pick one of --body / --body-file / --stdin");
-  }
-  if (opts.body) return opts.body;
-  if (opts.bodyFile) return (await Bun.file(opts.bodyFile).text()).trim();
-  return (await Bun.stdin.text()).trim();
 }
 
 const LIST_COMMENTS_QUERY = /* GraphQL */ `
