@@ -559,8 +559,10 @@ Single-shot point edit. Resolves names → UUIDs; uses fresh server-side
 | `title` | `set title TEAM-1 "new title"` | |
 | `state` | `set state TEAM-1 "In Progress"` | exact match (case-insensitive) |
 | `priority` | `set priority TEAM-1 urgent` | `urgent\|high\|normal\|low\|none` or `0..4` |
+| `estimate` | `set estimate TEAM-1 5` | non-negative number; `null` clears |
 | `assignee` | `set assignee TEAM-1 @me` | `@me`, email, name, or `null` |
 | `labels` | `set labels TEAM-1 +urgent -area:backend` | **delta syntax** (default); `=foo,bar` exact-replace |
+| `parent` | `set parent TEAM-1 TEAM-100` | TEAM-NN identifier; `null` clears |
 | `links` | `set links TEAM-1 +blocks:TEAM-2 -related:TEAM-3` | five kinds: `blocks\|blocked-by\|related\|duplicates\|duplicated-by` |
 
 Refuses `description` / `content` — those need pull → edit → push because

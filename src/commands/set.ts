@@ -24,14 +24,25 @@ import {
 } from "../lib/resolve.ts";
 import { type linear, withClient } from "../lib/sdk.ts";
 
-const SUPPORTED_FIELDS = ["title", "state", "priority", "assignee", "labels", "links"] as const;
+const SUPPORTED_FIELDS = [
+  "title",
+  "state",
+  "priority",
+  "estimate",
+  "assignee",
+  "labels",
+  "parent",
+  "links",
+] as const;
 type SupportedField = (typeof SUPPORTED_FIELDS)[number];
 const UNSUPPORTED_FIELDS = new Set(["description", "content"]);
 
 export function registerSet(program: Command): void {
   program
     .command("set <field> <id> <value...>")
-    .description("single-shot point edit (title | state | priority | assignee | labels | links)")
+    .description(
+      "single-shot point edit (title | state | priority | estimate | assignee | labels | parent | links)",
+    )
     .option("--team <key>", "override the resolved team")
     .option("--json", "emit structured result")
     .addHelpText(
@@ -40,11 +51,13 @@ export function registerSet(program: Command): void {
 Examples:
   lebop set state TEAM-101 "In Progress"
   lebop set priority TEAM-101 urgent
+  lebop set estimate TEAM-101 5             (numeric points; \`null\` clears)
   lebop set assignee TEAM-101 @me
-  lebop set assignee TEAM-101 null           (unassign)
+  lebop set assignee TEAM-101 null          (unassign)
   lebop set labels TEAM-101 +urgent -area:backend
-  lebop set labels TEAM-101 =area:backend,bug  (exact replacement)
+  lebop set labels TEAM-101 =area:backend,bug   (exact replacement)
   lebop set title TEAM-101 "new title here"
+  lebop set parent TEAM-101 TEAM-100        (set parent issue; \`null\` clears)
   lebop set links TEAM-101 +blocks:TEAM-102 -related:TEAM-103
     supported kinds: blocks | blocked-by | duplicates | duplicated-by | related
     (use \`lebop raw\` for \`similar\`)
@@ -138,11 +151,39 @@ async function buildInput(
       return { stateId: resolveStateId(teamMetadata, value) };
     case "priority":
       return { priority: resolvePriority(value) };
+    case "estimate":
+      return { estimate: parseEstimate(value) };
     case "assignee":
       return { assigneeId: await resolveAssigneeId(teamMetadata, value) };
     case "labels":
       return { labelIds: await resolveLabelsInput(valueArgs, issue, teamMetadata) };
+    case "parent":
+      return { parentId: await resolveParentId(value) };
   }
+}
+
+function parseEstimate(value: string): number | null {
+  if (value === "null" || value === "none" || value === "") return null;
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < 0) {
+    throw new Error(
+      `invalid estimate "${value}" — pass a non-negative number or \`null\` to clear`,
+    );
+  }
+  return n;
+}
+
+async function resolveParentId(value: string): Promise<string | null> {
+  if (value === "null" || value === "none" || value === "") return null;
+  if (!/^[A-Z]+-\d+$/.test(value)) {
+    throw new Error(`invalid parent "${value}" — pass a TEAM-NN identifier or \`null\` to clear`);
+  }
+  // Linear's parentId wants a UUID, not the identifier.
+  const parent = await withClient((c) => c.issue(value));
+  if (!parent) {
+    throw new Error(`parent issue not found: ${value}`);
+  }
+  return parent.id;
 }
 
 async function resolveLabelsInput(

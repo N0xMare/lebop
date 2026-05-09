@@ -110,6 +110,9 @@ function computeFieldDiff(
   if (local.priority !== remote.priority) {
     diffs.push({ field: "priority", local: local.priority, remote: remote.priority });
   }
+  if ((local.estimate ?? null) !== (remote.estimate ?? null)) {
+    diffs.push({ field: "estimate", local: local.estimate, remote: remote.estimate });
+  }
   const localLabels = [...local.labels].sort();
   const remoteLabels = [...remote.labels].sort();
   if (!arraysEqual(localLabels, remoteLabels)) {
@@ -117,6 +120,9 @@ function computeFieldDiff(
   }
   if ((local.assignee ?? null) !== (remote.assignee ?? null)) {
     diffs.push({ field: "assignee", local: local.assignee, remote: remote.assignee });
+  }
+  if ((local.parent ?? null) !== (remote.parent ?? null)) {
+    diffs.push({ field: "parent", local: local.parent, remote: remote.parent });
   }
   return diffs;
 }
