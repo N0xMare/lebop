@@ -39,7 +39,7 @@ export function registerPull(program: Command): void {
     .command("pull [ids...]")
     .description("fetch Linear entities into ~/.lebop/cache for local editing")
     .option("--team <key>", "override the resolved team")
-    .option("--project <name>", "fetch a project and its child issues")
+    .option("--project <name-or-id>", "fetch a project (name or UUID) and its child issues")
     .option("--project-id <uuid>", "fetch by project UUID")
     .option("--refresh", "overwrite local cache even if it has unpushed edits")
     .option("--no-comments", "skip fetching comments")
@@ -355,21 +355,33 @@ async function writeProjectExport(
 async function lookupProjectId(
   _client: Awaited<ReturnType<typeof linear>>,
   teamKey: string,
-  name: string,
+  nameOrId: string,
 ): Promise<string> {
+  // Accept either a UUID or a project name. UUIDs route through the global
+  // project resolver (no team scoping); names match within the given team.
+  if (/^[0-9a-f-]{36}$/i.test(nameOrId)) {
+    const found = await withClient((c) =>
+      c.client.rawRequest("query Pr($id: String!) { project(id: $id) { id } }", {
+        id: nameOrId,
+      }),
+    );
+    const data = (found as { data: { project: { id: string } | null } }).data;
+    if (!data.project) throw new Error(`project not found: ${nameOrId}`);
+    return data.project.id;
+  }
   const teams = await withClient((c) => c.teams({ filter: { key: { eq: teamKey } } }));
   const team = teams.nodes[0];
   if (!team) throw new Error(`team not found: ${teamKey}`);
   const projects = await withRetry(() => team.projects({ first: 250 }));
-  const match = projects.nodes.find((p) => p.name === name);
+  const match = projects.nodes.find((p) => p.name === nameOrId);
   if (!match) {
     const candidates = projects.nodes
-      .filter((p) => p.name.toLowerCase().includes(name.toLowerCase()))
+      .filter((p) => p.name.toLowerCase().includes(nameOrId.toLowerCase()))
       .slice(0, 5)
       .map((p) => `"${p.name}"`)
       .join(", ");
     const hint = candidates ? ` candidates: ${candidates}` : "";
-    throw new Error(`project not found in ${teamKey}: "${name}".${hint}`);
+    throw new Error(`project not found in ${teamKey}: "${nameOrId}".${hint}`);
   }
   return match.id;
 }

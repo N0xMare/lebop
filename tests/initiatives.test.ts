@@ -96,17 +96,29 @@ describe("initiativeAddProject", () => {
 });
 
 describe("initiativeRemoveProject", () => {
-  it("does find-then-delete when the edge exists", async () => {
-    reset();
-    // First call: find query returns the edge id
-    mockResponses.push({
+  // Linear removed `Query.initiativeToProjects(filter:)` in 2026, so the
+  // lib walks `Project.initiativeToProjects` and matches the initiative id
+  // client-side. Tests mirror that two-step shape.
+  function projectLinksPage(
+    nodes: { id: string; initiativeId: string }[],
+    hasNextPage = false,
+    endCursor: string | null = null,
+  ) {
+    return {
       data: {
-        initiativeToProjects: {
-          nodes: [{ id: "edge-uuid-3" }],
+        project: {
+          initiativeToProjects: {
+            nodes: nodes.map((n) => ({ id: n.id, initiative: { id: n.initiativeId } })),
+            pageInfo: { hasNextPage, endCursor },
+          },
         },
       },
-    });
-    // Second call: delete mutation reports success
+    };
+  }
+
+  it("does find-then-delete when the edge exists", async () => {
+    reset();
+    mockResponses.push(projectLinksPage([{ id: "edge-uuid-3", initiativeId: "init-3" }]));
     mockResponses.push({
       data: { initiativeToProjectDelete: { success: true } },
     });
@@ -119,16 +131,14 @@ describe("initiativeRemoveProject", () => {
     expect(success).toBe(true);
     expect(calls).toHaveLength(2);
     expect(calls[0]?.query).toContain("initiativeToProjects");
-    expect(calls[0]?.variables).toEqual({ initiativeId: "init-3", projectId: "proj-3" });
+    expect(calls[0]?.variables).toEqual({ projectId: "proj-3", first: 250, after: null });
     expect(calls[1]?.query).toContain("initiativeToProjectDelete");
     expect(calls[1]?.variables).toEqual({ id: "edge-uuid-3" });
   });
 
   it("returns false (no second call) when the edge is already absent", async () => {
     reset();
-    mockResponses.push({
-      data: { initiativeToProjects: { nodes: [] } },
-    });
+    mockResponses.push(projectLinksPage([]));
 
     const success = await initiativeRemoveProject({
       initiativeId: "init-4",
@@ -141,17 +151,11 @@ describe("initiativeRemoveProject", () => {
 
   it("idempotent under repeated calls (find returns nothing on retry)", async () => {
     reset();
-    // First invocation: edge exists, delete succeeds
-    mockResponses.push({
-      data: { initiativeToProjects: { nodes: [{ id: "edge-uuid-5" }] } },
-    });
+    mockResponses.push(projectLinksPage([{ id: "edge-uuid-5", initiativeId: "init-5" }]));
     mockResponses.push({
       data: { initiativeToProjectDelete: { success: true } },
     });
-    // Second invocation: edge is gone now
-    mockResponses.push({
-      data: { initiativeToProjects: { nodes: [] } },
-    });
+    mockResponses.push(projectLinksPage([]));
 
     const first = await initiativeRemoveProject({
       initiativeId: "init-5",
@@ -165,6 +169,39 @@ describe("initiativeRemoveProject", () => {
     expect(first).toBe(true);
     expect(second).toBe(false);
     expect(calls).toHaveLength(3); // find+delete, then find-only
+  });
+
+  it("paginates when the project links span multiple pages", async () => {
+    reset();
+    // Page 1 has links to other initiatives; page 2 has the match.
+    mockResponses.push(
+      projectLinksPage(
+        [
+          { id: "edge-other-1", initiativeId: "init-other-1" },
+          { id: "edge-other-2", initiativeId: "init-other-2" },
+        ],
+        true,
+        "cursor-1",
+      ),
+    );
+    mockResponses.push(projectLinksPage([{ id: "edge-match", initiativeId: "init-target" }]));
+    mockResponses.push({
+      data: { initiativeToProjectDelete: { success: true } },
+    });
+
+    const success = await initiativeRemoveProject({
+      initiativeId: "init-target",
+      projectId: "proj-paginated",
+    });
+
+    expect(success).toBe(true);
+    expect(calls).toHaveLength(3);
+    expect(calls[1]?.variables).toEqual({
+      projectId: "proj-paginated",
+      first: 250,
+      after: "cursor-1",
+    });
+    expect(calls[2]?.variables).toEqual({ id: "edge-match" });
   });
 
   it("propagates errors from the find call (no delete attempted)", async () => {

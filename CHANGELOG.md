@@ -75,6 +75,59 @@ ships (`v1.0.0`), this section will be moved into a versioned entry below.
   resolves from `LEBOP_WORKSPACE` env (set by `--workspace`) or the auth
   file's stored default.
 
+- **6 Linear schema-drift bugs** caught by end-to-end smoke testing:
+  - `document` (list/view/create/update): `Document.slug` was renamed
+    to `slugId` upstream; we now read `slugId` and surface it as
+    `slug_id` on the shaped record.
+  - `agent-session list`: `AgentSessionFilter` input type was removed;
+    we now walk all sessions (or `Issue.agentSessions` when scoped) and
+    filter by status client-side.
+  - `team members`: `Query.teamMemberships(filter:)` was removed; we
+    now resolve the team UUID via `teams(filter:{key})` and walk
+    `Team.memberships` directly.
+  - `initiative-update list`: the connection on `Initiative` was
+    renamed from `updates` to `initiativeUpdates`; query updated.
+  - `initiative remove-project`: the `filter` arg on
+    `Query.initiativeToProjects` was removed; we now walk
+    `Project.initiativeToProjects` and match the initiative client-side
+    with cursor-pagination.
+  - `project-update list`: the `$projectId` variable was declared as
+    `ID!` but `Query.project(id:)` accepts `String!`; type fixed.
+
+- **Plan apply silent relation overwrites**: declaring multiple
+  relation kinds between the same pair (e.g. `A.blocks: [B]` AND
+  `B.related: [A]`) used to silently lose one declaration on apply
+  because Linear stores at most one relation record per pair. Validator
+  now emits a `relation-pair-conflict` warning at `plan validate` /
+  `plan apply --dry-run` time so the author can pick one kind.
+
+- **`--team` flag is now top-level** — `lebop --workspace noxor --team
+  NOX list ...` works (was previously rejected because `--team` was
+  only registered on subcommands). Per-command `--team` still wins;
+  resolution chain is now flag → `LEBOP_TEAM` env → per-repo →
+  `workspace_team_defaults` → `default_team`.
+
+- **`label create --workspace` flag renamed to `--workspace-scoped`**
+  to avoid colliding with the top-level `--workspace <slug>` flag. The
+  old form was unusable when both were set.
+
+- **`initiative list --include-archived`**: added as an alias for the
+  existing `--archived` flag, matching the naming convention of `list`
+  / `pull` / etc.
+
+- **`pull --project <UUID>`** now accepts a project UUID directly (not
+  just a name). `--project` and `--project-id` are now interchangeable
+  for the UUID case.
+
+### Added
+
+- **Nightly canary CI** (`.github/workflows/canary.yml`): runs every
+  read-path command and the MCP handshake + `list_issues` tool call
+  against the noxor sandbox workspace once a day. Detects Linear API
+  schema drift within ~24h instead of waiting for user reports. Setup
+  requires `LEBOP_NOXOR_TOKEN` repo secret (a Linear PAK scoped to a
+  sandbox workspace; read-only is sufficient).
+
 ### Removed
 
 - **`lebop help-search`** — Linear no longer exposes the

@@ -1517,6 +1517,10 @@ Shipped:
   `SECURITY.md`, `CODE_OF_CONDUCT.md` (Contributor Covenant 2.1)
 - `.github/workflows/ci.yml` (bun install → biome → tsc → vitest on
   every push/PR)
+- `.github/workflows/canary.yml` — nightly smoke against the noxor
+  sandbox workspace (read-paths + MCP handshake). Catches Linear API
+  schema drift within ~24h. Requires `LEBOP_NOXOR_TOKEN` repo secret
+  scoped to a sandbox workspace.
 - `.github/workflows/release.yml` — tag-triggered, builds 4 platform
   binaries (`bun build --compile --target=bun-{darwin,linux}-{x64,arm64}`),
   attaches them to a GitHub release with aggregated `SHA256SUMS`

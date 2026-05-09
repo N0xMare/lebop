@@ -117,6 +117,46 @@ export function validatePlan(
     });
   }
 
+  // ---------- 4c. Same-pair multi-type relation conflict ----------
+  // Linear stores at most one relation record per (issueA, issueB) pair —
+  // declaring two different kinds (e.g. A.blocks: [B] and B.related: [A])
+  // means the second `apply` call silently overwrites the first. Warn at
+  // validate time so the plan author can pick one.
+  type RelationApiType = "blocks" | "duplicate" | "related";
+  const KIND_TO_API_TYPE: Record<LinkKey, RelationApiType> = {
+    blocks: "blocks",
+    blocked_by: "blocks",
+    related: "related",
+    duplicates: "duplicate",
+    duplicated_by: "duplicate",
+  };
+  const pairDeclarations = new Map<string, Set<RelationApiType>>();
+  const pairKey = (a: string, b: string): string => (a < b ? `${a}|${b}` : `${b}|${a}`);
+
+  for (const issue of plan.issues) {
+    for (const key of LINK_KEYS) {
+      const targets = (issue.frontmatter[key] as string[] | undefined) ?? [];
+      if (!Array.isArray(targets)) continue;
+      for (const target of targets) {
+        if (typeof target !== "string" || target.trim() === "") continue;
+        const pair = pairKey(issue.slug, target);
+        const apiType = KIND_TO_API_TYPE[key];
+        const types = pairDeclarations.get(pair) ?? new Set<RelationApiType>();
+        types.add(apiType);
+        pairDeclarations.set(pair, types);
+      }
+    }
+  }
+  for (const [pair, types] of pairDeclarations) {
+    if (types.size > 1) {
+      const [a, b] = pair.split("|");
+      warnings.push({
+        rule: "relation-pair-conflict",
+        message: `multiple relation kinds declared between "${a}" and "${b}" (${[...types].join(", ")}). Linear stores one relation per pair — later declarations silently overwrite earlier ones during apply. Pick one kind.`,
+      });
+    }
+  }
+
   // ---------- 5. Duplicate-link side-effect warning ----------
   for (const issue of plan.issues) {
     const dup = (issue.frontmatter.duplicates as string[] | undefined) ?? [];

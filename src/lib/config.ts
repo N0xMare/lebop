@@ -79,7 +79,12 @@ export async function resolveConfig(options?: {
     ? userConfig.workspace_team_defaults?.[activeWorkspace]
     : undefined;
 
-  const team = options?.teamOverride ?? repoConfig.team ?? workspaceTeam ?? userConfig.default_team;
+  const team =
+    options?.teamOverride ??
+    process.env.LEBOP_TEAM ??
+    repoConfig.team ??
+    workspaceTeam ??
+    userConfig.default_team;
   if (!team) {
     throw new Error(
       "no Linear team resolved. pass --team KEY, set `default_team` (single-workspace) " +

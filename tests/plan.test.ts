@@ -155,6 +155,33 @@ describe("validatePlan", () => {
     expect(errs[0]?.message).toMatch(/doesn't match any slug.*isn't a Linear identifier/);
   });
 
+  it("warns on multi-type relation declarations between the same pair", async () => {
+    dir = writePlanDir({
+      "_project.md": "---\nname: T\nteam: UE\n---\n\n",
+      "a.md": "---\ntitle: a\nblocks:\n  - b\n---\n\n",
+      "b.md": "---\ntitle: b\nrelated:\n  - a\n---\n\n",
+    });
+    const plan = await parsePlan(dir);
+    const result = validatePlan(plan, null);
+    expect(result.errors).toEqual([]);
+    const warning = result.warnings.find((w) => w.rule === "relation-pair-conflict");
+    expect(warning).toBeDefined();
+    expect(warning?.message).toMatch(/multiple relation kinds.*"a".*"b".*blocks.*related/);
+  });
+
+  it("does NOT warn when same-pair declarations describe the same relation kind", async () => {
+    // A.blocks: [B] and B.blocked_by: [A] are equivalent — same kind, just
+    // declared from both sides. No conflict.
+    dir = writePlanDir({
+      "_project.md": "---\nname: T\nteam: UE\n---\n\n",
+      "a.md": "---\ntitle: a\nblocks:\n  - b\n---\n\n",
+      "b.md": "---\ntitle: b\nblocked_by:\n  - a\n---\n\n",
+    });
+    const plan = await parsePlan(dir);
+    const result = validatePlan(plan, null);
+    expect(result.warnings.find((w) => w.rule === "relation-pair-conflict")).toBeUndefined();
+  });
+
   it("accepts external Linear identifiers as link targets", async () => {
     dir = writePlanDir({
       "_project.md": "---\nname: T\nteam: UE\n---\n\n",

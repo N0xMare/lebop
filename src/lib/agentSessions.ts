@@ -2,6 +2,11 @@
  * Agent sessions — Linear's first-class concept for AI/agent activity on
  * issues. Read-only via lebop; sessions are created/managed by the agents
  * themselves.
+ *
+ * Linear removed the `AgentSessionFilter` input type and the `filter` arg on
+ * `Query.agentSessions` in 2026, so server-side filtering by status/issue is
+ * gone. We walk the connection and filter client-side; for issue-scoped
+ * lookups we go through `Issue.agentSessions` which is cheaper.
  */
 
 import { paginateRaw } from "./paginate.ts";
@@ -18,9 +23,9 @@ export interface ListedAgentSession {
   creator: { id: string; name: string; email: string } | null;
 }
 
-const LIST_AGENT_SESSIONS_QUERY = /* GraphQL */ `
-  query ListAgentSessions($filter: AgentSessionFilter, $first: Int!, $after: String) {
-    agentSessions(filter: $filter, first: $first, after: $after) {
+const LIST_ALL_AGENT_SESSIONS_QUERY = /* GraphQL */ `
+  query ListAgentSessions($first: Int!, $after: String) {
+    agentSessions(first: $first, after: $after) {
       nodes {
         id
         status
@@ -36,6 +41,26 @@ const LIST_AGENT_SESSIONS_QUERY = /* GraphQL */ `
   }
 `;
 
+const LIST_ISSUE_AGENT_SESSIONS_QUERY = /* GraphQL */ `
+  query ListIssueAgentSessions($issueId: String!, $first: Int!, $after: String) {
+    issue(id: $issueId) {
+      agentSessions(first: $first, after: $after) {
+        nodes {
+          id
+          status
+          type
+          createdAt
+          updatedAt
+          endedAt
+          issue { id identifier title }
+          creator { id name email }
+        }
+        pageInfo { hasNextPage endCursor }
+      }
+    }
+  }
+`;
+
 interface AgentSessionNode {
   id: string;
   status: string | null;
@@ -47,12 +72,23 @@ interface AgentSessionNode {
   creator: { id: string; name: string; email: string } | null;
 }
 
-interface AgentSessionsPage {
+interface AllSessionsPage {
   data: {
     agentSessions: {
       nodes: AgentSessionNode[];
       pageInfo: { hasNextPage: boolean; endCursor: string | null };
     };
+  };
+}
+
+interface IssueSessionsPage {
+  data: {
+    issue: {
+      agentSessions: {
+        nodes: AgentSessionNode[];
+        pageInfo: { hasNextPage: boolean; endCursor: string | null };
+      };
+    } | null;
   };
 }
 
@@ -74,21 +110,36 @@ export async function listAgentSessions(opts: {
   issueId?: string;
   max?: number;
 }): Promise<ListedAgentSession[]> {
-  const filter: Record<string, unknown> = {};
-  if (opts.status) filter.status = { eq: opts.status };
-  if (opts.issueId) filter.issue = { id: { eq: opts.issueId } };
-
   const client = await linear();
-  const raw = await paginateRaw<AgentSessionNode, AgentSessionsPage>(
-    ({ first, after }) =>
-      client.client.rawRequest(LIST_AGENT_SESSIONS_QUERY, {
-        filter: Object.keys(filter).length > 0 ? filter : undefined,
-        first,
-        after,
-      }) as Promise<AgentSessionsPage>,
-    (response) => response.data.agentSessions,
-    { pageSize: 250, max: opts.max },
-  );
+  let raw: AgentSessionNode[];
+
+  if (opts.issueId) {
+    raw = await paginateRaw<AgentSessionNode, IssueSessionsPage>(
+      ({ first, after }) =>
+        client.client.rawRequest(LIST_ISSUE_AGENT_SESSIONS_QUERY, {
+          issueId: opts.issueId,
+          first,
+          after,
+        }) as Promise<IssueSessionsPage>,
+      (response) => response.data.issue?.agentSessions ?? null,
+      { pageSize: 250, max: opts.max },
+    );
+  } else {
+    raw = await paginateRaw<AgentSessionNode, AllSessionsPage>(
+      ({ first, after }) =>
+        client.client.rawRequest(LIST_ALL_AGENT_SESSIONS_QUERY, {
+          first,
+          after,
+        }) as Promise<AllSessionsPage>,
+      (response) => response.data.agentSessions,
+      { pageSize: 250, max: opts.max },
+    );
+  }
+
+  // Status filter is client-side: Linear removed the server-side filter.
+  if (opts.status) {
+    raw = raw.filter((s) => s.status === opts.status);
+  }
   return raw.map(shape);
 }
 

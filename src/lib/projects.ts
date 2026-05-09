@@ -285,8 +285,10 @@ export interface ListedProjectUpdate {
   user: { id: string; name: string; email: string } | null;
 }
 
+// `Query.project(id)` takes `String!`, not `ID!` — Linear's inputs use
+// String for entity-id args even though the underlying field is ID.
 const LIST_PROJECT_UPDATES_QUERY = /* GraphQL */ `
-  query ListProjectUpdates($projectId: ID!, $first: Int!, $after: String) {
+  query ListProjectUpdates($projectId: String!, $first: Int!, $after: String) {
     project(id: $projectId) {
       projectUpdates(first: $first, after: $after) {
         nodes {

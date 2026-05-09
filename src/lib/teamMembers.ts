@@ -1,6 +1,9 @@
 /**
- * Team members — list users in a team. Linear's TeamMembership join joins
- * Team to User, with `active` and `owner` flags.
+ * Team members — list users in a team via the team's memberships connection.
+ *
+ * Linear removed the `filter` arg on `Query.teamMemberships` in 2026, so
+ * we resolve the team UUID first via `teams(filter: { key })`, then walk
+ * `Team.memberships(first, after)`.
  */
 
 import { paginateRaw } from "./paginate.ts";
@@ -16,22 +19,26 @@ export interface ListedTeamMember {
   team: { id: string; key: string; name: string };
 }
 
-const LIST_TEAM_MEMBERS_QUERY = /* GraphQL */ `
-  query ListTeamMembers($teamKey: String!, $first: Int!, $after: String) {
-    teamMemberships(filter: { team: { key: { eq: $teamKey } } }, first: $first, after: $after) {
-      nodes {
-        id
-        owner
-        team { id key name }
-        user {
+const LIST_TEAM_MEMBERSHIPS_QUERY = /* GraphQL */ `
+  query ListTeamMemberships($teamId: String!, $first: Int!, $after: String) {
+    team(id: $teamId) {
+      id
+      key
+      name
+      memberships(first: $first, after: $after) {
+        nodes {
           id
-          name
-          email
-          displayName
-          active
+          owner
+          user {
+            id
+            name
+            email
+            displayName
+            active
+          }
         }
+        pageInfo { hasNextPage endCursor }
       }
-      pageInfo { hasNextPage endCursor }
     }
   }
 `;
@@ -39,7 +46,6 @@ const LIST_TEAM_MEMBERS_QUERY = /* GraphQL */ `
 interface MembershipNode {
   id: string;
   owner: boolean;
-  team: { id: string; key: string; name: string };
   user: {
     id: string;
     name: string;
@@ -51,10 +57,15 @@ interface MembershipNode {
 
 interface MembershipPage {
   data: {
-    teamMemberships: {
-      nodes: MembershipNode[];
-      pageInfo: { hasNextPage: boolean; endCursor: string | null };
-    };
+    team: {
+      id: string;
+      key: string;
+      name: string;
+      memberships: {
+        nodes: MembershipNode[];
+        pageInfo: { hasNextPage: boolean; endCursor: string | null };
+      };
+    } | null;
   };
 }
 
@@ -64,14 +75,21 @@ export async function listTeamMembers(opts: {
   max?: number;
 }): Promise<ListedTeamMember[]> {
   const client = await linear();
+  // Step 1: resolve key → UUID. teams(filter: {key}) still works.
+  const teams = await withClient((c) => c.teams({ filter: { key: { eq: opts.teamKey } } }));
+  const team = teams.nodes[0];
+  if (!team) throw new Error(`team not found: ${opts.teamKey}`);
+  const teamRecord = { id: team.id, key: team.key, name: team.name };
+
+  // Step 2: walk memberships through the team node.
   const raw = await paginateRaw<MembershipNode, MembershipPage>(
     ({ first, after }) =>
-      client.client.rawRequest(LIST_TEAM_MEMBERS_QUERY, {
-        teamKey: opts.teamKey,
+      client.client.rawRequest(LIST_TEAM_MEMBERSHIPS_QUERY, {
+        teamId: team.id,
         first,
         after,
       }) as Promise<MembershipPage>,
-    (response) => response.data.teamMemberships,
+    (response) => response.data.team?.memberships ?? null,
     { pageSize: 250, max: opts.max },
   );
 
@@ -83,7 +101,7 @@ export async function listTeamMembers(opts: {
       display_name: m.user.displayName,
       is_owner: m.owner,
       active: m.user.active,
-      team: m.team,
+      team: teamRecord,
     }))
     .filter((m) => opts.includeInactive || m.active);
 }

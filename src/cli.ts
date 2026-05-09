@@ -48,12 +48,19 @@ export async function run(rawArgv: string[]): Promise<void> {
       "--workspace <slug>",
       "select Linear workspace (overrides default + LEBOP_WORKSPACE env)",
     )
+    .option(
+      "--team <key>",
+      "select Linear team (overrides config default + LEBOP_TEAM env). Per-command --team still wins.",
+    )
     .hook("preAction", (thisCommand) => {
-      // Propagate --workspace into LEBOP_WORKSPACE so every subcommand picks
-      // it up via loadAuthForWorkspace's env-var path. One global flag,
-      // zero per-command plumbing.
+      // Propagate --workspace and --team into env vars so every subcommand
+      // picks them up without per-command plumbing. Per-command flags still
+      // take precedence — they're checked first inside resolveConfig and
+      // loadAuthForWorkspace.
       const ws = thisCommand.opts().workspace as string | undefined;
       if (ws) process.env.LEBOP_WORKSPACE = ws;
+      const team = thisCommand.opts().team as string | undefined;
+      if (team) process.env.LEBOP_TEAM = team;
     })
     .showHelpAfterError();
 

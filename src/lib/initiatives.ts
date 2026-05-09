@@ -284,13 +284,20 @@ export async function initiativeAddProject(input: {
   return { id: response.data.initiativeToProjectCreate.initiativeToProject.id };
 }
 
-const FIND_INITIATIVE_TO_PROJECT_QUERY = /* GraphQL */ `
-  query FindInitiativeToProject($initiativeId: ID!, $projectId: ID!) {
-    initiativeToProjects(
-      filter: { initiative: { id: { eq: $initiativeId } }, project: { id: { eq: $projectId } } }
-      first: 1
-    ) {
-      nodes { id }
+// Linear removed the `filter` arg on `Query.initiativeToProjects` in 2026,
+// so the join record can no longer be looked up server-side by (initiative,
+// project) tuple. We walk `Project.initiativeToProjects` (typically only a
+// few entries per project) and match the initiative id client-side.
+const FIND_PROJECT_INITIATIVE_LINKS_QUERY = /* GraphQL */ `
+  query FindProjectInitiativeLinks($projectId: String!, $first: Int!, $after: String) {
+    project(id: $projectId) {
+      initiativeToProjects(first: $first, after: $after) {
+        nodes {
+          id
+          initiative { id }
+        }
+        pageInfo { hasNextPage endCursor }
+      }
     }
   }
 `;
@@ -301,20 +308,45 @@ const REMOVE_PROJECT_MUTATION = /* GraphQL */ `
   }
 `;
 
+interface ProjectInitiativeLinksPage {
+  data: {
+    project: {
+      initiativeToProjects: {
+        nodes: { id: string; initiative: { id: string } }[];
+        pageInfo: { hasNextPage: boolean; endCursor: string | null };
+      };
+    } | null;
+  };
+}
+
 export async function initiativeRemoveProject(input: {
   initiativeId: string;
   projectId: string;
 }): Promise<boolean> {
-  const find = (await withClient((c) =>
-    c.client.rawRequest(FIND_INITIATIVE_TO_PROJECT_QUERY, {
-      initiativeId: input.initiativeId,
-      projectId: input.projectId,
-    }),
-  )) as { data: { initiativeToProjects: { nodes: { id: string }[] } } };
-  const edge = find.data.initiativeToProjects.nodes[0];
-  if (!edge) return false; // already absent
+  // Walk the project's initiativeToProjects connection, looking for the
+  // edge whose initiative.id matches. Stops as soon as we find it.
   const client = await linear();
-  const response = (await client.client.rawRequest(REMOVE_PROJECT_MUTATION, { id: edge.id })) as {
+  let after: string | null = null;
+  let edgeId: string | null = null;
+  while (true) {
+    const response = (await client.client.rawRequest(FIND_PROJECT_INITIATIVE_LINKS_QUERY, {
+      projectId: input.projectId,
+      first: 250,
+      after,
+    })) as ProjectInitiativeLinksPage;
+    const conn = response.data.project?.initiativeToProjects;
+    if (!conn) return false;
+    const match = conn.nodes.find((n) => n.initiative.id === input.initiativeId);
+    if (match) {
+      edgeId = match.id;
+      break;
+    }
+    if (!conn.pageInfo.hasNextPage) break;
+    after = conn.pageInfo.endCursor;
+  }
+  if (!edgeId) return false; // already absent
+
+  const response = (await client.client.rawRequest(REMOVE_PROJECT_MUTATION, { id: edgeId })) as {
     data: { initiativeToProjectDelete: { success: boolean } };
   };
   return response.data.initiativeToProjectDelete.success;
@@ -330,10 +362,13 @@ export interface ListedInitiativeUpdate {
   user: { id: string; name: string; email: string } | null;
 }
 
+// Linear renamed the connection on Initiative from `updates` to
+// `initiativeUpdates` in 2026. The arg type for `Query.initiative(id)` is
+// `String!`, not `ID!`.
 const LIST_INITIATIVE_UPDATES_QUERY = /* GraphQL */ `
-  query ListInitiativeUpdates($initiativeId: ID!, $first: Int!, $after: String) {
+  query ListInitiativeUpdates($initiativeId: String!, $first: Int!, $after: String) {
     initiative(id: $initiativeId) {
-      updates(first: $first, after: $after) {
+      initiativeUpdates(first: $first, after: $after) {
         nodes {
           id
           body
@@ -358,7 +393,7 @@ interface InitiativeUpdateNode {
 interface InitiativeUpdatesPage {
   data: {
     initiative: {
-      updates: {
+      initiativeUpdates: {
         nodes: InitiativeUpdateNode[];
         pageInfo: { hasNextPage: boolean; endCursor: string | null };
       };
@@ -377,7 +412,7 @@ export async function listInitiativeUpdates(
         first,
         after,
       }) as Promise<InitiativeUpdatesPage>,
-    (response) => response.data.initiative?.updates ?? null,
+    (response) => response.data.initiative?.initiativeUpdates ?? null,
     { pageSize: 250 },
   );
   return raw.map((u) => ({

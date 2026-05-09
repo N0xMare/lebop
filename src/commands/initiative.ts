@@ -23,13 +23,15 @@ export function registerInitiative(program: Command): void {
     .command("list")
     .description("list initiatives")
     .option("--status <name>", "filter by status name")
-    .option("--archived", "include archived initiatives")
+    .option("--include-archived", "include archived initiatives (alias: --archived)")
+    .option("--archived", "[deprecated] include archived initiatives — use --include-archived")
     .option("--limit <n>", "default 50; pass 0 for no limit", "50")
     .option("--json", "emit structured records")
     .action(
       async (opts: {
         status?: string;
         archived?: boolean;
+        includeArchived?: boolean;
         limit?: string;
         json?: boolean;
       }) => {
@@ -37,7 +39,7 @@ export function registerInitiative(program: Command): void {
         const max = requested === 0 ? Number.POSITIVE_INFINITY : Math.max(1, requested);
         const initiatives = await listInitiatives({
           status: opts.status,
-          includeArchived: opts.archived,
+          includeArchived: opts.includeArchived ?? opts.archived,
           max,
         });
 

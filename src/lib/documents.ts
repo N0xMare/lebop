@@ -1,7 +1,9 @@
 /**
  * Document CRUD over Linear's Doc type. Documents can live at workspace
- * level, scoped to a project, or attached to an issue. Linear references
- * them by `slug` in URLs but `id` is the canonical identifier.
+ * level, scoped to a project, or attached to an issue.
+ *
+ * Linear renamed `Document.slug` to `slugId` in 2026; we read `slugId` and
+ * surface it as `slug_id` on the shaped record.
  */
 
 import { paginateRaw } from "./paginate.ts";
@@ -10,7 +12,7 @@ import { linear, withClient } from "./sdk.ts";
 export interface ListedDocument {
   id: string;
   title: string;
-  slug: string;
+  slug_id: string;
   icon: string | null;
   url: string;
   project: { id: string; name: string } | null;
@@ -28,7 +30,7 @@ const LIST_DOCUMENTS_QUERY = /* GraphQL */ `
       nodes {
         id
         title
-        slug
+        slugId
         icon
         url
         archivedAt
@@ -43,7 +45,7 @@ const LIST_DOCUMENTS_QUERY = /* GraphQL */ `
 interface DocNode {
   id: string;
   title: string;
-  slug: string;
+  slugId: string;
   icon: string | null;
   url: string;
   archivedAt: string | null;
@@ -64,7 +66,7 @@ function shape(d: DocNode): ListedDocument {
   return {
     id: d.id,
     title: d.title,
-    slug: d.slug,
+    slug_id: d.slugId,
     icon: d.icon,
     url: d.url,
     archived_at: d.archivedAt,
@@ -99,7 +101,7 @@ const GET_DOCUMENT_QUERY = /* GraphQL */ `
     document(id: $id) {
       id
       title
-      slug
+      slugId
       icon
       url
       content
@@ -131,7 +133,7 @@ const CREATE_DOCUMENT_MUTATION = /* GraphQL */ `
     documentCreate(input: $input) {
       success
       document {
-        id title slug icon url content archivedAt
+        id title slugId icon url content archivedAt
         project { id name }
         creator { id name email }
       }
@@ -165,7 +167,7 @@ const UPDATE_DOCUMENT_MUTATION = /* GraphQL */ `
     documentUpdate(id: $id, input: $input) {
       success
       document {
-        id title slug icon url content archivedAt
+        id title slugId icon url content archivedAt
         project { id name }
         creator { id name email }
       }

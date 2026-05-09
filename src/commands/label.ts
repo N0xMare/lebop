@@ -62,9 +62,12 @@ export function registerLabel(program: Command): void {
 
   cmd
     .command("create <name>")
-    .description("create a label (team-scoped by default; --workspace for workspace-scoped)")
+    .description("create a label (team-scoped by default; --workspace-scoped for workspace)")
     .option("--team <key>", "override the resolved team")
-    .option("--workspace", "create a workspace-scoped label (no team)")
+    .option(
+      "--workspace-scoped",
+      "create a workspace-scoped label (no team). Renamed from --workspace to avoid clashing with the top-level --workspace <slug> flag.",
+    )
     .option("--color <hex>", "hex color (e.g. #ff0000)")
     .option("--description <text>")
     .option("--json", "emit structured result")
@@ -73,14 +76,14 @@ export function registerLabel(program: Command): void {
         name: string,
         opts: {
           team?: string;
-          workspace?: boolean;
+          workspaceScoped?: boolean;
           color?: string;
           description?: string;
           json?: boolean;
         },
       ) => {
         const config = await resolveConfig({ teamOverride: opts.team });
-        const teamId = opts.workspace
+        const teamId = opts.workspaceScoped
           ? undefined
           : (await getTeamMetadata(config.repoHash, config.team)).team_id;
         const created = await createLabel({
