@@ -3,7 +3,10 @@ import { Command } from "commander";
 import { registerArchive } from "./commands/archive.ts";
 import { registerAuth } from "./commands/auth.ts";
 import { registerComment } from "./commands/comment.ts";
+import { registerCycle } from "./commands/cycle.ts";
 import { registerDiff } from "./commands/diff.ts";
+import { registerInitiativeUpdate } from "./commands/initiative-update.ts";
+import { registerInitiative } from "./commands/initiative.ts";
 import { registerLabel } from "./commands/label.ts";
 import { registerLint } from "./commands/lint.ts";
 import { registerList } from "./commands/list.ts";
@@ -70,6 +73,9 @@ export async function run(rawArgv: string[]): Promise<void> {
   registerRelation(program);
   registerLabel(program);
   registerMilestone(program);
+  registerInitiative(program);
+  registerInitiativeUpdate(program);
+  registerCycle(program);
 
   registerNew(program);
   registerArchive(program);

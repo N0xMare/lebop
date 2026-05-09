@@ -627,6 +627,41 @@ lebop project-update list <project> [--json]
 `<project>` accepts a name or UUID. `--health` is the standard Linear
 status flag (mirrors linear-cli).
 
+### 8.4c `initiative` — org-level planning units (CRUD)
+
+```
+lebop initiative list [--status NAME] [--archived] [--limit N] [--json]
+lebop initiative view <id-or-name> [--json]
+lebop initiative create <name> [--description] [--status] [--owner-id UUID] [--target-date ISO] [--color HEX] [--icon NAME] [--json]
+lebop initiative update <id> [--name] [--description] [--status] [--owner-id] [--target-date ISO|null] [--color] [--icon] [--json]
+lebop initiative archive <id>      # reversible
+lebop initiative unarchive <id>
+lebop initiative delete <id>       # permanent
+lebop initiative add-project <initiative> <project> [--sort-order N] [--json]
+lebop initiative remove-project <initiative> <project> [--json]
+```
+
+Both `add-project` and `remove-project` accept `<initiative>` and `<project>`
+as either a name or a UUID.
+
+### 8.4d `initiative-update` — initiative status updates with health
+
+```
+lebop initiative-update create <initiative> [--body | --body-file | --stdin] [--health onTrack|atRisk|offTrack] [--json]
+lebop initiative-update list <initiative> [--json]
+```
+
+Same shape as `project-update`. `<initiative>` accepts a name or UUID.
+
+### 8.4e `cycle` — Linear cycles (iterations)
+
+```
+lebop cycle list [--team KEY | --all-teams] [--limit N] [--json]
+lebop cycle view <id> [--json]
+```
+
+Read-only. Cycle scheduling lives in the Linear UI.
+
 ### 8.5a `label` — manage Linear labels
 
 ```

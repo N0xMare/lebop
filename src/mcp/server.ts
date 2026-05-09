@@ -14,7 +14,23 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
+import { getCycle, listCycles } from "../lib/cycles.ts";
 import { LebopError } from "../lib/errors.ts";
+import {
+  type InitiativeHealth,
+  archiveInitiative,
+  createInitiative,
+  createInitiativeUpdate,
+  deleteInitiative,
+  getInitiative,
+  initiativeAddProject,
+  initiativeRemoveProject,
+  listInitiativeUpdates,
+  listInitiatives,
+  resolveInitiativeId,
+  unarchiveInitiative,
+  updateInitiative,
+} from "../lib/initiatives.ts";
 import { createLabel, deleteLabel, listLabels, resolveLabelByName } from "../lib/labels.ts";
 import { lintContent } from "../lib/lint.ts";
 import { listIssues } from "../lib/listIssues.ts";
@@ -582,6 +598,292 @@ function registerTools(server: McpServer): void {
         health: args.health as ProjectHealth | undefined,
       });
       return text({ schema_version: 1, project_update: update });
+    },
+  );
+
+  // ---------- initiatives ----------
+  server.registerTool(
+    "list_initiatives",
+    {
+      title: "List Linear initiatives",
+      description: "Org-level planning units that group projects.",
+      inputSchema: {
+        status: z.string().optional(),
+        owner_id: z.string().optional(),
+        include_archived: z.boolean().optional(),
+        limit: z.number().int().min(0).optional(),
+        workspace: z.string().optional(),
+      },
+    },
+    async (args) => {
+      withWorkspace(args.workspace);
+      const limit = args.limit ?? 50;
+      const max = limit === 0 ? Number.POSITIVE_INFINITY : limit;
+      const initiatives = await listInitiatives({
+        status: args.status,
+        ownerId: args.owner_id,
+        includeArchived: args.include_archived,
+        max,
+      });
+      return text({ schema_version: 1, count: initiatives.length, initiatives });
+    },
+  );
+
+  server.registerTool(
+    "get_initiative",
+    {
+      title: "Get one initiative (with linked projects)",
+      description: "Returns null if not found.",
+      inputSchema: {
+        id_or_name: z.string(),
+        workspace: z.string().optional(),
+      },
+    },
+    async (args) => {
+      withWorkspace(args.workspace);
+      const id = await resolveInitiativeId(args.id_or_name);
+      if (!id) return text({ schema_version: 1, initiative: null });
+      const initiative = await getInitiative(id);
+      return text({ schema_version: 1, initiative });
+    },
+  );
+
+  server.registerTool(
+    "create_initiative",
+    {
+      title: "Create an initiative",
+      description: "NOT retry-wrapped (would duplicate).",
+      inputSchema: {
+        name: z.string(),
+        description: z.string().optional(),
+        status: z.string().optional(),
+        owner_id: z.string().optional(),
+        target_date: z.string().optional(),
+        color: z.string().optional(),
+        icon: z.string().optional(),
+        workspace: z.string().optional(),
+      },
+    },
+    async (args) => {
+      withWorkspace(args.workspace);
+      const initiative = await createInitiative({
+        name: args.name,
+        description: args.description,
+        status: args.status,
+        ownerId: args.owner_id,
+        targetDate: args.target_date,
+        color: args.color,
+        icon: args.icon,
+      });
+      return text({ schema_version: 1, initiative });
+    },
+  );
+
+  server.registerTool(
+    "update_initiative",
+    {
+      title: "Update an initiative",
+      description: "Idempotent at the value level — safe to retry.",
+      inputSchema: {
+        id: z.string(),
+        name: z.string().optional(),
+        description: z.string().optional(),
+        status: z.string().optional(),
+        owner_id: z.union([z.string(), z.null()]).optional(),
+        target_date: z.union([z.string(), z.null()]).optional(),
+        color: z.string().optional(),
+        icon: z.string().optional(),
+        workspace: z.string().optional(),
+      },
+    },
+    async (args) => {
+      withWorkspace(args.workspace);
+      const input: Parameters<typeof updateInitiative>[1] = {};
+      if (args.name !== undefined) input.name = args.name;
+      if (args.description !== undefined) input.description = args.description;
+      if (args.status !== undefined) input.status = args.status;
+      if (args.owner_id !== undefined) input.ownerId = args.owner_id;
+      if (args.target_date !== undefined) input.targetDate = args.target_date;
+      if (args.color !== undefined) input.color = args.color;
+      if (args.icon !== undefined) input.icon = args.icon;
+      if (Object.keys(input).length === 0) throw new Error("nothing to update");
+      const initiative = await updateInitiative(args.id, input);
+      return text({ schema_version: 1, initiative });
+    },
+  );
+
+  server.registerTool(
+    "archive_initiative",
+    {
+      title: "Archive an initiative (reversible)",
+      description: "NOT retry-wrapped.",
+      inputSchema: { id: z.string(), workspace: z.string().optional() },
+    },
+    async (args) => {
+      withWorkspace(args.workspace);
+      const success = await archiveInitiative(args.id);
+      return text({ schema_version: 1, id: args.id, success });
+    },
+  );
+
+  server.registerTool(
+    "unarchive_initiative",
+    {
+      title: "Unarchive an initiative",
+      description: "NOT retry-wrapped.",
+      inputSchema: { id: z.string(), workspace: z.string().optional() },
+    },
+    async (args) => {
+      withWorkspace(args.workspace);
+      const success = await unarchiveInitiative(args.id);
+      return text({ schema_version: 1, id: args.id, success });
+    },
+  );
+
+  server.registerTool(
+    "delete_initiative",
+    {
+      title: "Delete an initiative permanently",
+      description: "NOT retry-wrapped.",
+      inputSchema: { id: z.string(), workspace: z.string().optional() },
+    },
+    async (args) => {
+      withWorkspace(args.workspace);
+      const success = await deleteInitiative(args.id);
+      return text({ schema_version: 1, id: args.id, success });
+    },
+  );
+
+  server.registerTool(
+    "initiative_add_project",
+    {
+      title: "Link a project to an initiative",
+      description: "Server-side idempotent at the (initiative, project) tuple.",
+      inputSchema: {
+        initiative: z.string().describe("Initiative name or UUID."),
+        project: z.string().describe("Project name or UUID."),
+        sort_order: z.number().optional(),
+        workspace: z.string().optional(),
+      },
+    },
+    async (args) => {
+      withWorkspace(args.workspace);
+      const initiativeId = await resolveInitiativeId(args.initiative);
+      if (!initiativeId) throw new Error(`initiative not found: ${args.initiative}`);
+      const projectId = await resolveProjectId(args.project);
+      if (!projectId) throw new Error(`project not found: ${args.project}`);
+      const result = await initiativeAddProject({
+        initiativeId,
+        projectId,
+        sortOrder: args.sort_order,
+      });
+      return text({ schema_version: 1, edge_id: result.id });
+    },
+  );
+
+  server.registerTool(
+    "initiative_remove_project",
+    {
+      title: "Unlink a project from an initiative",
+      description: "Returns false if the link was already absent.",
+      inputSchema: {
+        initiative: z.string(),
+        project: z.string(),
+        workspace: z.string().optional(),
+      },
+    },
+    async (args) => {
+      withWorkspace(args.workspace);
+      const initiativeId = await resolveInitiativeId(args.initiative);
+      if (!initiativeId) throw new Error(`initiative not found: ${args.initiative}`);
+      const projectId = await resolveProjectId(args.project);
+      if (!projectId) throw new Error(`project not found: ${args.project}`);
+      const success = await initiativeRemoveProject({ initiativeId, projectId });
+      return text({ schema_version: 1, success });
+    },
+  );
+
+  server.registerTool(
+    "list_initiative_updates",
+    {
+      title: "List initiative status updates",
+      description: "Chronological status posts for one initiative.",
+      inputSchema: {
+        initiative: z.string().describe("Initiative name or UUID."),
+        workspace: z.string().optional(),
+      },
+    },
+    async (args) => {
+      withWorkspace(args.workspace);
+      const initiativeId = await resolveInitiativeId(args.initiative);
+      if (!initiativeId) throw new Error(`initiative not found: ${args.initiative}`);
+      const updates = await listInitiativeUpdates(initiativeId);
+      return text({
+        schema_version: 1,
+        initiative_id: initiativeId,
+        count: updates.length,
+        updates,
+      });
+    },
+  );
+
+  server.registerTool(
+    "create_initiative_update",
+    {
+      title: "Post an initiative status update (with health)",
+      description: "NOT retry-wrapped (would duplicate).",
+      inputSchema: {
+        initiative: z.string(),
+        body: z.string(),
+        health: z.enum(["onTrack", "atRisk", "offTrack"]).optional(),
+        workspace: z.string().optional(),
+      },
+    },
+    async (args) => {
+      withWorkspace(args.workspace);
+      const initiativeId = await resolveInitiativeId(args.initiative);
+      if (!initiativeId) throw new Error(`initiative not found: ${args.initiative}`);
+      const update = await createInitiativeUpdate({
+        initiativeId,
+        body: args.body,
+        health: args.health as InitiativeHealth | undefined,
+      });
+      return text({ schema_version: 1, initiative_update: update });
+    },
+  );
+
+  // ---------- cycles ----------
+  server.registerTool(
+    "list_cycles",
+    {
+      title: "List cycles for a team (or all teams)",
+      description: "Cycles are read-only via lebop — manage in the Linear UI.",
+      inputSchema: {
+        team: z.string().optional(),
+        limit: z.number().int().min(0).optional(),
+        workspace: z.string().optional(),
+      },
+    },
+    async (args) => {
+      withWorkspace(args.workspace);
+      const limit = args.limit ?? 50;
+      const max = limit === 0 ? Number.POSITIVE_INFINITY : limit;
+      const cycles = await listCycles({ team: args.team, max });
+      return text({ schema_version: 1, count: cycles.length, cycles });
+    },
+  );
+
+  server.registerTool(
+    "get_cycle",
+    {
+      title: "Get one cycle by UUID",
+      description: "Returns null if not found.",
+      inputSchema: { id: z.string(), workspace: z.string().optional() },
+    },
+    async (args) => {
+      withWorkspace(args.workspace);
+      const cycle = await getCycle(args.id);
+      return text({ schema_version: 1, cycle });
     },
   );
 
