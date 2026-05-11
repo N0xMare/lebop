@@ -1,0 +1,189 @@
+import chalk from "chalk";
+import type { Command } from "commander";
+import {
+  createMilestone,
+  deleteMilestone,
+  getMilestone,
+  listMilestones,
+  resolveProjectId,
+  updateMilestone,
+} from "../lib/milestones.ts";
+
+/**
+ * `lebop milestone list|view|create|update|delete` — project milestones.
+ */
+export function registerMilestone(program: Command): void {
+  const cmd = program.command("milestone").description("manage project milestones");
+
+  cmd
+    .command("list")
+    .description("list milestones; --project filters to one project")
+    .option("--project <name-or-id>", "project name or UUID")
+    .option("--json", "emit structured records")
+    .action(async (opts: { project?: string; json?: boolean }) => {
+      let projectId: string | undefined;
+      if (opts.project) {
+        const resolved = await resolveProjectId(opts.project);
+        if (!resolved) throw new Error(`project not found: ${opts.project}`);
+        projectId = resolved;
+      }
+      const milestones = await listMilestones({ projectId });
+
+      if (opts.json) {
+        process.stdout.write(
+          `${JSON.stringify(
+            { schema_version: 1, count: milestones.length, milestones },
+            null,
+            2,
+          )}\n`,
+        );
+        return;
+      }
+
+      if (milestones.length === 0) {
+        process.stdout.write("no milestones\n");
+        return;
+      }
+      const nameWidth = Math.max(...milestones.map((m) => m.name.length));
+      for (const m of milestones) {
+        const date = m.target_date ? chalk.gray(`(${m.target_date})`) : "";
+        process.stdout.write(
+          `${chalk.bold(m.name.padEnd(nameWidth))}  ${chalk.cyan(m.project.name)}  ${date}\n`,
+        );
+      }
+    });
+
+  cmd
+    .command("view <id>")
+    .description("show one milestone by UUID")
+    .option("--json", "emit structured result")
+    .action(async (id: string, opts: { json?: boolean }) => {
+      const milestone = await getMilestone(id);
+      if (!milestone) throw new Error(`milestone not found: ${id}`);
+
+      if (opts.json) {
+        process.stdout.write(`${JSON.stringify({ schema_version: 1, milestone }, null, 2)}\n`);
+        return;
+      }
+      process.stdout.write(`${chalk.bold(milestone.name)}\n`);
+      process.stdout.write(`  project: ${milestone.project.name} (${milestone.project.id})\n`);
+      if (milestone.target_date) {
+        process.stdout.write(`  target_date: ${milestone.target_date}\n`);
+      }
+      process.stdout.write(`  sort_order: ${milestone.sort_order}\n`);
+      if (milestone.description) {
+        process.stdout.write(`\n${milestone.description}\n`);
+      }
+    });
+
+  cmd
+    .command("create <name>")
+    .description("create a milestone in a project")
+    .requiredOption("--project <name-or-id>", "project name or UUID")
+    .option("--description <text>")
+    .option("--target-date <iso-date>", "e.g. 2026-12-31")
+    .option("--sort-order <n>", "numeric sort order")
+    .option("--json", "emit structured result")
+    .action(
+      async (
+        name: string,
+        opts: {
+          project: string;
+          description?: string;
+          targetDate?: string;
+          sortOrder?: string;
+          json?: boolean;
+        },
+      ) => {
+        const projectId = await resolveProjectId(opts.project);
+        if (!projectId) throw new Error(`project not found: ${opts.project}`);
+        const created = await createMilestone({
+          name,
+          projectId,
+          description: opts.description,
+          targetDate: opts.targetDate,
+          sortOrder: opts.sortOrder !== undefined ? Number(opts.sortOrder) : undefined,
+        });
+        if (opts.json) {
+          process.stdout.write(
+            `${JSON.stringify({ schema_version: 1, milestone: created }, null, 2)}\n`,
+          );
+          return;
+        }
+        process.stdout.write(
+          `${chalk.green("✓")} created ${chalk.bold(created.name)} ${chalk.gray(`(${created.id})`)} in ${chalk.cyan(created.project.name)}\n`,
+        );
+      },
+    );
+
+  cmd
+    .command("update <id>")
+    .description("update a milestone (name, description, target-date, sort-order, project)")
+    .option("--name <text>")
+    .option("--description <text>")
+    .option("--target-date <iso-date>", "or `null` to clear")
+    .option("--sort-order <n>")
+    .option("--project <name-or-id>", "move to a different project")
+    .option("--json", "emit structured result")
+    .action(
+      async (
+        id: string,
+        opts: {
+          name?: string;
+          description?: string;
+          targetDate?: string;
+          sortOrder?: string;
+          project?: string;
+          json?: boolean;
+        },
+      ) => {
+        const input: Parameters<typeof updateMilestone>[1] = {};
+        if (opts.name !== undefined) input.name = opts.name;
+        if (opts.description !== undefined) input.description = opts.description;
+        if (opts.targetDate !== undefined) {
+          input.targetDate = opts.targetDate === "null" ? null : opts.targetDate;
+        }
+        if (opts.sortOrder !== undefined) input.sortOrder = Number(opts.sortOrder);
+        if (opts.project !== undefined) {
+          const projectId = await resolveProjectId(opts.project);
+          if (!projectId) throw new Error(`project not found: ${opts.project}`);
+          input.projectId = projectId;
+        }
+
+        if (Object.keys(input).length === 0) {
+          throw new Error(
+            "nothing to update — pass at least one of --name / --description / --target-date / --sort-order / --project",
+          );
+        }
+
+        const updated = await updateMilestone(id, input);
+        if (opts.json) {
+          process.stdout.write(
+            `${JSON.stringify({ schema_version: 1, milestone: updated }, null, 2)}\n`,
+          );
+          return;
+        }
+        process.stdout.write(
+          `${chalk.green("✓")} updated ${chalk.bold(updated.name)} ${chalk.gray(`(${updated.id})`)}\n`,
+        );
+      },
+    );
+
+  cmd
+    .command("delete <id>")
+    .description("delete a milestone by UUID")
+    .option("--json", "emit structured result")
+    .action(async (id: string, opts: { json?: boolean }) => {
+      const success = await deleteMilestone(id);
+      if (opts.json) {
+        process.stdout.write(`${JSON.stringify({ schema_version: 1, id, success }, null, 2)}\n`);
+        return;
+      }
+      if (success) {
+        process.stdout.write(`${chalk.green("✓")} deleted ${chalk.bold(id)}\n`);
+      } else {
+        process.stdout.write(`${chalk.red("✗")} delete failed for ${id}\n`);
+        process.exitCode = 1;
+      }
+    });
+}

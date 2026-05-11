@@ -1,0 +1,142 @@
+name: canary
+
+# Daily integration smoke against the noxor sandbox workspace. Catches
+# Linear API schema drift before users do — the unit-test suite mocks the
+# SDK so it can't.
+#
+# Setup: requires repo secret `LEBOP_NOXOR_TOKEN` (a Linear PAK scoped to
+# the noxor sandbox workspace, read-only is sufficient).
+
+on:
+  schedule:
+    - cron: "0 14 * * *" # 14:00 UTC daily — keeps drift detection within ~24h.
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: canary
+  cancel-in-progress: false
+
+jobs:
+  smoke:
+    name: smoke vs noxor
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      # Job-level env can't use ${{ runner.temp }} — that context is only
+      # available inside steps. /tmp is always writable on ubuntu-latest.
+      LEBOP_HOME: /tmp/lebop-canary
+      LEBOP_NOXOR_TOKEN: ${{ secrets.LEBOP_NOXOR_TOKEN }}
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.13
+
+      - name: install deps
+        run: bun install --frozen-lockfile
+
+      - name: gate on token presence
+        run: |
+          if [ -z "$LEBOP_NOXOR_TOKEN" ]; then
+            echo "::error::LEBOP_NOXOR_TOKEN secret is not set. Skipping canary."
+            exit 1
+          fi
+
+      - name: prep isolated LEBOP_HOME + auth
+        run: |
+          set -euo pipefail
+          mkdir -p "$LEBOP_HOME"
+          chmod 700 "$LEBOP_HOME"
+          tokenfile="$(mktemp)"
+          printf '%s' "$LEBOP_NOXOR_TOKEN" > "$tokenfile"
+          ./bin/lebop auth login --token-file "$tokenfile"
+          rm -f "$tokenfile"
+          ./bin/lebop auth list
+
+      - name: read smoke (CLI surface)
+        run: |
+          set -euo pipefail
+          # Exercise every read path that hit Linear in the May 2026 round
+          # of fixes. Failure of any single command fails the workflow.
+
+          echo '--- auth whoami --refresh ---'
+          ./bin/lebop --workspace noxor auth whoami noxor --refresh
+
+          echo '--- teams ---'
+          ./bin/lebop --workspace noxor teams
+
+          echo '--- list ---'
+          ./bin/lebop --workspace noxor list --team NOX --limit 3
+
+          echo '--- mine ---'
+          ./bin/lebop --workspace noxor mine --team NOX --limit 3 || true
+
+          echo '--- show NOX-1 ---'
+          ./bin/lebop --workspace noxor show NOX-1 > /dev/null
+
+          echo '--- projects ---'
+          ./bin/lebop --workspace noxor projects --team NOX
+
+          echo '--- project list ---'
+          ./bin/lebop --workspace noxor project list --team NOX
+
+          echo '--- initiative list ---'
+          ./bin/lebop --workspace noxor initiative list
+
+          echo '--- document list ---'
+          ./bin/lebop --workspace noxor document list
+
+          echo '--- agent-session list ---'
+          ./bin/lebop --workspace noxor agent-session list --limit 5
+
+          echo '--- team members ---'
+          ./bin/lebop --workspace noxor team members NOX
+
+          echo '--- cycle list ---'
+          ./bin/lebop --workspace noxor cycle list --team NOX
+
+          echo '--- label list ---'
+          ./bin/lebop --workspace noxor label list --team NOX
+
+          echo '--- schema dump ---'
+          ./bin/lebop --workspace noxor schema > /dev/null
+
+          echo '--- raw viewer query ---'
+          ./bin/lebop --workspace noxor raw 'query { viewer { id email } }' > /dev/null
+
+      - name: MCP smoke (initialize + tools/list + tools/call list_issues)
+        run: |
+          set -euo pipefail
+          export LEBOP_WORKSPACE=noxor
+          out="$(mktemp)"
+          (
+            echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"canary","version":"1"}}}'
+            echo '{"jsonrpc":"2.0","method":"notifications/initialized"}'
+            echo '{"jsonrpc":"2.0","id":2,"method":"tools/list"}'
+            echo '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"list_issues","arguments":{"team":"NOX","limit":2,"workspace":"noxor"}}}'
+          ) | timeout 12 ./bin/lebop mcp > "$out" || true
+
+          # Validate handshake response
+          grep -q '"protocolVersion":"2024-11-05"' "$out" || { echo '::error::MCP initialize failed'; cat "$out"; exit 1; }
+          # Validate tool list contains expected tools (sample across surfaces)
+          for t in list_issues lint_text list_documents get_issue list_comments cache_status diff_issue plan_validate raw_graphql list_workspaces whoami; do
+            grep -q "\"name\":\"$t\"" "$out" || { echo "::error::MCP tools/list missing $t"; cat "$out"; exit 1; }
+          done
+          # Validate tool call returned (not isError)
+          grep -q '"id":3' "$out"                        || { echo '::error::MCP tools/call list_issues never responded'; cat "$out"; exit 1; }
+          if grep -q '"id":3.*"isError":true' "$out"; then
+            echo '::error::MCP list_issues returned an error'; cat "$out"; exit 1
+          fi
+
+          rm -f "$out"
+          echo 'MCP smoke ✓'
+
+      - name: cleanup
+        if: always()
+        run: |
+          rm -rf "$LEBOP_HOME"

@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# Wire lebop's Claude Code integration assets (skill + slash commands) into
+# the user's ~/.claude/ directory via symlinks. Re-runnable; safe to repeat
+# after `git pull` since symlinks resolve through the repo.
+#
+# Usage:  ./bin/install-claude
+
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+SKILL_SRC="$REPO_ROOT/agents/skills/lebop"
+COMMANDS_SRC="$REPO_ROOT/agents/commands"
+
+CLAUDE_HOME="${CLAUDE_HOME:-$HOME/.claude}"
+SKILL_DST="$CLAUDE_HOME/skills/lebop"
+COMMANDS_DST="$CLAUDE_HOME/commands"
+
+mkdir -p "$CLAUDE_HOME/skills" "$COMMANDS_DST"
+
+# Skill — directory symlink. -n prevents replacing through an existing symlink target.
+ln -sfn "$SKILL_SRC" "$SKILL_DST"
+echo "linked $SKILL_DST → $SKILL_SRC"
+
+# Slash commands — file-level symlinks so unrelated commands in ~/.claude/commands aren't touched.
+for f in "$COMMANDS_SRC"/lebop-*.md; do
+  name="$(basename "$f")"
+  ln -sf "$f" "$COMMANDS_DST/$name"
+  echo "linked $COMMANDS_DST/$name → $f"
+done
+
+echo
+echo "done. restart Claude Code (or open a new session) to pick up the skill + commands."

@@ -1,0 +1,66 @@
+{
+  "name": "lebop",
+  "version": "0.0.1",
+  "description": "Agentic Linear CLI + MCP server — ad-hoc ops (list/show/set/comment/pull/push) and declarative planning (plan apply) as a directory of markdown files.",
+  "type": "module",
+  "license": "MIT",
+  "author": "n0x",
+  "homepage": "https://github.com/N0xMare/lebop#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/N0xMare/lebop.git"
+  },
+  "bugs": {
+    "url": "https://github.com/N0xMare/lebop/issues"
+  },
+  "keywords": [
+    "linear",
+    "linear-app",
+    "cli",
+    "mcp",
+    "model-context-protocol",
+    "agent",
+    "ai",
+    "issue-tracker",
+    "graphql",
+    "automation",
+    "bun"
+  ],
+  "files": [
+    "bin",
+    "src",
+    "agents",
+    "docs/spec.md",
+    "docs/examples",
+    "LICENSE",
+    "README.md"
+  ],
+  "bin": {
+    "lebop": "./bin/lebop"
+  },
+  "scripts": {
+    "check": "biome check .",
+    "format": "biome format --write .",
+    "lint": "biome lint .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
+  },
+  "engines": {
+    "bun": ">=1.1.0"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.4.15",
+    "@types/bun": "latest",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.5"
+  },
+  "dependencies": {
+    "@linear/sdk": "^84.0.0",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "chalk": "^5.4.0",
+    "commander": "^14.0.3",
+    "diff": "^9.0.0",
+    "yaml": "^2.6.0"
+  }
+}
