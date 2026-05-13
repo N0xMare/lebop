@@ -356,6 +356,39 @@ const R001: Rule = {
 
 // ---------- R002: required identifier formats (repo-scoped) ----------
 
+/**
+ * Pre-compile every `required_formats[].pattern`. Invalid patterns produce a
+ * `Warning` at line 1 naming the offending pattern + the compile-error
+ * reason, so the user gets actionable feedback that their config is broken.
+ * Wave 1 silently dropped malformed entries via `catch { continue; }`, which
+ * left users staring at a lint pass that mysteriously did nothing.
+ *
+ * Successfully compiled patterns are returned for the per-line scan; invalid
+ * ones are skipped so the rest of the config still runs.
+ */
+function compileRequiredFormats(fmts: { pattern: string; suggest: string; message?: string }[]): {
+  compiled: { re: RegExp; suggest: string; message?: string }[];
+  configWarnings: Warning[];
+} {
+  const compiled: { re: RegExp; suggest: string; message?: string }[] = [];
+  const configWarnings: Warning[] = [];
+  for (const { pattern, suggest, message } of fmts) {
+    try {
+      compiled.push({ re: new RegExp(pattern, "g"), suggest, message });
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      configWarnings.push({
+        rule: "R002",
+        severity: "warn",
+        message: `invalid \`required_formats[].pattern\` in repo config: \`${pattern}\` — ${reason}. fix the pattern in lebop's repo config (\`required_formats\`) or remove the entry.`,
+        line: 1,
+        fix: null,
+      });
+    }
+  }
+  return { compiled, configWarnings };
+}
+
 const R002: Rule = {
   id: "R002",
   description:
@@ -364,25 +397,27 @@ const R002: Rule = {
   check(content, ctx) {
     const fmts = ctx.repoConfig?.required_formats;
     if (!fmts || fmts.length === 0) return [];
+
+    const { compiled, configWarnings } = compileRequiredFormats(fmts);
     const lines = content.split("\n");
-    const out: Warning[] = [];
+    const out: Warning[] = [...configWarnings];
+
+    if (compiled.length === 0) return out;
 
     lines.forEach((line, i) => {
       let fixed = line;
       let any = false;
       const msgs: string[] = [];
 
-      for (const { pattern, suggest, message } of fmts) {
-        let re: RegExp;
-        try {
-          re = new RegExp(pattern, "g");
-        } catch {
-          continue; // skip malformed patterns silently; config error surfaced elsewhere
-        }
+      for (const { re, suggest, message } of compiled) {
+        // Reset lastIndex defensively — the regex is `g` and reused across
+        // lines, so a previous .replace's internal state could otherwise
+        // affect subsequent calls on some runtimes.
+        re.lastIndex = 0;
         const replaced = fixed.replace(re, suggest);
         if (replaced !== fixed) {
           any = true;
-          msgs.push(message ?? `pattern \`${pattern}\` → \`${suggest}\``);
+          msgs.push(message ?? `pattern \`${re.source}\` → \`${suggest}\``);
           fixed = replaced;
         }
       }

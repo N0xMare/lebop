@@ -1,4 +1,5 @@
 import type { Command } from "commander";
+import { envelope } from "../lib/envelope.ts";
 import { paginateConnection } from "../lib/paginate.ts";
 import { linear } from "../lib/sdk.ts";
 
@@ -18,7 +19,7 @@ export function registerTeams(program: Command): void {
       }));
 
       if (opts.json) {
-        process.stdout.write(`${JSON.stringify({ schema_version: 1, teams: records }, null, 2)}\n`);
+        process.stdout.write(`${JSON.stringify(envelope({ teams: records }), null, 2)}\n`);
         return;
       }
 

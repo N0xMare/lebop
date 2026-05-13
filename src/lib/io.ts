@@ -8,6 +8,8 @@
  *     unchanged" rather than "empty body."
  */
 
+import { ValidationError } from "./errors.ts";
+
 interface BodyOpts {
   body?: string;
   bodyFile?: string;
@@ -29,10 +31,16 @@ export async function resolveBody(opts: BodyOpts): Promise<string> {
   const provided = [opts.body, opts.bodyFile, opts.stdin].filter(Boolean).length;
   if (provided === 0) {
     if (!process.stdin.isTTY) return (await Bun.stdin.text()).trim();
-    throw new Error("no body — pass --body, --body-file, or pipe to stdin");
+    throw new ValidationError(
+      "no body — pass --body, --body-file, or pipe to stdin",
+      "supply the body inline via --body, from a file via --body-file, or by piping to stdin",
+    );
   }
   if (provided > 1) {
-    throw new Error("pick one of --body / --body-file / --stdin");
+    throw new ValidationError(
+      "pick one of --body / --body-file / --stdin",
+      "the three body sources are mutually exclusive — pass exactly one",
+    );
   }
   if (opts.body) return opts.body;
   if (opts.bodyFile) return (await Bun.file(opts.bodyFile).text()).trim();
@@ -48,7 +56,10 @@ export async function resolveBody(opts: BodyOpts): Promise<string> {
 export async function resolveContent(opts: ContentOpts): Promise<string | undefined> {
   const provided = [opts.content, opts.contentFile, opts.stdin].filter(Boolean).length;
   if (provided > 1) {
-    throw new Error("pick one of --content / --content-file / --stdin");
+    throw new ValidationError(
+      "pick one of --content / --content-file / --stdin",
+      "the three content sources are mutually exclusive — pass exactly one",
+    );
   }
   if (provided === 0) return undefined;
   if (opts.content) return opts.content;

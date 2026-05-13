@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { ValidationError } from "../src/lib/errors.ts";
 import { expandIds } from "../src/lib/expand.ts";
 
 describe("expandIds", () => {
@@ -40,5 +41,39 @@ describe("expandIds", () => {
 
   it("throws on incomplete range", () => {
     expect(() => expandIds(["UE-1.."])).toThrow(/invalid range|range must be of form/);
+  });
+
+  // Wave 3 / structured-error taxonomy: range-parsing failures must be
+  // ValidationError with code=validation_error and a hint, not raw Error.
+  it("malformed-range error is a ValidationError with code + hint", () => {
+    const err = (() => {
+      try {
+        expandIds(["UE-1..nonsense"]);
+        return null;
+      } catch (e) {
+        return e;
+      }
+    })();
+    expect(err).toBeInstanceOf(ValidationError);
+    expect(err).toMatchObject({
+      code: "validation_error",
+      hint: expect.any(String),
+    });
+  });
+
+  it("mismatched-prefix error is a ValidationError with code + hint", () => {
+    const err = (() => {
+      try {
+        expandIds(["UE-1..XY-3"]);
+        return null;
+      } catch (e) {
+        return e;
+      }
+    })();
+    expect(err).toBeInstanceOf(ValidationError);
+    expect(err).toMatchObject({
+      code: "validation_error",
+      hint: expect.any(String),
+    });
   });
 });

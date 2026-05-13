@@ -1,3 +1,4 @@
+import { ValidationError } from "./errors.ts";
 import { ISSUE_FIELDS_FRAGMENT } from "./pullQuery.ts";
 
 export const ISSUE_UPDATE_MUTATION = /* GraphQL */ `
@@ -38,11 +39,19 @@ export const PROJECT_UPDATE_MUTATION = /* GraphQL */ `
  */
 export function buildCasQuery(identifiers: string[]): string {
   if (identifiers.length === 0) {
-    throw new Error("buildCasQuery: cannot build a query with zero identifiers");
+    throw new ValidationError(
+      "buildCasQuery: cannot build a query with zero identifiers",
+      "pass at least one TEAM-NN identifier to the CAS fetch",
+    );
   }
   const aliases = identifiers
     .map((id, i) => {
-      if (!/^[A-Z]+-\d+$/.test(id)) throw new Error(`invalid identifier: ${id}`);
+      if (!/^[A-Z]+-\d+$/.test(id)) {
+        throw new ValidationError(
+          `invalid identifier: ${id}`,
+          "identifiers must look like TEAM-NN (e.g. UE-101)",
+        );
+      }
       return `  a${i}: issue(id: "${id}") { id identifier updatedAt }`;
     })
     .join("\n");

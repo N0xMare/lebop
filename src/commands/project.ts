@@ -1,6 +1,8 @@
 import chalk from "chalk";
 import type { Command } from "commander";
 import { resolveConfig } from "../lib/config.ts";
+import { envelope } from "../lib/envelope.ts";
+import { NotFoundError, tryIdempotentDelete } from "../lib/errors.ts";
 import {
   createProject,
   deleteProject,
@@ -34,11 +36,17 @@ export function registerProject(program: Command): void {
         limit?: string;
         json?: boolean;
       }) => {
-        const config = await resolveConfig({ teamOverride: opts.team });
+        // `--all-teams` is the explicit "no team filter" escape hatch — it
+        // MUST work without a configured default team, otherwise the flag
+        // is non-functional for users who haven't set `default_team` in
+        // ~/.lebop/config.yaml. Skip resolveConfig entirely in that mode.
+        const teamFilter = opts.allTeams
+          ? undefined
+          : (await resolveConfig({ teamOverride: opts.team })).team;
         const requested = Number.parseInt(opts.limit ?? "50", 10);
         const max = requested === 0 ? Number.POSITIVE_INFINITY : Math.max(1, requested);
         const records = await listProjects({
-          team: opts.allTeams ? undefined : config.team,
+          team: teamFilter,
           state: opts.state,
           max,
         });
@@ -46,12 +54,11 @@ export function registerProject(program: Command): void {
         if (opts.json) {
           process.stdout.write(
             `${JSON.stringify(
-              {
-                schema_version: 1,
-                team: opts.allTeams ? "*" : config.team,
+              envelope({
+                team: opts.allTeams ? "*" : teamFilter,
                 count: records.length,
                 projects: records,
-              },
+              }),
               null,
               2,
             )}\n`,
@@ -77,10 +84,18 @@ export function registerProject(program: Command): void {
     .option("--json", "emit structured result")
     .action(async (id: string, opts: { json?: boolean }) => {
       const project = await getProject(id);
-      if (!project) throw new Error(`project not found: ${id}`);
+      // Round-8 / R8-LOW-3: structured NotFoundError instead of raw Error
+      // so `--json` emits the proper envelope (`code: "not_found"`) instead
+      // of the unclassified `code: "unknown"` fallback.
+      if (!project) {
+        throw new NotFoundError(
+          `project not found: ${id}`,
+          "verify the project UUID; run `lebop projects` to discover ids",
+        );
+      }
 
       if (opts.json) {
-        process.stdout.write(`${JSON.stringify({ schema_version: 1, project }, null, 2)}\n`);
+        process.stdout.write(`${JSON.stringify(envelope({ project }), null, 2)}\n`);
         return;
       }
 
@@ -151,9 +166,7 @@ export function registerProject(program: Command): void {
         });
 
         if (opts.json) {
-          process.stdout.write(
-            `${JSON.stringify({ schema_version: 1, project: created }, null, 2)}\n`,
-          );
+          process.stdout.write(`${JSON.stringify(envelope({ project: created }), null, 2)}\n`);
           return;
         }
         process.stdout.write(
@@ -205,9 +218,7 @@ export function registerProject(program: Command): void {
 
         const updated = await updateProject(id, input);
         if (opts.json) {
-          process.stdout.write(
-            `${JSON.stringify({ schema_version: 1, project: updated }, null, 2)}\n`,
-          );
+          process.stdout.write(`${JSON.stringify(envelope({ project: updated }), null, 2)}\n`);
           return;
         }
         process.stdout.write(
@@ -218,19 +229,34 @@ export function registerProject(program: Command): void {
 
   cmd
     .command("delete <id>")
-    .description("delete a project by UUID (irreversible)")
+    .description("delete a project by UUID (irreversible — requires --yes)")
+    .option("--yes", "confirm destructive operation (required)")
     .option("--json", "emit structured result")
-    .action(async (id: string, opts: { json?: boolean }) => {
-      const success = await deleteProject(id);
-      if (opts.json) {
-        process.stdout.write(`${JSON.stringify({ schema_version: 1, id, success }, null, 2)}\n`);
+    .action(async (id: string, opts: { yes?: boolean; json?: boolean }) => {
+      if (!opts.yes) {
+        process.stderr.write(
+          `${chalk.red("error:")} refusing to delete project ${chalk.bold(id)} without --yes\n` +
+            `  ${chalk.cyan("hint:")} re-run with --yes to confirm. This operation is irreversible.\n`,
+        );
+        process.exitCode = 1;
         return;
       }
-      if (success) {
+      // Round-8 / N2: discriminated union — narrow via `r.status`.
+      const r = await tryIdempotentDelete(() => deleteProject(id));
+      const succeeded = r.status === "deleted" && r.result;
+      if (r.status === "deleted" && !r.result) process.exitCode = 1;
+      if (opts.json) {
+        process.stdout.write(
+          `${JSON.stringify(envelope({ id, status: r.status, success: succeeded }), null, 2)}\n`,
+        );
+        return;
+      }
+      if (r.status === "already-absent") {
+        process.stdout.write(`${chalk.gray("✓")} already absent: ${chalk.bold(id)} (no-op)\n`);
+      } else if (r.result) {
         process.stdout.write(`${chalk.green("✓")} deleted ${chalk.bold(id)}\n`);
       } else {
         process.stdout.write(`${chalk.red("✗")} delete failed for ${id}\n`);
-        process.exitCode = 1;
       }
     });
 }

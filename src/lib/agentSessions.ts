@@ -9,6 +9,7 @@
  * lookups we go through `Issue.agentSessions` which is cheaper.
  */
 
+import { tryMapToNull } from "./errors.ts";
 import { paginateRaw } from "./paginate.ts";
 import { linear, withClient } from "./sdk.ts";
 
@@ -159,8 +160,12 @@ const GET_AGENT_SESSION_QUERY = /* GraphQL */ `
 `;
 
 export async function getAgentSession(id: string): Promise<ListedAgentSession | null> {
-  const response = (await withClient((c) =>
-    c.client.rawRequest(GET_AGENT_SESSION_QUERY, { id }),
-  )) as { data: { agentSession: AgentSessionNode | null } };
+  // `tryMapToNull` preserves the documented "missing → null" contract while
+  // propagating other LebopError subtypes unchanged.
+  type Resp = { data: { agentSession: AgentSessionNode | null } };
+  const response = await tryMapToNull<Resp>(
+    () => withClient((c) => c.client.rawRequest(GET_AGENT_SESSION_QUERY, { id })) as Promise<Resp>,
+  );
+  if (!response) return null;
   return response.data.agentSession ? shape(response.data.agentSession) : null;
 }

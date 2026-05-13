@@ -4,6 +4,7 @@
  * call the same lib path.
  */
 
+import { NotFoundError, ValidationError } from "./errors.ts";
 import { paginateRaw } from "./paginate.ts";
 import { linear, withClient } from "./sdk.ts";
 
@@ -58,7 +59,13 @@ const UPDATE_COMMENT_MUTATION = /* GraphQL */ `
   mutation UpdateComment($id: String!, $input: CommentUpdateInput!) {
     commentUpdate(id: $id, input: $input) {
       success
-      comment { id updatedAt }
+      comment {
+        id
+        body
+        url
+        updatedAt
+        user { id name email }
+      }
     }
   }
 `;
@@ -106,13 +113,25 @@ export interface AddCommentInput {
 export interface AddCommentResult {
   id: string | null;
   created_at: string | null;
+  // Round-6 / A26: thicker response shape — pre-fix callers needed a
+  // follow-up `list_comments` to discover the URL / echo the body / find
+  // the author. Additive — strictly more information at the same wire
+  // cost (createComment already loads the comment node for the response).
+  body: string | null;
+  url: string | null;
+  user: { id: string; name: string; email: string } | null;
 }
 
 export async function addComment(input: AddCommentInput): Promise<AddCommentResult> {
   // Resolution wrapped (idempotent); createComment NOT wrapped — retry-after-
   // success would post a duplicate.
   const issue = await withClient((c) => c.issue(input.identifier));
-  if (!issue) throw new Error(`issue not found: ${input.identifier}`);
+  if (!issue) {
+    throw new NotFoundError(
+      `issue not found: ${input.identifier}`,
+      "verify the identifier or your team scope",
+    );
+  }
 
   const client = await linear();
   const linearInput: { issueId: string; body: string; parentId?: string } = {
@@ -122,22 +141,47 @@ export async function addComment(input: AddCommentInput): Promise<AddCommentResu
   if (input.parentId) linearInput.parentId = input.parentId;
   const payload = await client.createComment(linearInput);
   if (!payload.success) {
-    throw new Error(`Linear rejected the comment on ${input.identifier}`);
+    // Linear's `commentCreate` returns `success: false` when the input is
+    // structurally fine but Linear rejected the comment (e.g. the issue is
+    // archived, the body violates a workspace rule, the parent comment is
+    // gone). Surface as a structured ValidationError so the CLI / MCP layer
+    // can format it consistently.
+    throw new ValidationError(
+      `Linear rejected the comment on ${input.identifier}`,
+      "check that the issue is not archived and that the body / parent comment are valid",
+    );
   }
   const created = await payload.comment;
   const createdAt = created?.createdAt;
+  const user = created ? await created.user : null;
   return {
     id: created?.id ?? null,
     created_at:
       createdAt instanceof Date
         ? createdAt.toISOString()
         : ((createdAt as string | undefined) ?? null),
+    body: created?.body ?? null,
+    url: created?.url ?? null,
+    user: user
+      ? {
+          id: user.id,
+          name: user.name,
+          email: user.email,
+        }
+      : null,
   };
 }
 
 export interface UpdateCommentResult {
   id: string;
   updated_at: string;
+  // Round-7 / H-MCP-2: A26 parity for the update path. Pre-fix callers had
+  // to do a follow-up `list_comments` to read the body/URL/user. Additive —
+  // strictly more information at the same wire cost (commentUpdate already
+  // loads the comment node for the response).
+  body: string | null;
+  url: string | null;
+  user: { id: string; name: string; email: string } | null;
 }
 
 export async function updateComment(commentId: string, body: string): Promise<UpdateCommentResult> {
@@ -148,12 +192,24 @@ export async function updateComment(commentId: string, body: string): Promise<Up
     data: {
       commentUpdate: {
         success: boolean;
-        comment: { id: string; updatedAt: string };
+        comment: {
+          id: string;
+          body: string | null;
+          url: string | null;
+          updatedAt: string;
+          user: { id: string; name: string; email: string } | null;
+        };
       };
     };
   };
   const updated = response.data.commentUpdate.comment;
-  return { id: updated.id, updated_at: updated.updatedAt };
+  return {
+    id: updated.id,
+    updated_at: updated.updatedAt,
+    body: updated.body,
+    url: updated.url,
+    user: updated.user,
+  };
 }
 
 export async function deleteComment(commentId: string): Promise<boolean> {

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { ValidationError } from "../src/lib/errors.ts";
 import { buildIssueFilter } from "../src/lib/listIssues.ts";
 
 // `me`/`@me` resolution does a viewer lookup via withClient. Mock it so
@@ -136,6 +137,16 @@ describe("buildIssueFilter", () => {
         buildIssueFilter({ unassigned: true, assignee: "me" }, undefined),
       ).rejects.toThrow(/mutually exclusive/);
     });
+
+    // Wave 3 / structured-error taxonomy: assignee/unassigned conflict
+    // must surface as ValidationError with code + hint.
+    it("unassigned+assignee conflict is a ValidationError with code + hint", async () => {
+      const err = await buildIssueFilter({ unassigned: true, assignee: "me" }, undefined).catch(
+        (e) => e,
+      );
+      expect(err).toBeInstanceOf(ValidationError);
+      expect(err).toMatchObject({ code: "validation_error", hint: expect.any(String) });
+    });
   });
 
   describe("time filters", () => {
@@ -167,6 +178,13 @@ describe("buildIssueFilter", () => {
       await expect(buildIssueFilter({ updatedSince: "not a date" }, undefined)).rejects.toThrow(
         /unrecognised time format/,
       );
+    });
+
+    // Wave 3 / structured-error taxonomy
+    it("unparseable time error is a ValidationError with code + hint", async () => {
+      const err = await buildIssueFilter({ updatedSince: "not a date" }, undefined).catch((e) => e);
+      expect(err).toBeInstanceOf(ValidationError);
+      expect(err).toMatchObject({ code: "validation_error", hint: expect.any(String) });
     });
   });
 

@@ -1,6 +1,9 @@
 import type { Command } from "commander";
 import { resolveConfig } from "../lib/config.ts";
+import { envelope } from "../lib/envelope.ts";
+import { NotFoundError, ValidationError } from "../lib/errors.ts";
 import { type ListedIssue, listIssues } from "../lib/listIssues.ts";
+import { getTeam } from "../lib/teams.ts";
 
 export function registerList(program: Command): void {
   program
@@ -29,6 +32,20 @@ export function registerList(program: Command): void {
       const requested = Number.parseInt(opts.limit ?? "50", 10);
       const max = requested === 0 ? Number.POSITIVE_INFINITY : Math.max(1, requested);
 
+      // Round-8 / R8-LOW-6: pre-validate team existence so a bad `--team`
+      // surfaces as a clean NotFoundError instead of silently returning
+      // `count: 0`. Mirrors round-7 / A11 (which fixed the MCP side via
+      // `list_issues` pre-check) — closes the CLI parity gap.
+      if (!opts.allTeams && config.team) {
+        const t = await getTeam(config.team);
+        if (!t) {
+          throw new NotFoundError(
+            `team not found: ${config.team}`,
+            "run `lebop teams` to see available team keys",
+          );
+        }
+      }
+
       const records = await listIssues({
         resolvedTeam: opts.allTeams ? undefined : config.team,
         team: opts.team,
@@ -40,7 +57,29 @@ export function registerList(program: Command): void {
         assignee: opts.assignee,
         unassigned: opts.unassigned,
         label: opts.label,
-        priority: opts.priority !== undefined ? Number.parseInt(opts.priority, 10) : undefined,
+        // Round-6 / H9: validate priority at the boundary. Pre-fix the
+        // CLI silently accepted any value (priority=99, priority=bogus →
+        // "no matching issues" exit 0). The lib's `listIssues` path doesn't
+        // gate priority since it builds a filter; bad values silently
+        // returned nothing. Fail loud instead.
+        priority:
+          opts.priority !== undefined
+            ? (() => {
+                // Round-8 / R6-LOW-2: strict integer parse. `Number.parseInt`
+                // accepted `"3abc"` (→3), `"3.7"` (→3), trailing whitespace
+                // — making the validation hint misleading. Use `Number()` +
+                // `Number.isInteger()` so the bound check operates on a
+                // truly-integer value.
+                const n = Number(opts.priority);
+                if (!Number.isInteger(n) || n < 0 || n > 4) {
+                  throw new ValidationError(
+                    `invalid --priority value "${opts.priority}"`,
+                    "priority must be an integer 0..4 (none|urgent|high|normal|low)",
+                  );
+                }
+                return n;
+              })()
+            : undefined,
         cycle: opts.cycle,
         milestone: opts.milestone,
         updatedSince: opts.updatedSince,
@@ -53,12 +92,11 @@ export function registerList(program: Command): void {
       if (opts.json) {
         process.stdout.write(
           `${JSON.stringify(
-            {
-              schema_version: 1,
+            envelope({
               team: opts.allTeams ? "*" : config.team,
               count: records.length,
               issues: records,
-            },
+            }),
             null,
             2,
           )}\n`,

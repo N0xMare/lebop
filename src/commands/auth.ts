@@ -9,8 +9,12 @@ import {
   setDefaultWorkspace,
   validateToken,
 } from "../lib/auth.ts";
+import { setWorkspaceDefaultTeam } from "../lib/configWrite.ts";
+import { envelope } from "../lib/envelope.ts";
+import { NotFoundError } from "../lib/errors.ts";
 import { AUTH_FILE } from "../lib/paths.ts";
 import { promptHidden } from "../lib/prompt.ts";
+import { getTeam } from "../lib/teams.ts";
 
 export function registerAuth(program: Command): void {
   const auth = program.command("auth").description("manage Linear credentials");
@@ -62,6 +66,18 @@ export function registerAuth(program: Command): void {
             : `${chalk.green("✓")} credentials removed from ${AUTH_FILE}\n`,
         );
       } else {
+        // Round-8 / R8-LOW-5: when a slug was explicitly named but doesn't
+        // exist in auth.json, exit 1 with a clearer message. Pre-fix this
+        // silently exited 0 with "no credentials to remove", which let
+        // scripts treat a typoed slug as success.
+        if (slug) {
+          process.stderr.write(
+            `${chalk.red("error:")} workspace slug not found in ${AUTH_FILE}: ${chalk.bold(slug)}\n` +
+              `  ${chalk.cyan("hint:")} run \`lebop auth list\` to see configured workspaces.\n`,
+          );
+          process.exitCode = 1;
+          return;
+        }
         process.stdout.write("no credentials to remove\n");
       }
     });
@@ -84,8 +100,7 @@ export function registerAuth(program: Command): void {
       if (opts.json) {
         process.stdout.write(
           `${JSON.stringify(
-            {
-              schema_version: 1,
+            envelope({
               auth_file: AUTH_FILE,
               default: stored.default ?? null,
               workspaces: slugs
@@ -102,7 +117,7 @@ export function registerAuth(program: Command): void {
                   };
                 })
                 .filter(Boolean),
-            },
+            }),
             null,
             2,
           )}\n`,
@@ -157,10 +172,31 @@ export function registerAuth(program: Command): void {
 
   auth
     .command("token [slug]")
-    .description("print the API token for a workspace (handy for piping to curl)")
-    .action(async (slug: string | undefined) => {
+    .description(
+      "print a masked preview of the API token for a workspace. Use `--unsafe` to print the full token (for piping to curl).",
+    )
+    // Round-6 / CLI 19: prints a masked preview by default
+    // (`lin_api_***************XXXX`, last 4 chars revealed) so a careless
+    // copy-paste into a chat / screenshot doesn't leak the full PAK. Pass
+    // `--unsafe` to opt into the original full-token print.
+    .option("--unsafe", "print the full token (legacy behavior; required to pipe into curl)")
+    .action(async (slug: string | undefined, opts: { unsafe?: boolean }) => {
       const ws = await loadAuthForWorkspace(slug);
-      process.stdout.write(`${ws.token}\n`);
+      if (opts.unsafe) {
+        process.stdout.write(`${ws.token}\n`);
+        return;
+      }
+      // Mask all but the last 4 chars; preserve the `lin_api_` (or whatever)
+      // prefix so callers can still verify which kind of token it is.
+      const t = ws.token;
+      const tail = t.slice(-4);
+      // Find the prefix separator (`_` after the kind), else fall back to
+      // the first 8 chars as a stable "head" window.
+      const sepIdx = t.indexOf("_", 4);
+      const head = sepIdx > 0 ? t.slice(0, sepIdx + 1) : t.slice(0, 8);
+      const hidden = "*".repeat(Math.max(4, t.length - head.length - tail.length));
+      process.stderr.write(`${chalk.gray("(masked — pass --unsafe to print the full token)")}\n`);
+      process.stdout.write(`${head}${hidden}${tail}\n`);
     });
 
   auth
@@ -180,18 +216,25 @@ export function registerAuth(program: Command): void {
         refreshed = true;
       }
 
+      // Round-6 / CLI 11: surface the workspace-default marker so callers
+      // can tell whether `lebop` is talking to the default workspace
+      // without a separate `auth list` round-trip. Matches the `*` marker
+      // emitted in human mode by `auth list`.
+      const fullAuth = await loadAuth();
+      const isDefault = fullAuth?.default === ws.slug;
+
       if (opts.json) {
         process.stdout.write(
           `${JSON.stringify(
-            {
-              schema_version: 1,
+            envelope({
               workspace: ws.slug,
               workspace_name: ws.name,
+              is_default: isDefault,
               viewer,
               auth_file: AUTH_FILE,
               refreshed,
               created_at: ws.created_at,
-            },
+            }),
             null,
             2,
           )}\n`,
@@ -199,8 +242,49 @@ export function registerAuth(program: Command): void {
         return;
       }
 
+      const defaultMarker = isDefault ? chalk.gray(" [default]") : "";
       process.stdout.write(
-        `${chalk.bold(viewer.name)} <${viewer.email}>\n  workspace: ${chalk.cyan(ws.slug)} (${ws.name})\n  id: ${viewer.id}\n  auth file: ${AUTH_FILE}\n  created: ${ws.created_at}${refreshed ? chalk.gray(" (just refreshed)") : ""}\n`,
+        `${chalk.bold(viewer.name)} <${viewer.email}>\n  workspace: ${chalk.cyan(ws.slug)} (${ws.name})${defaultMarker}\n  id: ${viewer.id}\n  auth file: ${AUTH_FILE}\n  created: ${ws.created_at}${refreshed ? chalk.gray(" (just refreshed)") : ""}\n`,
+      );
+    });
+
+  auth
+    .command("set-default-team <workspace> <team>")
+    .description(
+      "set the per-workspace default team (writes workspace_team_defaults in ~/.lebop/config.yaml)",
+    )
+    .option("--json", "emit structured result")
+    .action(async (workspace: string, team: string, opts: { json?: boolean }) => {
+      // Round-11 / M-2: validate the team exists in the target workspace
+      // before writing to config. Scoped via `LEBOP_WORKSPACE` env var so
+      // `getTeam` (which uses `withClient` → the workspace-aware
+      // `linear()` selector) targets the right Linear org.
+      const prevWorkspace = process.env.LEBOP_WORKSPACE;
+      process.env.LEBOP_WORKSPACE = workspace;
+      try {
+        const t = await getTeam(team);
+        if (!t) {
+          throw new NotFoundError(
+            `team not found: ${team}`,
+            `run \`lebop --workspace ${workspace} teams\` to list valid keys`,
+          );
+        }
+      } finally {
+        if (prevWorkspace === undefined) delete process.env.LEBOP_WORKSPACE;
+        else process.env.LEBOP_WORKSPACE = prevWorkspace;
+      }
+      await setWorkspaceDefaultTeam(workspace, team);
+      if (opts.json) {
+        process.stdout.write(
+          // Round-7 / HIGH-3: response envelope key renamed `team_key` →
+          // `team` to match the MCP-side `set_workspace_default_team`
+          // rename (round-6 / C1). Both surfaces now agree on `team`.
+          `${JSON.stringify(envelope({ workspace_slug: workspace, team }), null, 2)}\n`,
+        );
+        return;
+      }
+      process.stdout.write(
+        `${chalk.green("✓")} default team for ${chalk.cyan(workspace)} set to ${chalk.bold(team)}\n`,
       );
     });
 }

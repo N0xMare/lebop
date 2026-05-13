@@ -14,6 +14,11 @@ A minimal three-issue plan that demonstrates the major plan features:
 # 1. Edit _project.md and set `team:` to your Linear team key
 #    (run `lebop teams` to list keys).
 
+# (Optional) The three issue files include a `labels: [type:feature]` line
+# as an example. If your workspace doesn't have that label, either:
+#   - create one first:  lebop label create --team YOUR-TEAM type:feature
+#   - or delete the `labels:` line from each issue file before running.
+
 # 2. Validate the plan (no Linear writes; just parses + checks).
 lebop plan validate docs/examples/getting-started
 

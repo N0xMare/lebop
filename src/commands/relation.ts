@@ -1,5 +1,7 @@
 import chalk from "chalk";
 import type { Command } from "commander";
+import { envelope } from "../lib/envelope.ts";
+import { NotFoundError, ValidationError } from "../lib/errors.ts";
 import {
   createLink,
   deleteLink,
@@ -37,22 +39,21 @@ export function registerRelation(program: Command): void {
         withClient((c) => c.issue(upperId)),
         withClient((c) => c.issue(upperOther)),
       ]);
-      if (!self) throw new Error(`issue not found: ${upperId}`);
-      if (!target) throw new Error(`link target not found: ${upperOther}`);
+      if (!self) throw new NotFoundError(`issue not found: ${upperId}`);
+      if (!target) throw new NotFoundError(`link target not found: ${upperOther}`);
 
       const result = await createLink(self.id, target.id, linkKind);
 
       if (opts.json) {
         process.stdout.write(
           `${JSON.stringify(
-            {
-              schema_version: 1,
+            envelope({
               op: "add",
               from: upperId,
               kind: linkKind,
               to: upperOther,
               relation_id: result.id,
-            },
+            }),
             null,
             2,
           )}\n`,
@@ -78,14 +79,13 @@ export function registerRelation(program: Command): void {
         if (opts.json) {
           process.stdout.write(
             `${JSON.stringify(
-              {
-                schema_version: 1,
+              envelope({
                 op: "delete",
                 from: upperId,
                 kind: linkKind,
                 to: upperOther,
                 status: "already-absent",
-              },
+              }),
               null,
               2,
             )}\n`,
@@ -102,15 +102,14 @@ export function registerRelation(program: Command): void {
       if (opts.json) {
         process.stdout.write(
           `${JSON.stringify(
-            {
-              schema_version: 1,
+            envelope({
               op: "delete",
               from: upperId,
               kind: linkKind,
               to: upperOther,
               status: "deleted",
               relation_id: relationId,
-            },
+            }),
             null,
             2,
           )}\n`,
@@ -133,12 +132,11 @@ export function registerRelation(program: Command): void {
       if (opts.json) {
         process.stdout.write(
           `${JSON.stringify(
-            {
-              schema_version: 1,
+            envelope({
               identifier: upperId,
               outbound,
               inbound,
-            },
+            }),
             null,
             2,
           )}\n`,
@@ -166,8 +164,12 @@ export function registerRelation(program: Command): void {
 function parseKind(input: string): LinkKind {
   const normalized = input.toLowerCase().replace(/_/g, "-");
   if (!(LINK_KINDS as readonly string[]).includes(normalized)) {
-    throw new Error(
-      `unknown relation kind "${input}". supported: ${LINK_KINDS.join(", ")} (use \`lebop raw\` for \`similar\`)`,
+    // Round-8 / R8-LOW-3: ValidationError instead of raw Error so `--json`
+    // emits `code: "validation_error"` (matches the documented taxonomy)
+    // instead of falling through to the `code: "unknown"` fallback.
+    throw new ValidationError(
+      `unknown relation kind "${input}". supported: ${LINK_KINDS.join(", ")}`,
+      `pick one of: ${LINK_KINDS.join(", ")} (use \`lebop raw\` for similar)`,
     );
   }
   return normalized as LinkKind;

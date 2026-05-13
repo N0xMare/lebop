@@ -20,7 +20,8 @@ import {
 } from "../lib/cache.ts";
 import { resolveConfig } from "../lib/config.ts";
 import { diffIssueMetadata, diffProjectMetadata } from "../lib/diff.ts";
-import { rewriteNotFound } from "../lib/errors.ts";
+import { envelope } from "../lib/envelope.ts";
+import { NotFoundError, rewriteNotFound, ValidationError } from "../lib/errors.ts";
 import { expandIds } from "../lib/expand.ts";
 import { paginateRaw } from "../lib/paginate.ts";
 import {
@@ -33,6 +34,7 @@ import {
 } from "../lib/pullQuery.ts";
 import { withRetry } from "../lib/retry.ts";
 import { linear, withClient } from "../lib/sdk.ts";
+import { isUuid } from "../lib/uuid.ts";
 
 export function registerPull(program: Command): void {
   program
@@ -64,7 +66,10 @@ export function registerPull(program: Command): void {
         )) as { data: { project: Omit<FetchedProject, "issues"> | null } };
         const header = headerResponse.data.project;
         if (!header) {
-          throw new Error(`project not found: ${opts.project ?? opts.projectId}`);
+          throw new NotFoundError(
+            `project not found: ${opts.project ?? opts.projectId}`,
+            "verify the project name or UUID; run `lebop project list --all-teams` to enumerate",
+          );
         }
         type IssuesPage = {
           data: {
@@ -95,7 +100,10 @@ export function registerPull(program: Command): void {
       }
 
       if (issueIds.length === 0 && !projectPulled) {
-        throw new Error("nothing to pull — pass issue IDs or --project / --project-id");
+        throw new ValidationError(
+          "nothing to pull — pass issue IDs or --project / --project-id",
+          "examples: `lebop pull NOX-34 NOX-35` (issue ids) or `lebop pull --project 'My Project'`",
+        );
       }
 
       // Refuse to overwrite unpushed edits unless --refresh.
@@ -248,15 +256,14 @@ export function registerPull(program: Command): void {
       if (opts.json) {
         process.stdout.write(
           `${JSON.stringify(
-            {
-              schema_version: 1,
+            envelope({
               team: config.team,
               repo_hash: config.repoHash,
               mode: destinationRoot ? "export" : "cache",
               project: projectResult,
               issues: results,
               errors,
-            },
+            }),
             null,
             2,
           )}\n`,
@@ -359,19 +366,26 @@ async function lookupProjectId(
 ): Promise<string> {
   // Accept either a UUID or a project name. UUIDs route through the global
   // project resolver (no team scoping); names match within the given team.
-  if (/^[0-9a-f-]{36}$/i.test(nameOrId)) {
+  if (isUuid(nameOrId)) {
     const found = await withClient((c) =>
       c.client.rawRequest("query Pr($id: String!) { project(id: $id) { id } }", {
         id: nameOrId,
       }),
     );
     const data = (found as { data: { project: { id: string } | null } }).data;
-    if (!data.project) throw new Error(`project not found: ${nameOrId}`);
+    if (!data.project) {
+      throw new NotFoundError(
+        `project not found: ${nameOrId}`,
+        "verify the UUID; run `lebop project list --all-teams` to enumerate",
+      );
+    }
     return data.project.id;
   }
   const teams = await withClient((c) => c.teams({ filter: { key: { eq: teamKey } } }));
   const team = teams.nodes[0];
-  if (!team) throw new Error(`team not found: ${teamKey}`);
+  if (!team) {
+    throw new NotFoundError(`team not found: ${teamKey}`, "verify the team key with `lebop teams`");
+  }
   const projects = await withRetry(() => team.projects({ first: 250 }));
   const match = projects.nodes.find((p) => p.name === nameOrId);
   if (!match) {
@@ -381,7 +395,10 @@ async function lookupProjectId(
       .map((p) => `"${p.name}"`)
       .join(", ");
     const hint = candidates ? ` candidates: ${candidates}` : "";
-    throw new Error(`project not found in ${teamKey}: "${nameOrId}".${hint}`);
+    throw new NotFoundError(
+      `project not found in ${teamKey}: "${nameOrId}".${hint}`,
+      "use --all-teams to search across teams, or pass --project-id with the UUID",
+    );
   }
   return match.id;
 }

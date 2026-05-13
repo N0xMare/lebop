@@ -251,12 +251,62 @@ describe("R002 — required formats", () => {
     expect(lintContent(content, ctx).warnings.filter((w) => w.rule === "R002")).toHaveLength(0);
   });
 
-  it("silently skips malformed patterns", () => {
+  it("emits a structured warning for malformed patterns instead of silently dropping them", () => {
+    // Wave 2 / D: replaces the previous "silently skips" behavior. The
+    // catch-block in R002 used to `continue;` on regex compile failure,
+    // which left the user with zero feedback that their config was broken.
+    // Now the rule emits a single line-1 warning naming the bad pattern
+    // and the compile-error reason, so the user sees actionable output
+    // from `lebop lint`.
+    const bad: LintContext = {
+      repoConfig: {
+        required_formats: [{ pattern: "[unclosed", suggest: "x" }],
+      },
+    };
+    const { warnings } = lintContent("anything", bad);
+    const r002 = warnings.filter((w) => w.rule === "R002");
+    expect(r002).toHaveLength(1);
+    expect(r002[0]?.line).toBe(1);
+    expect(r002[0]?.message).toContain("[unclosed");
+    expect(r002[0]?.message).toMatch(/invalid `required_formats\[\]\.pattern`/);
+    // No fix should be attached — config errors aren't auto-fixable.
+    expect(r002[0]?.fix).toBeNull();
+  });
+
+  it("does not throw when the regex is malformed", () => {
+    // Backstop for the prior contract — lintContent must remain total.
     const bad: LintContext = {
       repoConfig: {
         required_formats: [{ pattern: "[unclosed", suggest: "x" }],
       },
     };
     expect(() => lintContent("anything", bad)).not.toThrow();
+  });
+
+  it("still applies valid patterns alongside an invalid one", () => {
+    // Mixed config: one good entry + one malformed entry. The good entry
+    // must keep working so a single typo doesn't disable the whole rule.
+    const mixed: LintContext = {
+      repoConfig: {
+        required_formats: [
+          { pattern: "[unclosed", suggest: "x" }, // invalid
+          {
+            pattern: "\\bpr-(\\d+)\\b",
+            suggest: "[#$1]",
+            message: "Use [#N] form",
+          },
+        ],
+      },
+    };
+    const { warnings } = lintContent("See pr-7 for the fix.", mixed);
+    const r002 = warnings.filter((w) => w.rule === "R002");
+    // One config-error warning at line 1 + one content warning at line 1
+    // (both happen to land on the same line; the content one carries a fix).
+    expect(r002.length).toBeGreaterThanOrEqual(2);
+    const configWarn = r002.find((w) => w.message.includes("[unclosed"));
+    const contentWarn = r002.find((w) => w.message.includes("Use [#N] form"));
+    expect(configWarn).toBeTruthy();
+    expect(contentWarn).toBeTruthy();
+    expect(contentWarn?.fix).toBeTruthy();
   });
 });

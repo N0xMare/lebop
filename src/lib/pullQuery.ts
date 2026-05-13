@@ -1,3 +1,5 @@
+import { ValidationError } from "./errors.ts";
+import { isUuid } from "./uuid.ts";
 export const ISSUE_FIELDS_FRAGMENT = /* GraphQL */ `
   fragment IssueFields on Issue {
     id
@@ -93,17 +95,27 @@ export function buildPullIssuesQuery(
   withRelations = false,
 ): string {
   if (identifiers.length === 0) {
-    throw new Error("buildPullIssuesQuery: cannot build a query with zero identifiers");
+    throw new ValidationError(
+      "buildPullIssuesQuery: cannot build a query with zero identifiers",
+      "pass at least one TEAM-NN identifier to the pull fetch",
+    );
   }
   const fragments = ["...IssueFields"];
   if (withComments) fragments.push("...CommentFields");
   if (withRelations) fragments.push("...RelationFields");
   const spread = fragments.join(" ");
 
+  // Round-6 / CLI 17: accept either TEAM-NN identifiers OR UUIDs. Linear's
+  // `issue(id:)` resolver takes both. Pre-fix we rejected UUIDs at the CLI
+  // boundary even though the underlying API accepts them — that broke
+  // copy-pasting issue UUIDs from Linear's URL/web app.
   const aliases = identifiers
     .map((id, i) => {
-      if (!/^[A-Z]+-\d+$/.test(id)) {
-        throw new Error(`invalid issue identifier: ${id}`);
+      if (!/^[A-Z]+-\d+$/.test(id) && !isUuid(id)) {
+        throw new ValidationError(
+          `invalid issue identifier: ${id}`,
+          "identifiers must be TEAM-NN (e.g. UE-101) or a UUID",
+        );
       }
       return `  a${i}: issue(id: "${id}") { ${spread} }`;
     })

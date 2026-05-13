@@ -3,7 +3,8 @@ import { chmodSync, existsSync, unlinkSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import { LinearClient } from "@linear/sdk";
-import { AuthError } from "./errors.ts";
+import { writeAtomic } from "./cache.ts";
+import { AuthError, LebopError, mapSdkError } from "./errors.ts";
 import { AUTH_FILE, LEBOP_HOME } from "./paths.ts";
 import { withRetry } from "./retry.ts";
 import type { AuthFile, AuthFileV1, Viewer, WorkspaceAuth } from "./types.ts";
@@ -238,7 +239,9 @@ async function probeToken(token: string): Promise<TokenProbe> {
   const client = linearClientFromToken(token);
   try {
     // Idempotent reads — wrap with retry so transient 5xx during login don't
-    // surface as misleading "token rejected" errors.
+    // surface as misleading "token rejected" errors. `withRetry` already maps
+    // non-retryable errors (auth, validation, not-found) through `mapSdkError`
+    // before re-throwing, so a 401 here will already arrive as an AuthError.
     const viewer = await withRetry(() => client.viewer);
     const org = await withRetry(() => viewer.organization);
     return {
@@ -247,16 +250,30 @@ async function probeToken(token: string): Promise<TokenProbe> {
       orgName: org.name,
     };
   } catch (err) {
-    const msg = (err as Error).message ?? String(err);
-    if (
-      msg.toLowerCase().includes("authentication") ||
-      msg.toLowerCase().includes("unauthorized")
-    ) {
+    // Belt-and-suspenders: `probeToken` is called from login flows where
+    // `linearClientFromToken` is used directly (NOT via `linear()`), so the
+    // `installRawRequestMapping` wrapper from `sdk.ts` is not active here.
+    // Route the raw error through `mapSdkError` so we still get a structured
+    // AuthError / RateLimitError / etc. when the SDK throws.
+    const mapped = err instanceof LebopError ? err : mapSdkError(err);
+
+    if (mapped instanceof AuthError) {
+      // Replace the generic mapped message with the login-flow-specific
+      // wording (the original "token rejected" affordance points the user
+      // at Settings → API rather than the more generic "run lebop auth
+      // login" hint that `mapSdkError` attaches by default).
       throw new AuthError(
         "token rejected by Linear",
         "paste the full `lin_api_...` value from Settings → API",
       );
     }
+
+    // Anything else that came back structured (RateLimitError, NotFoundError,
+    // NetworkError, ValidationError) is more informative than the legacy
+    // "failed to validate token" wrap, so propagate as-is.
+    if (mapped instanceof LebopError) throw mapped;
+
+    const msg = (err as Error).message ?? String(err);
     throw new AuthError(`failed to validate token: ${msg}`);
   }
 }
@@ -295,8 +312,17 @@ async function migrateV1ToV2(v1: AuthFileV1): Promise<AuthFile> {
 }
 
 async function writeAuth(auth: AuthFile): Promise<void> {
+  // ~/.lebop/ must exist with mode 0700 before we drop the tmp file in it.
   await mkdir(dirname(AUTH_FILE), { recursive: true, mode: 0o700 });
-  await Bun.write(AUTH_FILE, `${JSON.stringify(auth, null, 2)}\n`);
+  // Atomic write (tmp + rename) so a crash mid-write can't leave a partial /
+  // 0-byte / half-flushed auth.json — which would block every future lebop
+  // run until the user re-authenticated. Matches the codebase's posture
+  // (cache.ts:writeAtomic, configWrite.ts).
+  await writeAtomic(AUTH_FILE, `${JSON.stringify(auth, null, 2)}\n`);
+  // Defense in depth on top of the parent-dir 0700 (which is what actually
+  // prevents other local users from reading). chmodSync may briefly race
+  // with the rename above on exotic filesystems; the parent dir is the
+  // real guard so this is belt-and-suspenders.
   chmodSync(AUTH_FILE, 0o600);
   chmodSync(LEBOP_HOME, 0o700);
 }

@@ -4,6 +4,7 @@
  * `lebop project-update ...`, and the MCP equivalents.
  */
 
+import { NotFoundError, tryMapToNull } from "./errors.ts";
 import { paginateConnection, paginateRaw } from "./paginate.ts";
 import { linear, withClient } from "./sdk.ts";
 
@@ -14,6 +15,11 @@ export interface ListedProject {
   state: string;
   url: string;
   updated_at: string;
+  // Round-7 / MED-1: parity with FullProject, ListedMilestone,
+  // ListedInitiative, ListedDocument, ListedCycle. Pre-fix only FullProject
+  // surfaced archive state; list_projects callers couldn't tell archived
+  // from live without a separate get_project call.
+  archived_at: string | null;
 }
 
 export async function listProjects(opts: {
@@ -32,7 +38,11 @@ export async function listProjects(opts: {
     // Team-scoped: walk team.projects
     const teams = await withClient((c) => c.teams({ filter: { key: { eq: opts.team } } }));
     const team = teams.nodes[0];
-    if (!team) throw new Error(`team not found: ${opts.team}`);
+    if (!team)
+      throw new NotFoundError(
+        `team not found: ${opts.team}`,
+        "verify the team key (e.g. `UE`) and that your token has access to it",
+      );
     const projects = await paginateConnection(
       ({ first, after }) => team.projects({ first, after, filter }),
       { max: opts.max },
@@ -55,6 +65,7 @@ function shapeProject(p: {
   state: string;
   url: string;
   updatedAt: Date;
+  archivedAt?: Date | null;
 }): ListedProject {
   return {
     id: p.id,
@@ -63,6 +74,9 @@ function shapeProject(p: {
     state: p.state,
     url: p.url,
     updated_at: p.updatedAt.toISOString(),
+    // SDK returns `archivedAt` as a Date or undefined; lebop emits the
+    // snake_case string-or-null shape used everywhere else.
+    archived_at: p.archivedAt instanceof Date ? p.archivedAt.toISOString() : (p.archivedAt ?? null),
   };
 }
 
@@ -76,6 +90,11 @@ export interface FullProject {
   updated_at: string;
   start_date: string | null;
   target_date: string | null;
+  // Round-6 / M3: parity with ListedInitiative/ListedMilestone/ListedDocument/
+  // ListedCycle. `project(id:)` cleanly returns archived rows (no
+  // archive-bug), so callers can distinguish live vs. archived via this
+  // field without needing the list-shape archive workaround.
+  archived_at: string | null;
   teams: { id: string; key: string; name: string }[];
   lead: { id: string; name: string; email: string } | null;
 }
@@ -92,6 +111,7 @@ const GET_PROJECT_QUERY = /* GraphQL */ `
       updatedAt
       startDate
       targetDate
+      archivedAt
       teams { nodes { id key name } }
       lead { id name email }
     }
@@ -99,7 +119,11 @@ const GET_PROJECT_QUERY = /* GraphQL */ `
 `;
 
 export async function getProject(id: string): Promise<FullProject | null> {
-  const response = (await withClient((c) => c.client.rawRequest(GET_PROJECT_QUERY, { id }))) as {
+  // `tryMapToNull` turns SDK-boundary `NotFoundError` into a `null` return
+  // (the documented "missing → null" contract) while propagating every
+  // other error subtype unchanged. Replaces the prior try/catch +
+  // `mapSdkError` + `instanceof` boilerplate.
+  type Resp = {
     data: {
       project: {
         id: string;
@@ -111,11 +135,16 @@ export async function getProject(id: string): Promise<FullProject | null> {
         updatedAt: string;
         startDate: string | null;
         targetDate: string | null;
+        archivedAt: string | null;
         teams: { nodes: { id: string; key: string; name: string }[] };
         lead: { id: string; name: string; email: string } | null;
       } | null;
     };
   };
+  const response = await tryMapToNull<Resp>(
+    () => withClient((c) => c.client.rawRequest(GET_PROJECT_QUERY, { id })) as Promise<Resp>,
+  );
+  if (!response) return null;
   const p = response.data.project;
   if (!p) return null;
   return {
@@ -128,6 +157,7 @@ export async function getProject(id: string): Promise<FullProject | null> {
     updated_at: p.updatedAt,
     start_date: p.startDate,
     target_date: p.targetDate,
+    archived_at: p.archivedAt,
     teams: p.teams.nodes,
     lead: p.lead,
   };
@@ -149,7 +179,7 @@ const CREATE_PROJECT_MUTATION = /* GraphQL */ `
     projectCreate(input: $input) {
       success
       project {
-        id name description content state url updatedAt startDate targetDate
+        id name description content state url updatedAt startDate targetDate archivedAt
         teams { nodes { id key name } }
         lead { id name email }
       }
@@ -174,6 +204,7 @@ export async function createProject(input: CreateProjectInput): Promise<FullProj
           updatedAt: string;
           startDate: string | null;
           targetDate: string | null;
+          archivedAt: string | null;
           teams: { nodes: { id: string; key: string; name: string }[] };
           lead: { id: string; name: string; email: string } | null;
         };
@@ -191,6 +222,7 @@ export async function createProject(input: CreateProjectInput): Promise<FullProj
     updated_at: p.updatedAt,
     start_date: p.startDate,
     target_date: p.targetDate,
+    archived_at: p.archivedAt,
     teams: p.teams.nodes,
     lead: p.lead,
   };
@@ -210,7 +242,7 @@ const UPDATE_PROJECT_MUTATION = /* GraphQL */ `
     projectUpdate(id: $id, input: $input) {
       success
       project {
-        id name description content state url updatedAt startDate targetDate
+        id name description content state url updatedAt startDate targetDate archivedAt
         teams { nodes { id key name } }
         lead { id name email }
       }
@@ -236,6 +268,7 @@ export async function updateProject(id: string, input: UpdateProjectInput): Prom
           updatedAt: string;
           startDate: string | null;
           targetDate: string | null;
+          archivedAt: string | null;
           teams: { nodes: { id: string; key: string; name: string }[] };
           lead: { id: string; name: string; email: string } | null;
         };
@@ -253,6 +286,7 @@ export async function updateProject(id: string, input: UpdateProjectInput): Prom
     updated_at: p.updatedAt,
     start_date: p.startDate,
     target_date: p.targetDate,
+    archived_at: p.archivedAt,
     teams: p.teams.nodes,
     lead: p.lead,
   };
@@ -265,7 +299,19 @@ const DELETE_PROJECT_MUTATION = /* GraphQL */ `
 `;
 
 export async function deleteProject(id: string): Promise<boolean> {
-  // NOT wrapped — re-running after first success would not-found.
+  // Round-7 / Q2 (refined): Linear's `projectDelete` is a SOFT delete —
+  // sets `archivedAt` on the project; the delete mutation returns
+  // `success: true` on any id. Pre-flight + archived_at check so
+  // `tryIdempotentDelete` callers see consistent `{status:
+  // "already-absent"}` on re-runs.
+  const existing = await getProject(id);
+  if (!existing || existing.archived_at !== null) {
+    throw new NotFoundError(
+      `project not found: ${id}`,
+      "the project may have already been deleted",
+    );
+  }
+  // NOT retry-wrapped — second call would not-found after the pre-flight delete.
   const client = await linear();
   const response = (await client.client.rawRequest(DELETE_PROJECT_MUTATION, { id })) as {
     data: { projectDelete: { success: boolean } };

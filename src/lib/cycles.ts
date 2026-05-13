@@ -5,6 +5,7 @@
  * lebop's surface — cycles are scheduled/managed in Linear's UI.
  */
 
+import { tryMapToNull } from "./errors.ts";
 import { paginateRaw } from "./paginate.ts";
 import { linear, withClient } from "./sdk.ts";
 
@@ -106,8 +107,12 @@ const GET_CYCLE_QUERY = /* GraphQL */ `
 `;
 
 export async function getCycle(id: string): Promise<ListedCycle | null> {
-  const response = (await withClient((c) => c.client.rawRequest(GET_CYCLE_QUERY, { id }))) as {
-    data: { cycle: CycleNode | null };
-  };
+  // `tryMapToNull` preserves the documented "missing → null" contract while
+  // propagating other LebopError subtypes unchanged.
+  type Resp = { data: { cycle: CycleNode | null } };
+  const response = await tryMapToNull<Resp>(
+    () => withClient((c) => c.client.rawRequest(GET_CYCLE_QUERY, { id })) as Promise<Resp>,
+  );
+  if (!response) return null;
   return response.data.cycle ? shape(response.data.cycle) : null;
 }

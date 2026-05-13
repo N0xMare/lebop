@@ -1,17 +1,11 @@
 import chalk from "chalk";
 import type { Command } from "commander";
-import { rewriteNotFound } from "../lib/errors.ts";
+import { envelope } from "../lib/envelope.ts";
 import { expandIds } from "../lib/expand.ts";
-import { linear, withClient } from "../lib/sdk.ts";
+import { type LifecycleResult, unarchiveIssues } from "../lib/issues.ts";
 
 interface UnarchiveOpts {
   json?: boolean;
-}
-
-interface UnarchiveResult {
-  identifier: string;
-  status: "unarchived" | "not-found" | "error";
-  error?: string;
 }
 
 export function registerUnarchive(program: Command): void {
@@ -21,48 +15,17 @@ export function registerUnarchive(program: Command): void {
     .option("--json", "emit structured results")
     .action(async (ids: string[], opts: UnarchiveOpts) => {
       const identifiers = expandIds(ids);
-      const client = await linear();
 
-      const results: UnarchiveResult[] = [];
-      for (const ident of identifiers) {
-        try {
-          // Read with retry; the unarchive itself is NOT wrapped — same
-          // reasoning as `archive`: retry on already-unarchived issue would
-          // surface as a spurious not-found.
-          const issue = await withClient((c) => c.issue(ident));
-          if (!issue) {
-            results.push({ identifier: ident, status: "not-found" });
-            continue;
-          }
-          await client.client.rawRequest(UNARCHIVE_MUTATION, { id: issue.id });
-          results.push({ identifier: ident, status: "unarchived" });
-        } catch (err) {
-          const translated = rewriteNotFound(err, ident);
-          if (translated.message.startsWith("not found:")) {
-            results.push({ identifier: ident, status: "not-found" });
-          } else {
-            results.push({ identifier: ident, status: "error", error: translated.message });
-          }
-        }
-      }
+      // Wave-3 parity: delegate to the lib's unarchiveIssues so the CLI and
+      // MCP emit the same per-row status enum (`"ok"` instead of CLI-only
+      // `"unarchived"`).
+      const results = await unarchiveIssues(identifiers);
 
       if (opts.json) {
-        process.stdout.write(`${JSON.stringify({ schema_version: 1, results }, null, 2)}\n`);
+        process.stdout.write(`${JSON.stringify(envelope({ results }), null, 2)}\n`);
       } else {
         for (const r of results) {
-          const icon =
-            r.status === "unarchived"
-              ? chalk.green("✓")
-              : r.status === "not-found"
-                ? chalk.yellow("?")
-                : chalk.red("✗");
-          const note =
-            r.status === "unarchived"
-              ? chalk.gray("unarchived")
-              : r.status === "not-found"
-                ? chalk.yellow("not found")
-                : chalk.red(r.error ?? "error");
-          process.stdout.write(`${icon} ${chalk.bold(r.identifier)} ${note}\n`);
+          process.stdout.write(`${renderHumanLine(r)}\n`);
         }
       }
 
@@ -72,8 +35,12 @@ export function registerUnarchive(program: Command): void {
     });
 }
 
-const UNARCHIVE_MUTATION = /* GraphQL */ `
-  mutation UnarchiveIssue($id: String!) {
-    issueUnarchive(id: $id) { success }
+function renderHumanLine(r: LifecycleResult): string {
+  if (r.status === "ok") {
+    return `${chalk.green("✓")} ${chalk.bold(r.identifier)} ${chalk.gray("unarchived")}`;
   }
-`;
+  if (r.status === "not-found") {
+    return `${chalk.yellow("?")} ${chalk.bold(r.identifier)} ${chalk.yellow("not found")}`;
+  }
+  return `${chalk.red("✗")} ${chalk.bold(r.identifier)} ${chalk.red(r.error ?? "error")}`;
+}

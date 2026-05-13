@@ -21,6 +21,8 @@
  * page's worth).
  */
 
+import { ValidationError } from "./errors.ts";
+
 interface PageInfo {
   hasNextPage: boolean;
   endCursor: string | null;
@@ -55,8 +57,9 @@ export async function paginateRawQuery(
     if (!connectionKey) {
       connectionKey = findConnectionKey(response.data);
       if (!connectionKey) {
-        throw new Error(
+        throw new ValidationError(
           "--paginate: no connection-shaped field found on the response. expected a top-level `data.X` with both `nodes` and `pageInfo`.",
+          "the query must select a connection field (one with both `nodes` and `pageInfo`) at the top level",
         );
       }
     }

@@ -18,9 +18,11 @@ import {
   type IssueChange,
   type ProjectChange,
 } from "../lib/diff.ts";
+import { envelope } from "../lib/envelope.ts";
 import { expandIds } from "../lib/expand.ts";
 import { lintContent } from "../lib/lint.ts";
 import type { FetchedIssue, FetchedProject } from "../lib/pullQuery.ts";
+import { buildIssueUpdateInput } from "../lib/pushBuild.ts";
 import {
   buildCasQuery,
   ISSUE_UPDATE_MUTATION,
@@ -28,12 +30,7 @@ import {
   PROJECT_UPDATE_MUTATION,
   type ProjectUpdateInput,
 } from "../lib/pushMutations.ts";
-import {
-  getTeamMetadata,
-  resolveAssigneeId,
-  resolveLabelIds,
-  resolveStateId,
-} from "../lib/resolve.ts";
+import { getTeamMetadata } from "../lib/resolve.ts";
 import { withClient } from "../lib/sdk.ts";
 
 interface PushOpts {
@@ -90,7 +87,16 @@ export function registerPush(program: Command): void {
       const plans = await collectPlans(config.repoHash, expandIds(ids));
 
       if (plans.length === 0) {
-        process.stdout.write("nothing to push — cache is clean\n");
+        // Round-8 / R8-LOW-2: emit a structured envelope on the clean-cache
+        // path when `--json` is set so callers piping `lebop push --json |
+        // jq` get parseable output. Human mode keeps the existing prose.
+        if (opts.json) {
+          process.stdout.write(
+            `${JSON.stringify(envelope({ results: [], summary: { applied: 0, skipped: 0, failed: 0, total: 0 } }), null, 2)}\n`,
+          );
+        } else {
+          process.stdout.write("nothing to push — cache is clean\n");
+        }
         return;
       }
 
@@ -268,7 +274,7 @@ export function registerPush(program: Command): void {
 
       if (opts.json) {
         process.stdout.write(
-          `${JSON.stringify({ schema_version: 1, team: config.team, results }, null, 2)}\n`,
+          `${JSON.stringify(envelope({ team: config.team, results }), null, 2)}\n`,
         );
       } else {
         printSummary(results, opts.dryRun === true);
@@ -345,55 +351,6 @@ async function detectStaleIssues(plans: IssuePlan[]): Promise<Set<string>> {
     }
   });
   return stale;
-}
-
-async function buildIssueUpdateInput(
-  plan: IssuePlan,
-  teamMetadata: Awaited<ReturnType<typeof getTeamMetadata>>,
-): Promise<IssueUpdateInput> {
-  const input: IssueUpdateInput = {};
-  for (const change of plan.changes) {
-    switch (change.field) {
-      case "title":
-        input.title = plan.metadata.title;
-        break;
-      case "description":
-        input.description = plan.description;
-        break;
-      case "state":
-        input.stateId = resolveStateId(teamMetadata, plan.metadata.state);
-        break;
-      case "priority":
-        input.priority = plan.metadata.priority;
-        break;
-      case "estimate":
-        input.estimate = plan.metadata.estimate;
-        break;
-      case "labels":
-        input.labelIds = resolveLabelIds(teamMetadata, plan.metadata.labels);
-        break;
-      case "assignee":
-        input.assigneeId = plan.metadata.assignee
-          ? await resolveAssigneeId(teamMetadata, plan.metadata.assignee)
-          : null;
-        break;
-      case "parent": {
-        // Linear's parentId wants a UUID, not the TEAM-NN identifier.
-        // null clears the parent link.
-        if (!plan.metadata.parent) {
-          input.parentId = null;
-        } else {
-          const parent = await withClient((c) => c.issue(plan.metadata.parent ?? ""));
-          if (!parent) {
-            throw new Error(`parent issue not found: ${plan.metadata.parent}`);
-          }
-          input.parentId = parent.id;
-        }
-        break;
-      }
-    }
-  }
-  return input;
 }
 
 function buildProjectUpdateInput(plan: ProjectPlan): ProjectUpdateInput {

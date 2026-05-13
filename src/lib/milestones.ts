@@ -4,8 +4,10 @@
  * either a project name or UUID; helpers convert as needed.
  */
 
+import { tryMapToNull } from "./errors.ts";
 import { paginateRaw } from "./paginate.ts";
 import { linear, withClient } from "./sdk.ts";
+import { isUuid } from "./uuid.ts";
 
 export interface ListedMilestone {
   id: string;
@@ -13,18 +15,25 @@ export interface ListedMilestone {
   description: string | null;
   target_date: string | null;
   sort_order: number;
+  archived_at: string | null;
   project: { id: string; name: string };
 }
 
+// Round-7 / HIGH-2: opt-in `includeArchived` matches the description in
+// the MCP tool — pre-round-7 the description claimed cascade-archived
+// milestones surface but the query didn't actually pass the flag. Default
+// stays false (live-only) for backwards compat; callers pass true to
+// surface archived rows + the `archived_at` field per row.
 const LIST_MILESTONES_QUERY = /* GraphQL */ `
-  query ListMilestones($filter: ProjectMilestoneFilter, $first: Int!, $after: String) {
-    projectMilestones(filter: $filter, first: $first, after: $after) {
+  query ListMilestones($filter: ProjectMilestoneFilter, $first: Int!, $after: String, $includeArchived: Boolean) {
+    projectMilestones(filter: $filter, first: $first, after: $after, includeArchived: $includeArchived) {
       nodes {
         id
         name
         description
         targetDate
         sortOrder
+        archivedAt
         project { id name }
       }
       pageInfo { hasNextPage endCursor }
@@ -32,17 +41,38 @@ const LIST_MILESTONES_QUERY = /* GraphQL */ `
   }
 `;
 
+// Round-6 / M5: factor the inline literal that was duplicated 4× across
+// list/get/create/update into a single node interface + shape() helper —
+// mirrors the pattern in src/lib/documents.ts and src/lib/initiatives.ts.
+// Adding the next field (e.g. createdAt) is now one edit instead of four.
+interface MilestoneNode {
+  id: string;
+  name: string;
+  description: string | null;
+  targetDate: string | null;
+  sortOrder: number;
+  archivedAt: string | null;
+  project: { id: string; name: string };
+}
+
+function shapeMilestone(m: MilestoneNode): ListedMilestone {
+  return {
+    id: m.id,
+    name: m.name,
+    description: m.description,
+    target_date: m.targetDate,
+    sort_order: m.sortOrder,
+    archived_at: m.archivedAt,
+    project: m.project,
+  };
+}
+
+// Round-8 / R7-L4: reuse `MilestoneNode` instead of duplicating the inline
+// shape (closes the M5 dedup loop — was the last remaining duplicate).
 interface MilestonesPageRaw {
   data: {
     projectMilestones: {
-      nodes: {
-        id: string;
-        name: string;
-        description: string | null;
-        targetDate: string | null;
-        sortOrder: number;
-        project: { id: string; name: string };
-      }[];
+      nodes: MilestoneNode[];
       pageInfo: { hasNextPage: boolean; endCursor: string | null };
     };
   };
@@ -55,6 +85,8 @@ interface MilestonesPageRaw {
 export async function listMilestones(opts: {
   projectId?: string;
   project?: string;
+  /** Round-7 / HIGH-2: surface cascade-archived rows alongside live ones. */
+  includeArchived?: boolean;
 }): Promise<ListedMilestone[]> {
   const filter: Record<string, unknown> = {};
   if (opts.projectId) filter.project = { id: { eq: opts.projectId } };
@@ -70,58 +102,86 @@ export async function listMilestones(opts: {
         filter: Object.keys(filter).length > 0 ? filter : undefined,
         first,
         after,
+        includeArchived: Boolean(opts.includeArchived),
       }) as Promise<MilestonesPageRaw>,
     (response) => response.data.projectMilestones,
     { pageSize: 250 },
   );
-  // Linear's field naming is camelCase; lebop emits snake_case for stable
-  // JSON output.
-  return raw.map((m) => ({
-    id: m.id,
-    name: m.name,
-    description: m.description,
-    target_date: m.targetDate,
-    sort_order: m.sortOrder,
-    project: m.project,
-  }));
+  return raw.map(shapeMilestone);
 }
 
+// Uses the list-shape query (with includeArchived: true) rather than the
+// single-record `projectMilestone(id:)` getter. Live-probed 2026-05-12:
+// `projectMilestone(id:)` hides archived rows (same archive-bug pattern
+// caught for `initiative(id:)` in round 4 + `getInitiative`/
+// `listInitiativeUpdates` in round 4-followup). Note: Linear has no
+// user-facing `projectMilestoneArchive` mutation — milestones either
+// stay live or cascade-archive when their parent project is archived;
+// the bug surfaces in that cascade case. `first: 1` bounds the outer
+// pagination since the ID filter guarantees at-most-one result (also
+// keeps complexity within Linear's per-query budget).
 const GET_MILESTONE_QUERY = /* GraphQL */ `
-  query GetMilestone($id: String!) {
-    projectMilestone(id: $id) {
-      id
-      name
-      description
-      targetDate
-      sortOrder
-      project { id name }
+  query GetMilestone($id: ID!) {
+    projectMilestones(filter: { id: { eq: $id } }, includeArchived: true, first: 1) {
+      nodes {
+        id
+        name
+        description
+        targetDate
+        sortOrder
+        archivedAt
+        project { id name }
+      }
     }
   }
 `;
 
 export async function getMilestone(id: string): Promise<ListedMilestone | null> {
-  const response = (await withClient((c) => c.client.rawRequest(GET_MILESTONE_QUERY, { id }))) as {
+  // Round-10 / M-7-smoke: pre-check UUID format so non-UUID input returns
+  // null at the lib boundary instead of hitting Linear's `ID!` scalar and
+  // surfacing as `validation_error`. The parity goal is observable at the
+  // *MCP tool* boundary: `get_initiative {id: "not-a-uuid"}` returns null
+  // because the MCP handler calls `resolveInitiativeId` first (which
+  // regex-checks for UUID, then falls through to name lookup → returns
+  // null on miss). The lib `getInitiative` itself does NOT pre-check; it
+  // leans on `tryMapToNull`'s M-7 widening to swallow Linear's
+  // "Argument Validation Error - …id…" response. Milestones have no
+  // name-resolver (milestone names aren't unique workspace-wide), so a
+  // boundary pre-check here is the cleanest way to land the same null
+  // contract.
+  //
+  // Round-13 / N-1 caveat: `isUuid` uses the loose form `/^[0-9a-f-]{36}$/i`
+  // shared via `src/lib/uuid.ts`. Inputs that satisfy the loose form but
+  // aren't real UUIDs (e.g. 36 dashes, or all-hex-no-dashes) still hit
+  // Linear and round-trip through `tryMapToNull`'s M-7 widening → null.
+  // Net observable behavior is identical (any non-resolving input ends up
+  // null), but the "no Linear round-trip" cost saving only applies to
+  // morphologically-non-UUID inputs.
+  if (!isUuid(id)) return null;
+  // List-shape query with includeArchived: true correctly surfaces both
+  // live AND archived milestones. Null result means "no milestone with
+  // this id exists at all" (the stable "missing → null" contract).
+  type Resp = {
     data: {
-      projectMilestone: {
-        id: string;
-        name: string;
-        description: string | null;
-        targetDate: string | null;
-        sortOrder: number;
-        project: { id: string; name: string };
-      } | null;
+      projectMilestones: {
+        nodes: Array<{
+          id: string;
+          name: string;
+          description: string | null;
+          targetDate: string | null;
+          sortOrder: number;
+          archivedAt: string | null;
+          project: { id: string; name: string };
+        }>;
+      };
     };
   };
-  const m = response.data.projectMilestone;
-  if (!m) return null;
-  return {
-    id: m.id,
-    name: m.name,
-    description: m.description,
-    target_date: m.targetDate,
-    sort_order: m.sortOrder,
-    project: m.project,
-  };
+  const response = await tryMapToNull<Resp>(
+    () => withClient((c) => c.client.rawRequest(GET_MILESTONE_QUERY, { id })) as Promise<Resp>,
+  );
+  if (!response) return null;
+  const m = response.data.projectMilestones.nodes[0];
+  return m ? shapeMilestone(m) : null;
 }
 
 export interface CreateMilestoneInput {
@@ -138,7 +198,7 @@ const CREATE_MILESTONE_MUTATION = /* GraphQL */ `
     projectMilestoneCreate(input: $input) {
       success
       projectMilestone {
-        id name description targetDate sortOrder
+        id name description targetDate sortOrder archivedAt
         project { id name }
       }
     }
@@ -148,30 +208,13 @@ const CREATE_MILESTONE_MUTATION = /* GraphQL */ `
 export async function createMilestone(input: CreateMilestoneInput): Promise<ListedMilestone> {
   // NOT retry-wrapped — non-idempotent.
   const client = await linear();
+  // Round-7 / MED-3: reuse `MilestoneNode` instead of duplicating the
+  // inline shape (finishes the round-6 M5 dedup that left create/update
+  // still inlined).
   const response = (await client.client.rawRequest(CREATE_MILESTONE_MUTATION, { input })) as {
-    data: {
-      projectMilestoneCreate: {
-        success: boolean;
-        projectMilestone: {
-          id: string;
-          name: string;
-          description: string | null;
-          targetDate: string | null;
-          sortOrder: number;
-          project: { id: string; name: string };
-        };
-      };
-    };
+    data: { projectMilestoneCreate: { success: boolean; projectMilestone: MilestoneNode } };
   };
-  const m = response.data.projectMilestoneCreate.projectMilestone;
-  return {
-    id: m.id,
-    name: m.name,
-    description: m.description,
-    target_date: m.targetDate,
-    sort_order: m.sortOrder,
-    project: m.project,
-  };
+  return shapeMilestone(response.data.projectMilestoneCreate.projectMilestone);
 }
 
 export interface UpdateMilestoneInput {
@@ -187,7 +230,7 @@ const UPDATE_MILESTONE_MUTATION = /* GraphQL */ `
     projectMilestoneUpdate(id: $id, input: $input) {
       success
       projectMilestone {
-        id name description targetDate sortOrder
+        id name description targetDate sortOrder archivedAt
         project { id name }
       }
     }
@@ -199,32 +242,13 @@ export async function updateMilestone(
   input: UpdateMilestoneInput,
 ): Promise<ListedMilestone> {
   // Update at the value level is idempotent — same input → same outcome.
+  // Round-7 / MED-3: reuse `MilestoneNode`.
   const response = (await withClient((c) =>
     c.client.rawRequest(UPDATE_MILESTONE_MUTATION, { id, input }),
   )) as {
-    data: {
-      projectMilestoneUpdate: {
-        success: boolean;
-        projectMilestone: {
-          id: string;
-          name: string;
-          description: string | null;
-          targetDate: string | null;
-          sortOrder: number;
-          project: { id: string; name: string };
-        };
-      };
-    };
+    data: { projectMilestoneUpdate: { success: boolean; projectMilestone: MilestoneNode } };
   };
-  const m = response.data.projectMilestoneUpdate.projectMilestone;
-  return {
-    id: m.id,
-    name: m.name,
-    description: m.description,
-    target_date: m.targetDate,
-    sort_order: m.sortOrder,
-    project: m.project,
-  };
+  return shapeMilestone(response.data.projectMilestoneUpdate.projectMilestone);
 }
 
 const DELETE_MILESTONE_MUTATION = /* GraphQL */ `
@@ -249,7 +273,7 @@ export async function deleteMilestone(id: string): Promise<boolean> {
  */
 export async function resolveProjectId(nameOrId: string): Promise<string | null> {
   // UUID shape — return as-is.
-  if (/^[0-9a-f-]{36}$/i.test(nameOrId)) return nameOrId;
+  if (isUuid(nameOrId)) return nameOrId;
 
   const PROJECTS_QUERY = /* GraphQL */ `
     query ResolveProject($name: String!) {

@@ -1,6 +1,6 @@
 {
   "name": "lebop",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "Agentic Linear CLI + MCP server — ad-hoc ops (list/show/set/comment/pull/push) and declarative planning (plan apply) as a directory of markdown files.",
   "type": "module",
   "license": "MIT",
@@ -47,11 +47,11 @@
     "typecheck": "tsc --noEmit"
   },
   "engines": {
-    "bun": ">=1.1.0"
+    "bun": ">=1.3.13"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.15",
-    "@types/bun": "latest",
+    "@types/bun": "^1.3.13",
     "typescript": "^6.0.3",
     "vitest": "^4.1.5"
   },

@@ -5,6 +5,7 @@ import chalk from "chalk";
 import type { Command } from "commander";
 import { writeAtomic } from "../lib/cache.ts";
 import { resolveConfig } from "../lib/config.ts";
+import { envelope } from "../lib/envelope.ts";
 import { applyFixesFixpoint, lintContent } from "../lib/lint.ts";
 import { applyPlan } from "../lib/planApply.ts";
 import type { PlanDiffResult } from "../lib/planDiff.ts";
@@ -59,7 +60,7 @@ export function registerPlan(program: Command): void {
 
       if (opts.json) {
         process.stdout.write(
-          `${JSON.stringify({ schema_version: 1, ...summarizeParse(parsed), ...result }, null, 2)}\n`,
+          `${JSON.stringify(envelope({ ...summarizeParse(parsed), ...result }), null, 2)}\n`,
         );
       } else {
         printValidate(parsed, result);
@@ -88,7 +89,7 @@ export function registerPlan(program: Command): void {
       const validation = validatePlan(parsed, teamMetadata, lintCtx);
       if (validation.errors.length > 0) {
         if (opts.json) {
-          process.stdout.write(`${JSON.stringify({ schema_version: 1, validation }, null, 2)}\n`);
+          process.stdout.write(`${JSON.stringify(envelope({ validation }), null, 2)}\n`);
         } else {
           printValidate(parsed, validation);
         }
@@ -109,7 +110,7 @@ export function registerPlan(program: Command): void {
 
       if (opts.json) {
         process.stdout.write(
-          `${JSON.stringify({ schema_version: 1, dry_run: !!opts.dryRun, ...result }, null, 2)}\n`,
+          `${JSON.stringify(envelope({ dry_run: !!opts.dryRun, ...result }), null, 2)}\n`,
         );
       } else {
         printApply(result, !!opts.dryRun);
@@ -135,7 +136,7 @@ export function registerPlan(program: Command): void {
       const result = await diffPlan(parsed, teamMetadata);
 
       if (opts.json) {
-        process.stdout.write(`${JSON.stringify({ schema_version: 1, ...result }, null, 2)}\n`);
+        process.stdout.write(`${JSON.stringify(envelope({ ...result }), null, 2)}\n`);
       } else {
         printDiff(result);
       }
@@ -186,14 +187,13 @@ export function registerPlan(program: Command): void {
       if (opts.json) {
         process.stdout.write(
           `${JSON.stringify(
-            {
-              schema_version: 1,
+            envelope({
               files: perFile.map((f) => ({
                 path: f.path,
                 warnings: f.warnings,
                 fixed: f.fixedCount,
               })),
-            },
+            }),
             null,
             2,
           )}\n`,
@@ -256,12 +256,11 @@ export function registerPlan(program: Command): void {
           if (opts.json) {
             process.stdout.write(
               `${JSON.stringify(
-                {
-                  schema_version: 1,
+                envelope({
                   refused: "drift-detected",
                   hint: "run `lebop plan diff` to inspect, then re-run with --force to overwrite local",
                   diff: preDiff,
-                },
+                }),
                 null,
                 2,
               )}\n`,
@@ -278,7 +277,7 @@ export function registerPlan(program: Command): void {
 
       const result = await pullPlan(parsed, teamMetadata, { includeNew: opts.includeNew });
       if (opts.json) {
-        process.stdout.write(`${JSON.stringify({ schema_version: 1, ...result }, null, 2)}\n`);
+        process.stdout.write(`${JSON.stringify(envelope({ ...result }), null, 2)}\n`);
       } else {
         printPull(result);
       }

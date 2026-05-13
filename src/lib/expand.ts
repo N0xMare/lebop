@@ -1,3 +1,5 @@
+import { ValidationError } from "./errors.ts";
+
 export function expandIds(args: string[]): string[] {
   const out: string[] = [];
   for (const arg of args) {
@@ -12,19 +14,33 @@ export function expandIds(args: string[]): string[] {
 
 function expandRange(range: string): string[] {
   const [start, end] = range.split("..");
-  if (!start || !end) throw new Error(`invalid range: ${range}`);
+  if (!start || !end) {
+    throw new ValidationError(
+      `invalid range: ${range}`,
+      "use the form TEAM-NN..TEAM-MM (e.g. UE-5..UE-8)",
+    );
+  }
   const startMatch = start.match(/^([A-Z]+)-(\d+)$/i);
   const endMatch = end.match(/^([A-Z]+)-(\d+)$/i);
   if (!startMatch || !endMatch) {
-    throw new Error(`range must be of form TEAM-NN..TEAM-MM (got ${range})`);
+    throw new ValidationError(
+      `range must be of form TEAM-NN..TEAM-MM (got ${range})`,
+      "use the form TEAM-NN..TEAM-MM (e.g. UE-5..UE-8)",
+    );
   }
   const [, startPrefix, startNum] = startMatch;
   const [, endPrefix, endNum] = endMatch;
   if (!startPrefix || !startNum || !endPrefix || !endNum) {
-    throw new Error(`range must be of form TEAM-NN..TEAM-MM (got ${range})`);
+    throw new ValidationError(
+      `range must be of form TEAM-NN..TEAM-MM (got ${range})`,
+      "use the form TEAM-NN..TEAM-MM (e.g. UE-5..UE-8)",
+    );
   }
   if (startPrefix.toUpperCase() !== endPrefix.toUpperCase()) {
-    throw new Error(`range prefixes must match: ${startPrefix} vs ${endPrefix}`);
+    throw new ValidationError(
+      `range prefixes must match: ${startPrefix} vs ${endPrefix}`,
+      "both ends of the range must reference the same team (e.g. UE-5..UE-8, not UE-5..XY-8)",
+    );
   }
   const a = Number.parseInt(startNum, 10);
   const b = Number.parseInt(endNum, 10);

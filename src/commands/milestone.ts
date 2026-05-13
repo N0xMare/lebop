@@ -1,5 +1,7 @@
 import chalk from "chalk";
 import type { Command } from "commander";
+import { envelope } from "../lib/envelope.ts";
+import { NotFoundError, tryIdempotentDelete } from "../lib/errors.ts";
 import {
   createMilestone,
   deleteMilestone,
@@ -19,23 +21,29 @@ export function registerMilestone(program: Command): void {
     .command("list")
     .description("list milestones; --project filters to one project")
     .option("--project <name-or-id>", "project name or UUID")
+    .option(
+      "--include-archived",
+      "also surface cascade-archived milestones (parent-project archived). Defaults to false (live only).",
+    )
     .option("--json", "emit structured records")
-    .action(async (opts: { project?: string; json?: boolean }) => {
+    .action(async (opts: { project?: string; includeArchived?: boolean; json?: boolean }) => {
       let projectId: string | undefined;
       if (opts.project) {
         const resolved = await resolveProjectId(opts.project);
-        if (!resolved) throw new Error(`project not found: ${opts.project}`);
+        if (!resolved) throw new NotFoundError(`project not found: ${opts.project}`);
         projectId = resolved;
       }
-      const milestones = await listMilestones({ projectId });
+      // Round-8 / M4: CLI parity with the MCP `list_milestones`
+      // `include_archived` arg (round-7 / HIGH-2). Lib already accepts the
+      // option; only the CLI flag was missing.
+      const milestones = await listMilestones({
+        projectId,
+        includeArchived: Boolean(opts.includeArchived),
+      });
 
       if (opts.json) {
         process.stdout.write(
-          `${JSON.stringify(
-            { schema_version: 1, count: milestones.length, milestones },
-            null,
-            2,
-          )}\n`,
+          `${JSON.stringify(envelope({ count: milestones.length, milestones }), null, 2)}\n`,
         );
         return;
       }
@@ -59,10 +67,10 @@ export function registerMilestone(program: Command): void {
     .option("--json", "emit structured result")
     .action(async (id: string, opts: { json?: boolean }) => {
       const milestone = await getMilestone(id);
-      if (!milestone) throw new Error(`milestone not found: ${id}`);
+      if (!milestone) throw new NotFoundError(`milestone not found: ${id}`);
 
       if (opts.json) {
-        process.stdout.write(`${JSON.stringify({ schema_version: 1, milestone }, null, 2)}\n`);
+        process.stdout.write(`${JSON.stringify(envelope({ milestone }), null, 2)}\n`);
         return;
       }
       process.stdout.write(`${chalk.bold(milestone.name)}\n`);
@@ -79,7 +87,12 @@ export function registerMilestone(program: Command): void {
   cmd
     .command("create <name>")
     .description("create a milestone in a project")
-    .requiredOption("--project <name-or-id>", "project name or UUID")
+    // Round-6 / H17: `--project` and `--project-id` are siblings (parity with
+    // `lebop new`). `--project` accepts a name OR UUID; `--project-id` is
+    // UUID-only (skips the name lookup). One of them is required; we
+    // validate that in the handler so the help text stays clean.
+    .option("--project <name-or-id>", "project name or UUID")
+    .option("--project-id <uuid>", "project UUID (alternative to --project)")
     .option("--description <text>")
     .option("--target-date <iso-date>", "e.g. 2026-12-31")
     .option("--sort-order <n>", "numeric sort order")
@@ -88,15 +101,24 @@ export function registerMilestone(program: Command): void {
       async (
         name: string,
         opts: {
-          project: string;
+          project?: string;
+          projectId?: string;
           description?: string;
           targetDate?: string;
           sortOrder?: string;
           json?: boolean;
         },
       ) => {
-        const projectId = await resolveProjectId(opts.project);
-        if (!projectId) throw new Error(`project not found: ${opts.project}`);
+        // Round-7 / MED-5: enforce mutual-exclusion (the round-6 H17
+        // sibling-flags work allowed both silently — `--project-id` won).
+        if (opts.project && opts.projectId) {
+          throw new Error("pass exactly one of --project / --project-id, not both");
+        }
+        if (!opts.project && !opts.projectId) {
+          throw new Error("either --project <name-or-id> or --project-id <uuid> is required");
+        }
+        const projectId = opts.projectId ?? (await resolveProjectId(opts.project as string));
+        if (!projectId) throw new NotFoundError(`project not found: ${opts.project}`);
         const created = await createMilestone({
           name,
           projectId,
@@ -105,9 +127,7 @@ export function registerMilestone(program: Command): void {
           sortOrder: opts.sortOrder !== undefined ? Number(opts.sortOrder) : undefined,
         });
         if (opts.json) {
-          process.stdout.write(
-            `${JSON.stringify({ schema_version: 1, milestone: created }, null, 2)}\n`,
-          );
+          process.stdout.write(`${JSON.stringify(envelope({ milestone: created }), null, 2)}\n`);
           return;
         }
         process.stdout.write(
@@ -146,7 +166,7 @@ export function registerMilestone(program: Command): void {
         if (opts.sortOrder !== undefined) input.sortOrder = Number(opts.sortOrder);
         if (opts.project !== undefined) {
           const projectId = await resolveProjectId(opts.project);
-          if (!projectId) throw new Error(`project not found: ${opts.project}`);
+          if (!projectId) throw new NotFoundError(`project not found: ${opts.project}`);
           input.projectId = projectId;
         }
 
@@ -158,9 +178,7 @@ export function registerMilestone(program: Command): void {
 
         const updated = await updateMilestone(id, input);
         if (opts.json) {
-          process.stdout.write(
-            `${JSON.stringify({ schema_version: 1, milestone: updated }, null, 2)}\n`,
-          );
+          process.stdout.write(`${JSON.stringify(envelope({ milestone: updated }), null, 2)}\n`);
           return;
         }
         process.stdout.write(
@@ -171,19 +189,34 @@ export function registerMilestone(program: Command): void {
 
   cmd
     .command("delete <id>")
-    .description("delete a milestone by UUID")
+    .description("delete a milestone by UUID (irreversible — requires --yes)")
+    .option("--yes", "confirm destructive operation (required)")
     .option("--json", "emit structured result")
-    .action(async (id: string, opts: { json?: boolean }) => {
-      const success = await deleteMilestone(id);
-      if (opts.json) {
-        process.stdout.write(`${JSON.stringify({ schema_version: 1, id, success }, null, 2)}\n`);
+    .action(async (id: string, opts: { yes?: boolean; json?: boolean }) => {
+      if (!opts.yes) {
+        process.stderr.write(
+          `${chalk.red("error:")} refusing to delete milestone ${chalk.bold(id)} without --yes\n` +
+            `  ${chalk.cyan("hint:")} re-run with --yes to confirm. This operation is irreversible.\n`,
+        );
+        process.exitCode = 1;
         return;
       }
-      if (success) {
+      // Round-8 / N2: discriminated union — narrow via `r.status`.
+      const r = await tryIdempotentDelete(() => deleteMilestone(id));
+      const succeeded = r.status === "deleted" && r.result;
+      if (r.status === "deleted" && !r.result) process.exitCode = 1;
+      if (opts.json) {
+        process.stdout.write(
+          `${JSON.stringify(envelope({ id, status: r.status, success: succeeded }), null, 2)}\n`,
+        );
+        return;
+      }
+      if (r.status === "already-absent") {
+        process.stdout.write(`${chalk.gray("✓")} already absent: ${chalk.bold(id)} (no-op)\n`);
+      } else if (r.result) {
         process.stdout.write(`${chalk.green("✓")} deleted ${chalk.bold(id)}\n`);
       } else {
         process.stdout.write(`${chalk.red("✗")} delete failed for ${id}\n`);
-        process.exitCode = 1;
       }
     });
 }

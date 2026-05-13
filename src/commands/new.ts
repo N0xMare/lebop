@@ -2,6 +2,7 @@ import chalk from "chalk";
 import type { Command } from "commander";
 import type { TeamMetadata } from "../lib/cache.ts";
 import { resolveConfig } from "../lib/config.ts";
+import { envelope } from "../lib/envelope.ts";
 import {
   getTeamMetadata,
   ResolveError,
@@ -48,6 +49,14 @@ export function registerNew(program: Command): void {
     .option("--stdin", "read description from stdin")
     .option("--json", "emit structured result")
     .action(async (opts: NewOpts) => {
+      // Round-8 / M1: enforce mutual-exclusion of --project / --project-id,
+      // matching the round-7 MED-5 work on `milestone create` + `document
+      // create`. Pre-fix `lebop new --project foo --project-id 1111...`
+      // silently let --project-id win — confusing if the names refer to
+      // different projects.
+      if (opts.project && opts.projectId) {
+        throw new Error("pass exactly one of --project / --project-id, not both");
+      }
       const config = await resolveConfig({ teamOverride: opts.team });
       const description = await resolveDescription(opts);
       const priority = opts.priority !== undefined ? resolvePriority(opts.priority) : undefined;
@@ -97,7 +106,7 @@ export function registerNew(program: Command): void {
       const issue = response.data.issueCreate.issue;
 
       if (opts.json) {
-        process.stdout.write(`${JSON.stringify({ schema_version: 1, issue }, null, 2)}\n`);
+        process.stdout.write(`${JSON.stringify(envelope({ issue }), null, 2)}\n`);
         return;
       }
 

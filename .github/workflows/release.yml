@@ -13,9 +13,42 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Gate every release on the same correctness checks that CI runs on `main`.
+  # Without this, `git tag v0.0.X && git push --tags` from an unreviewed
+  # branch would publish without typecheck/biome/test ever running.
+  gate:
+    name: gate (test + typecheck + biome + version-tag match)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.13
+      - name: install deps
+        run: bun install --frozen-lockfile
+      - name: assert package.json.version matches tag
+        # Tagging v0.0.3 with package.json still saying "0.0.2" would publish a
+        # binary that lies about its own --version. Fail fast.
+        run: |
+          tag="${{ github.ref_name }}"
+          expected="${tag#v}"
+          actual=$(node -e 'process.stdout.write(require("./package.json").version)')
+          if [ "$actual" != "$expected" ]; then
+            echo "::error::tag $tag implies version $expected, but package.json says $actual"
+            exit 1
+          fi
+      - name: typecheck
+        run: bun run typecheck
+      - name: biome
+        run: bun run check
+      - name: tests
+        run: bun run test
+
   build:
     name: build ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
+    needs: gate
     timeout-minutes: 15
     strategy:
       fail-fast: false
@@ -51,9 +84,31 @@ jobs:
             --outfile ${{ matrix.asset }}
 
       - name: smoke
+        # `--version` and `--help` both short-circuit before any subcommand
+        # registration runs, so they wouldn't catch a binary that crashes the
+        # moment it tries to load a real command. Exercise the subcommand
+        # tree (forces every `register*` import to evaluate) AND verify the
+        # MCP stdio transport can handshake — both are pre-auth so they can
+        # run in CI without credentials.
         run: |
           ./${{ matrix.asset }} --version
           ./${{ matrix.asset }} --help > /dev/null
+          ./${{ matrix.asset }} list --help > /dev/null
+          ./${{ matrix.asset }} plan --help > /dev/null
+          ./${{ matrix.asset }} mcp --help > /dev/null
+          ./${{ matrix.asset }} project --help > /dev/null
+          ./${{ matrix.asset }} initiative --help > /dev/null
+          # MCP stdio handshake: pipe `initialize` in, expect a JSON-RPC reply
+          # whose first line contains `protocolVersion`. `head -n1` SIGPIPEs
+          # the server once it gets the response — no dependency on the
+          # `timeout(1)` coreutil (which is GNU-only and not guaranteed on
+          # macOS runners). `sleep 5` keeps stdin open long enough for the
+          # server to write before SIGPIPE.
+          {
+            printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"release-smoke","version":"1"}}}'
+            sleep 5
+          } | ./${{ matrix.asset }} mcp 2>/dev/null | head -n1 | grep -q '"protocolVersion"' \
+            || { echo "::error::MCP initialize handshake failed"; exit 1; }
 
       - name: sha256
         run: |

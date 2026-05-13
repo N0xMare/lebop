@@ -5,7 +5,8 @@ import { buildIssueMetadata } from "../lib/build.ts";
 import { readIssue } from "../lib/cache.ts";
 import { resolveConfig } from "../lib/config.ts";
 import { arraysEqual } from "../lib/diff.ts";
-import { rewriteNotFound } from "../lib/errors.ts";
+import { envelope } from "../lib/envelope.ts";
+import { NotFoundError, rewriteNotFound } from "../lib/errors.ts";
 import { buildPullIssuesQuery, type FetchedIssue } from "../lib/pullQuery.ts";
 import { withClient } from "../lib/sdk.ts";
 
@@ -24,7 +25,7 @@ export function registerDiff(program: Command): void {
   program
     .command("diff <id>")
     .description(
-      "show a unified diff of local cache vs live remote for one issue (like `git diff`)",
+      "show a unified diff of local cache vs live remote for one issue (like `git diff`). Exits 0 when local matches remote, 1 when drift exists (mirrors `git diff --exit-code`).",
     )
     .option("--team <key>", "override the resolved team")
     .option("--json", "emit structured diff instead of human output")
@@ -49,7 +50,7 @@ export function registerDiff(program: Command): void {
         throw rewriteNotFound(err, upperId);
       }
       const remoteNode = response.data.a0;
-      if (!remoteNode) throw new Error(`not found: ${upperId}`);
+      if (!remoteNode) throw new NotFoundError(`not found: ${upperId}`);
 
       const { metadata: remoteMeta } = buildIssueMetadata(remoteNode);
       const remoteBody = remoteNode.description ?? "";
@@ -73,16 +74,21 @@ export function registerDiff(program: Command): void {
             (l.startsWith("-") && !l.startsWith("---")),
         );
 
+      // Set exit code BEFORE branching on output mode — both --json and
+      // human paths must honor `git diff --exit-code` semantics so CI gates
+      // piping `lebop diff --json | jq …` still detect drift.
+      const hasDrift = fields.length > 0 || descChanged;
+      process.exitCode = hasDrift ? 1 : 0;
+
       if (opts.json) {
         process.stdout.write(
           `${JSON.stringify(
-            {
-              schema_version: 1,
+            envelope({
               identifier: upperId,
               fields,
               description_changed: descChanged,
               description_patch: descChanged ? patch : null,
-            },
+            }),
             null,
             2,
           )}\n`,
@@ -91,8 +97,6 @@ export function registerDiff(program: Command): void {
       }
 
       printHuman(upperId, fields, descChanged, patch);
-      if (fields.length === 0 && !descChanged) process.exitCode = 0;
-      else process.exitCode = 1;
     });
 }
 

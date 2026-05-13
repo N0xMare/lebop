@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { TeamMetadata } from "../src/lib/cache.ts";
+import { ValidationError } from "../src/lib/errors.ts";
 import {
+  deriveTeamFromIdentifiers,
   labelNameById,
   memberById,
   priorityName,
@@ -143,5 +145,33 @@ describe("priorityName", () => {
 
   it("falls back to unknown(n) for out-of-range", () => {
     expect(priorityName(9)).toBe("unknown(9)");
+  });
+});
+
+describe("deriveTeamFromIdentifiers", () => {
+  it("returns null for empty list", () => {
+    expect(deriveTeamFromIdentifiers([])).toBeNull();
+  });
+
+  it("returns the prefix when all share one team", () => {
+    expect(deriveTeamFromIdentifiers(["NOX-1", "NOX-22", "NOX-300"])).toBe("NOX");
+  });
+
+  it("is case-insensitive on input but returns upper-case", () => {
+    expect(deriveTeamFromIdentifiers(["nox-1", "Nox-2"])).toBe("NOX");
+  });
+
+  it("accepts multi-letter and digit-suffix team keys", () => {
+    expect(deriveTeamFromIdentifiers(["UE_X1-7"])).toBe("UE_X1");
+  });
+
+  it("throws ValidationError on mixed teams", () => {
+    expect(() => deriveTeamFromIdentifiers(["NOX-1", "UE-2"])).toThrow(ValidationError);
+    expect(() => deriveTeamFromIdentifiers(["NOX-1", "UE-2"])).toThrow(/span multiple teams/);
+  });
+
+  it("throws ValidationError on malformed identifier", () => {
+    expect(() => deriveTeamFromIdentifiers(["NOX1"])).toThrow(ValidationError);
+    expect(() => deriveTeamFromIdentifiers([""])).toThrow(ValidationError);
   });
 });

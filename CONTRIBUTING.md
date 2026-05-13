@@ -14,8 +14,9 @@ Install Bun (`curl -fsSL https://bun.sh/install | bash`), then:
 bun install
 bun run check          # biome (lint + format)
 bunx tsc --noEmit      # type-check
-bun test               # vitest under bun
-bun run test           # vitest run (npm-test entry)
+bun run test           # vitest (do not use bare `bun test` — that's
+                       # Bun's built-in runner, which trips on
+                       # vitest-only APIs like vi.resetModules)
 ```
 
 All four gates must be green before opening a PR. CI runs the same set on

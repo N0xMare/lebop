@@ -1,7 +1,7 @@
 import type { Command } from "commander";
 import { resolveConfig } from "../lib/config.ts";
-import { paginateConnection } from "../lib/paginate.ts";
-import { withClient } from "../lib/sdk.ts";
+import { envelope } from "../lib/envelope.ts";
+import { listProjects } from "../lib/projects.ts";
 
 export function registerProjects(program: Command): void {
   program
@@ -14,38 +14,19 @@ export function registerProjects(program: Command): void {
     )
     .option("--json", "emit structured project records")
     .action(async (opts: { team?: string; state?: string; json?: boolean }) => {
+      // Round-8 / H4: route through the lib's `listProjects` (same as
+      // `lebop project list`) so the two surfaces emit identical record
+      // shapes — including `archived_at`, which the prior bespoke SDK call
+      // in this file was missing (MED-1 only landed on the subcommand).
+      // Also delegates team-not-found to the lib's NotFoundError so the
+      // top-level catch in cli.ts emits the structured envelope under
+      // `--json` (round-7 / Q4) instead of raw stderr prose.
       const config = await resolveConfig({ teamOverride: opts.team });
-      const teams = await withClient((c) => c.teams({ filter: { key: { eq: config.team } } }));
-      const team = teams.nodes[0];
-      if (!team) {
-        process.stderr.write(`team not found: ${config.team}\n`);
-        process.exitCode = 1;
-        return;
-      }
-
-      const projects = await paginateConnection(({ first, after }) =>
-        team.projects({ first, after }),
-      );
-      let records = projects.map((p) => ({
-        id: p.id,
-        name: p.name,
-        state: p.state,
-        description: p.description ?? null,
-        url: p.url,
-        updated_at: p.updatedAt.toISOString(),
-      }));
-      if (opts.state) {
-        const needle = opts.state.toLowerCase();
-        records = records.filter((p) => p.state.toLowerCase() === needle);
-      }
+      const records = await listProjects({ team: config.team, state: opts.state });
 
       if (opts.json) {
         process.stdout.write(
-          `${JSON.stringify(
-            { schema_version: 1, team: config.team, projects: records },
-            null,
-            2,
-          )}\n`,
+          `${JSON.stringify(envelope({ team: config.team, count: records.length, projects: records }), null, 2)}\n`,
         );
         return;
       }

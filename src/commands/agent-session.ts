@@ -1,6 +1,8 @@
 import chalk from "chalk";
 import type { Command } from "commander";
 import { getAgentSession, listAgentSessions } from "../lib/agentSessions.ts";
+import { envelope } from "../lib/envelope.ts";
+import { NotFoundError } from "../lib/errors.ts";
 
 export function registerAgentSession(program: Command): void {
   const cmd = program
@@ -26,7 +28,7 @@ export function registerAgentSession(program: Command): void {
       if (opts.json) {
         process.stdout.write(
           `${JSON.stringify(
-            { schema_version: 1, count: sessions.length, agent_sessions: sessions },
+            envelope({ count: sessions.length, agent_sessions: sessions }),
             null,
             2,
           )}\n`,
@@ -52,12 +54,14 @@ export function registerAgentSession(program: Command): void {
     .option("--json", "emit structured result")
     .action(async (id: string, opts: { json?: boolean }) => {
       const session = await getAgentSession(id);
-      if (!session) throw new Error(`agent session not found: ${id}`);
+      if (!session)
+        throw new NotFoundError(
+          `agent session not found: ${id}`,
+          "verify the agent session UUID; run `lebop agent-session list` to discover ids",
+        );
 
       if (opts.json) {
-        process.stdout.write(
-          `${JSON.stringify({ schema_version: 1, agent_session: session }, null, 2)}\n`,
-        );
+        process.stdout.write(`${JSON.stringify(envelope({ agent_session: session }), null, 2)}\n`);
         return;
       }
       process.stdout.write(`${chalk.bold(session.id)}\n`);

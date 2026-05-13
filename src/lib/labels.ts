@@ -24,7 +24,11 @@ export interface ListLabelsOpts {
   workspaceOnly?: boolean;
   /** No filter; return everything the token can see. */
   all?: boolean;
-  /** Hard cap. Default 10_000 (paginator's safety cap). */
+  /**
+   * Hard cap. Defaults to the paginator's runtime safety cap
+   * (`LEBOP_MAX_ITEMS` env or 10_000). Pass an explicit value to opt in to a
+   * tighter bound without tripping the approaching-cap warning.
+   */
   max?: number;
 }
 

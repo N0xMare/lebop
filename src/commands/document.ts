@@ -7,6 +7,8 @@ import {
   listDocuments,
   updateDocument,
 } from "../lib/documents.ts";
+import { envelope } from "../lib/envelope.ts";
+import { NotFoundError, tryIdempotentDelete } from "../lib/errors.ts";
 import { resolveContent } from "../lib/io.ts";
 import { resolveProjectId } from "../lib/milestones.ts";
 
@@ -23,7 +25,7 @@ export function registerDocument(program: Command): void {
       let projectId: string | undefined;
       if (opts.project) {
         const resolved = await resolveProjectId(opts.project);
-        if (!resolved) throw new Error(`project not found: ${opts.project}`);
+        if (!resolved) throw new NotFoundError(`project not found: ${opts.project}`);
         projectId = resolved;
       }
       const requested = Number.parseInt(opts.limit ?? "50", 10);
@@ -32,7 +34,7 @@ export function registerDocument(program: Command): void {
 
       if (opts.json) {
         process.stdout.write(
-          `${JSON.stringify({ schema_version: 1, count: documents.length, documents }, null, 2)}\n`,
+          `${JSON.stringify(envelope({ count: documents.length, documents }), null, 2)}\n`,
         );
         return;
       }
@@ -54,10 +56,10 @@ export function registerDocument(program: Command): void {
     .option("--json", "emit structured result")
     .action(async (id: string, opts: { json?: boolean }) => {
       const doc = await getDocument(id);
-      if (!doc) throw new Error(`document not found: ${id}`);
+      if (!doc) throw new NotFoundError(`document not found: ${id}`);
 
       if (opts.json) {
-        process.stdout.write(`${JSON.stringify({ schema_version: 1, document: doc }, null, 2)}\n`);
+        process.stdout.write(`${JSON.stringify(envelope({ document: doc }), null, 2)}\n`);
         return;
       }
       process.stdout.write(`${chalk.bold(doc.title)}\n`);
@@ -72,7 +74,10 @@ export function registerDocument(program: Command): void {
   cmd
     .command("create <title>")
     .description("create a document in a project")
-    .requiredOption("--project <name-or-id>", "project name or UUID (required)")
+    // Round-6 / H17: parity with `lebop new` — `--project-id <uuid>` is the
+    // UUID-only sibling of `--project <name-or-id>`. Exactly one is required.
+    .option("--project <name-or-id>", "project name or UUID")
+    .option("--project-id <uuid>", "project UUID (alternative to --project)")
     .option("--content <text>")
     .option("--content-file <path>")
     .option("--stdin", "read content from stdin")
@@ -82,7 +87,8 @@ export function registerDocument(program: Command): void {
       async (
         title: string,
         opts: {
-          project: string;
+          project?: string;
+          projectId?: string;
           content?: string;
           contentFile?: string;
           stdin?: boolean;
@@ -90,8 +96,16 @@ export function registerDocument(program: Command): void {
           json?: boolean;
         },
       ) => {
-        const projectId = await resolveProjectId(opts.project);
-        if (!projectId) throw new Error(`project not found: ${opts.project}`);
+        // Round-7 / MED-5: mutual-exclusion (round-6 H17 silently let
+        // --project-id win when both passed).
+        if (opts.project && opts.projectId) {
+          throw new Error("pass exactly one of --project / --project-id, not both");
+        }
+        if (!opts.project && !opts.projectId) {
+          throw new Error("either --project <name-or-id> or --project-id <uuid> is required");
+        }
+        const projectId = opts.projectId ?? (await resolveProjectId(opts.project as string));
+        if (!projectId) throw new NotFoundError(`project not found: ${opts.project}`);
         const content = await resolveContent(opts);
         const created = await createDocument({
           title,
@@ -101,9 +115,7 @@ export function registerDocument(program: Command): void {
         });
 
         if (opts.json) {
-          process.stdout.write(
-            `${JSON.stringify({ schema_version: 1, document: created }, null, 2)}\n`,
-          );
+          process.stdout.write(`${JSON.stringify(envelope({ document: created }), null, 2)}\n`);
           return;
         }
         process.stdout.write(
@@ -143,9 +155,7 @@ export function registerDocument(program: Command): void {
         }
         const updated = await updateDocument(id, input);
         if (opts.json) {
-          process.stdout.write(
-            `${JSON.stringify({ schema_version: 1, document: updated }, null, 2)}\n`,
-          );
+          process.stdout.write(`${JSON.stringify(envelope({ document: updated }), null, 2)}\n`);
           return;
         }
         process.stdout.write(
@@ -156,15 +166,32 @@ export function registerDocument(program: Command): void {
 
   cmd
     .command("delete <id>")
-    .description("delete a document permanently")
+    .description("delete a document permanently (irreversible — requires --yes)")
+    .option("--yes", "confirm destructive operation (required)")
     .option("--json", "emit structured result")
-    .action(async (id: string, opts: { json?: boolean }) => {
-      const success = await deleteDocument(id);
-      if (opts.json) {
-        process.stdout.write(`${JSON.stringify({ schema_version: 1, id, success }, null, 2)}\n`);
+    .action(async (id: string, opts: { yes?: boolean; json?: boolean }) => {
+      if (!opts.yes) {
+        process.stderr.write(
+          `${chalk.red("error:")} refusing to delete document ${chalk.bold(id)} without --yes\n` +
+            `  ${chalk.cyan("hint:")} re-run with --yes to confirm. This operation is irreversible.\n`,
+        );
+        process.exitCode = 1;
         return;
       }
-      if (success) process.stdout.write(`${chalk.green("✓")} deleted ${chalk.bold(id)}\n`);
-      else process.exitCode = 1;
+      // Round-8 / N2: discriminated union — narrow via `r.status`.
+      const r = await tryIdempotentDelete(() => deleteDocument(id));
+      const succeeded = r.status === "deleted" && r.result;
+      if (r.status === "deleted" && !r.result) process.exitCode = 1;
+      if (opts.json) {
+        process.stdout.write(
+          `${JSON.stringify(envelope({ id, status: r.status, success: succeeded }), null, 2)}\n`,
+        );
+        return;
+      }
+      if (r.status === "already-absent") {
+        process.stdout.write(`${chalk.gray("✓")} already absent: ${chalk.bold(id)} (no-op)\n`);
+      } else if (r.result) {
+        process.stdout.write(`${chalk.green("✓")} deleted ${chalk.bold(id)}\n`);
+      }
     });
 }

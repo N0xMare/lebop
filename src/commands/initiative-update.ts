@@ -1,5 +1,7 @@
 import chalk from "chalk";
 import type { Command } from "commander";
+import { envelope } from "../lib/envelope.ts";
+import { NotFoundError } from "../lib/errors.ts";
 import {
   createInitiativeUpdate,
   type InitiativeHealth,
@@ -35,7 +37,7 @@ export function registerInitiativeUpdate(program: Command): void {
         },
       ) => {
         const initiativeId = await resolveInitiativeId(initiative);
-        if (!initiativeId) throw new Error(`initiative not found: ${initiative}`);
+        if (!initiativeId) throw new NotFoundError(`initiative not found: ${initiative}`);
 
         const body = await resolveBody(opts);
         if (!body.trim()) throw new Error("empty update body");
@@ -54,7 +56,7 @@ export function registerInitiativeUpdate(program: Command): void {
 
         if (opts.json) {
           process.stdout.write(
-            `${JSON.stringify({ schema_version: 1, initiative_update: created }, null, 2)}\n`,
+            `${JSON.stringify(envelope({ initiative_update: created }), null, 2)}\n`,
           );
           return;
         }
@@ -70,12 +72,12 @@ export function registerInitiativeUpdate(program: Command): void {
     .option("--json", "emit structured records")
     .action(async (initiative: string, opts: { json?: boolean }) => {
       const initiativeId = await resolveInitiativeId(initiative);
-      if (!initiativeId) throw new Error(`initiative not found: ${initiative}`);
+      if (!initiativeId) throw new NotFoundError(`initiative not found: ${initiative}`);
       const updates = await listInitiativeUpdates(initiativeId);
       if (opts.json) {
         process.stdout.write(
           `${JSON.stringify(
-            { schema_version: 1, initiative_id: initiativeId, count: updates.length, updates },
+            envelope({ initiative_id: initiativeId, count: updates.length, updates }),
             null,
             2,
           )}\n`,

@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { parse as parseYaml } from "yaml";
 import { loadAuth } from "./auth.ts";
+import { ConfigError } from "./errors.ts";
 import { CONFIG_FILE } from "./paths.ts";
 import type { RepoConfig, UserConfig } from "./types.ts";
 
@@ -24,7 +25,10 @@ export async function loadUserConfig(): Promise<UserConfig> {
   const parsed = parseYaml(text) as unknown;
   if (parsed === null || parsed === undefined) return {};
   if (typeof parsed !== "object") {
-    throw new Error(`${CONFIG_FILE}: expected a YAML object at top level`);
+    throw new ConfigError(
+      `${CONFIG_FILE}: expected a YAML object at top level`,
+      "the config file must start with `key: value` pairs, not a bare scalar or list",
+    );
   }
   return parsed as UserConfig;
 }
@@ -86,10 +90,16 @@ export async function resolveConfig(options?: {
     workspaceTeam ??
     userConfig.default_team;
   if (!team) {
-    throw new Error(
-      "no Linear team resolved. pass --team KEY, set `default_team` (single-workspace) " +
-        "or `workspace_team_defaults: { <slug>: <KEY> }` (multi-workspace) in ~/.lebop/config.yaml, " +
-        "or set a per-repo `team`.",
+    // Round-6 / A17: error text + hint are surface-neutral. Both the CLI
+    // (`--team`) and MCP (`team` arg) call paths funnel into this; using
+    // CLI-flavored prose like "pass --team KEY" leaks into MCP responses
+    // (where there's no `--team` flag, only a `team` arg).
+    throw new ConfigError(
+      "no Linear team resolved. Configure one of: " +
+        "`default_team` (single-workspace) or `workspace_team_defaults: { <slug>: <KEY> }` " +
+        "(multi-workspace) in ~/.lebop/config.yaml, a per-repo `team`, the `LEBOP_TEAM` env, " +
+        "or pass the team explicitly.",
+      "pass `team` (MCP arg) / `--team KEY` (CLI flag), or configure a default in ~/.lebop/config.yaml",
     );
   }
 

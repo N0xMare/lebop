@@ -1,9 +1,11 @@
 import chalk from "chalk";
 import type { Command } from "commander";
 import { buildComments, buildIssueMetadata } from "../lib/build.ts";
-import { rewriteNotFound } from "../lib/errors.ts";
+import { envelope } from "../lib/envelope.ts";
+import { NotFoundError, rewriteNotFound } from "../lib/errors.ts";
 import { buildPullIssuesQuery, type FetchedIssue } from "../lib/pullQuery.ts";
 import { withClient } from "../lib/sdk.ts";
+import { isUuid } from "../lib/uuid.ts";
 
 export function registerShow(program: Command): void {
   program
@@ -15,7 +17,11 @@ export function registerShow(program: Command): void {
     .option("--json", "emit structured JSON instead of formatted output")
     .action(async (id: string, opts: { comments?: boolean; json?: boolean }) => {
       const withComments = opts.comments !== false;
-      const upperId = id.toUpperCase();
+      // Round-6 / CLI 17: accept UUIDs (lowercase hex) without mangling
+      // them via toUpperCase. TEAM-NN identifiers continue to upper-case
+      // so `lebop show ue-359` keeps working.
+      const idLooksUuid = isUuid(id);
+      const upperId = idLooksUuid ? id : id.toUpperCase();
       const query = buildPullIssuesQuery([upperId], withComments, true);
       let response: { data: Record<string, FetchedIssue | null> };
       try {
@@ -27,7 +33,7 @@ export function registerShow(program: Command): void {
       }
       const node = response.data.a0;
       if (!node) {
-        throw new Error(`not found: ${upperId}`);
+        throw new NotFoundError(`not found: ${upperId}`);
       }
 
       if (opts.json) {
@@ -36,13 +42,12 @@ export function registerShow(program: Command): void {
         const relations = buildRelationSummary(node);
         process.stdout.write(
           `${JSON.stringify(
-            {
-              schema_version: 1,
+            envelope({
               metadata,
               description,
               comments: commentList,
               relations,
-            },
+            }),
             null,
             2,
           )}\n`,

@@ -14,7 +14,7 @@ import {
   type ProjectUpdateInput,
 } from "./pushMutations.ts";
 import type { LintContext } from "./quirks.ts";
-import { createLink } from "./relations.ts";
+import { createLink, listRelations } from "./relations.ts";
 import { resolveAssigneeId, resolveLabelIds, resolvePriority, resolveStateId } from "./resolve.ts";
 import { linear, withClient } from "./sdk.ts";
 
@@ -33,7 +33,7 @@ export interface ApplyRelationResult {
   fromIdentifier: string;
   toIdentifier: string;
   kind: LinkKey;
-  status: "created" | "error" | "dry-run";
+  status: "created" | "unchanged" | "error" | "dry-run";
   error?: string;
 }
 
@@ -446,6 +446,48 @@ async function rewriteLinkSlugs(plan: ParsedPlan): Promise<void> {
 
 // ---------- relation application ----------
 
+/**
+ * Map a plan-side `LinkKey` to the side/type pair we look up in a
+ * `listRelations` response. `createLink` is server-side idempotent at the
+ * `(issueId, relatedIssueId, type)` tuple — re-running with the same args
+ * returns the existing relation rather than creating a duplicate. To report
+ * `unchanged` (vs claiming `created`) on re-apply, we precompute the source
+ * issue's existing edge-set and check membership before calling the mutation.
+ *
+ * Direction handling mirrors `LINK_KIND_TO_API` in `relations.ts`:
+ *   - forward kinds (`blocks`, `duplicates`)        → outbound on source
+ *   - inverse kinds (`blocked_by`, `duplicated_by`) → inbound  on source
+ *   - `related` is symmetric → either side counts
+ */
+type ListRelationsResult = Awaited<ReturnType<typeof listRelations>>;
+type RelationNode = ListRelationsResult["outbound"][number];
+
+function relationExists(
+  remote: ListRelationsResult,
+  key: LinkKey,
+  targetIdentifier: string,
+): boolean {
+  const match = (r: RelationNode, type: RelationNode["type"]): boolean =>
+    r.type === type && r.otherIdentifier === targetIdentifier;
+  switch (key) {
+    case "blocks":
+      return remote.outbound.some((r) => match(r, "blocks"));
+    case "blocked_by":
+      return remote.inbound.some((r) => match(r, "blocks"));
+    case "duplicates":
+      return remote.outbound.some((r) => match(r, "duplicate"));
+    case "duplicated_by":
+      return remote.inbound.some((r) => match(r, "duplicate"));
+    case "related":
+      // Symmetric — `issueRelationCreate` stores it on one side, Linear
+      // surfaces it on both. Check both buckets.
+      return (
+        remote.outbound.some((r) => match(r, "related")) ||
+        remote.inbound.some((r) => match(r, "related"))
+      );
+  }
+}
+
 async function applyRelations(plan: ParsedPlan, opts: ApplyOpts): Promise<ApplyRelationResult[]> {
   const results: ApplyRelationResult[] = [];
   const slugToId = new Map<string, string>();
@@ -499,11 +541,38 @@ async function applyRelations(plan: ParsedPlan, opts: ApplyOpts): Promise<ApplyR
     }),
   );
 
+  // Pre-fetch existing relations per source issue that has any declared link.
+  // This lets us distinguish a real `created` from a server-deduped no-op so
+  // re-apply reports `unchanged` (mirroring how `upsertIssue` reads remote
+  // state before deciding update/unchanged). One `listRelations` call per
+  // source issue — same shape as the per-issue read in `upsertIssue`.
+  const remoteEdgesByFromId = new Map<string, ListRelationsResult>();
+  const sourcesWithLinks = plan.issues.filter((i) => {
+    if (!i.frontmatter.linear_id) return false;
+    return LINK_KEYS.some((k) => {
+      const v = i.frontmatter[k] as string[] | undefined;
+      return Array.isArray(v) && v.length > 0;
+    });
+  });
+  await Promise.all(
+    sourcesWithLinks.map(async (issue) => {
+      const fromId = issue.frontmatter.linear_id;
+      if (!fromId) return;
+      try {
+        remoteEdgesByFromId.set(fromId, await listRelations(fromId));
+      } catch {
+        /* fall through — uncached source treated as "no known edges" so we
+           preserve prior behaviour (report `created`) rather than mask errors */
+      }
+    }),
+  );
+
   for (const issue of plan.issues) {
     const fromId = issue.frontmatter.linear_id;
     if (!fromId) continue;
     const fromUuid = uuidByIdentifier.get(fromId);
     if (!fromUuid) continue;
+    const remoteEdges = remoteEdgesByFromId.get(fromId);
     for (const key of LINK_KEYS) {
       const targets = issue.frontmatter[key] as string[] | undefined;
       if (!targets) continue;
@@ -527,6 +596,17 @@ async function applyRelations(plan: ParsedPlan, opts: ApplyOpts): Promise<ApplyR
             toIdentifier: resolvedTarget,
             kind: key,
             status: "dry-run",
+          });
+          continue;
+        }
+        if (remoteEdges && relationExists(remoteEdges, key, resolvedTarget)) {
+          // Server-side idempotent: a second `createLink` call would return
+          // the same UUID without creating anything. Report the no-op.
+          results.push({
+            fromIdentifier: fromId,
+            toIdentifier: resolvedTarget,
+            kind: key,
+            status: "unchanged",
           });
           continue;
         }

@@ -4,6 +4,8 @@ import { buildIssueMetadata } from "../lib/build.ts";
 import type { TeamMetadata } from "../lib/cache.ts";
 import { readIssue, writeIssue } from "../lib/cache.ts";
 import { resolveConfig } from "../lib/config.ts";
+import { envelope } from "../lib/envelope.ts";
+import { ConfigError, NotFoundError, ValidationError } from "../lib/errors.ts";
 import { buildPullIssuesQuery, type FetchedIssue } from "../lib/pullQuery.ts";
 import { ISSUE_UPDATE_MUTATION, type IssueUpdateInput } from "../lib/pushMutations.ts";
 import {
@@ -14,6 +16,7 @@ import {
   parseLinkToken,
 } from "../lib/relations.ts";
 import {
+  deriveTeamFromIdentifiers,
   getTeamMetadata,
   resolveAssigneeId,
   resolveLabelId,
@@ -64,13 +67,20 @@ Examples:
 `,
     )
     .action(async (field: string, id: string, valueArgs: string[], opts: SetOpts) => {
+      // Round-9 / L-9: bad-field invocations are user-input rejections at the
+      // CLI boundary — they belong under `code:"validation_error"` in the
+      // `--json` envelope, not the unclassified `code:"unknown"` fallback.
       if (UNSUPPORTED_FIELDS.has(field)) {
-        throw new Error(
-          `\`set ${field}\` is deliberately unsupported (${field} is a large multi-line field). use \`lebop pull ${id}\` → edit → \`lebop push\` instead.`,
+        throw new ValidationError(
+          `\`set ${field}\` is deliberately unsupported (${field} is a large multi-line field)`,
+          `use \`lebop pull ${id}\` → edit → \`lebop push\` instead`,
         );
       }
       if (!SUPPORTED_FIELDS.includes(field as SupportedField)) {
-        throw new Error(`unknown field "${field}". supported: ${SUPPORTED_FIELDS.join(", ")}`);
+        throw new ValidationError(
+          `unknown field "${field}"`,
+          `supported fields: ${SUPPORTED_FIELDS.join(", ")}`,
+        );
       }
 
       if (field === "links") {
@@ -79,13 +89,37 @@ Examples:
       }
 
       const value = valueArgs.join(" ");
+      // Round-10 / L5 deferred: same class as the M8 site in initiative.ts —
+      // surfaces as `code: "unknown"` in `--json` envelopes. Broader CLI
+      // ValidationError sweep is a v1.0 polish item.
       if (!value) throw new Error(`missing value for \`set ${field} ${id}\``);
 
-      const config = await resolveConfig({ teamOverride: opts.team });
+      // Round-6 / H6: if no `--team` override and config has no default,
+      // derive team from the issue identifier (e.g. "NOX-101" → "NOX"). The
+      // MCP `update_issue` tool already does this (round-6 / C3); CLI parity
+      // is the UX win — pre-fix, every `lebop set` call required explicit
+      // `--team`, even though every other CLI verb (`show`, `comment`,
+      // `relation`) auto-resolves from the identifier prefix.
+      let config: Awaited<ReturnType<typeof resolveConfig>>;
+      try {
+        config = await resolveConfig({ teamOverride: opts.team });
+      } catch (err) {
+        if (!(err instanceof ConfigError)) throw err;
+        let derived: string | null = null;
+        try {
+          derived = deriveTeamFromIdentifiers([id]);
+        } catch {
+          // identifier wasn't TEAM-NN shape — re-throw the original
+          // ConfigError so the user sees the canonical "no team resolved"
+          // message instead of a confusing identifier-format error.
+        }
+        if (!derived) throw err;
+        config = await resolveConfig({ teamOverride: derived });
+      }
 
       // Fetch full issue first so we have current state (needed for labels delta).
       const issueSummary = await withClient((c) => c.issue(id));
-      if (!issueSummary) throw new Error(`issue not found: ${id}`);
+      if (!issueSummary) throw new NotFoundError(`issue not found: ${id}`);
 
       const input = await withFreshMetadataOnMiss(
         (o) => getTeamMetadata(config.repoHash, config.team, o),
@@ -112,13 +146,12 @@ Examples:
       if (opts.json) {
         process.stdout.write(
           `${JSON.stringify(
-            {
-              schema_version: 1,
+            envelope({
               identifier: id,
               field,
               input,
               updated_at: updated.updatedAt,
-            },
+            }),
             null,
             2,
           )}\n`,
@@ -181,7 +214,7 @@ async function resolveParentId(value: string): Promise<string | null> {
   // Linear's parentId wants a UUID, not the identifier.
   const parent = await withClient((c) => c.issue(value));
   if (!parent) {
-    throw new Error(`parent issue not found: ${value}`);
+    throw new NotFoundError(`parent issue not found: ${value}`);
   }
   return parent.id;
 }
@@ -204,6 +237,18 @@ async function resolveLabelsInput(
   const currentIds = new Set(current.nodes.map((l) => l.id));
 
   for (const token of tokens) {
+    // Round-8 / M2: detect commander flag-shaped tokens (`--team`, `--json`)
+    // that leaked into the positional list due to commander's
+    // positional-vs-option parsing. Parity with `parseLinkToken`'s round-6
+    // / H7 + round-7 / HIGH-4 flag-shape hint. Without this, the bare `-`
+    // branch below treated `--json` as the label name `-json` (after the
+    // single-char slice) and threw a confusing "unknown label -json".
+    if (token.startsWith("--")) {
+      throw new ValidationError(
+        `label token "${token}" looks like a CLI flag, not a label delta`,
+        "place flags (--team, --json, ...) BEFORE positional label tokens, or use `--` to split: `lebop set labels --json ID +urgent` or `lebop set labels ID -- -urgent`",
+      );
+    }
     if (token.startsWith("+")) {
       currentIds.add(resolveLabelId(teamMetadata, token.slice(1)));
     } else if (token.startsWith("-")) {
@@ -234,10 +279,27 @@ async function handleLinks(id: string, valueArgs: string[], opts: SetOpts): Prom
   }
 
   const deltas: LinkDelta[] = valueArgs.map(parseLinkToken);
-  const config = await resolveConfig({ teamOverride: opts.team });
+  // Round-6 / H6: same auto-derive fallback as the main set path — link
+  // mutations are workspace-scoped (no team metadata needed); we only
+  // touch config for repoHash on the cache-refresh side. Derive team from
+  // the source identifier to avoid the `--team` requirement.
+  let config: Awaited<ReturnType<typeof resolveConfig>>;
+  try {
+    config = await resolveConfig({ teamOverride: opts.team });
+  } catch (err) {
+    if (!(err instanceof ConfigError)) throw err;
+    let derived: string | null = null;
+    try {
+      derived = deriveTeamFromIdentifiers([id]);
+    } catch {
+      // identifier wasn't TEAM-NN shape — fall through.
+    }
+    if (!derived) throw err;
+    config = await resolveConfig({ teamOverride: derived });
+  }
 
   const selfIssue = await withClient((c) => c.issue(id));
-  if (!selfIssue) throw new Error(`issue not found: ${id}`);
+  if (!selfIssue) throw new NotFoundError(`issue not found: ${id}`);
   const selfUuid = selfIssue.id;
   const selfIdentifier = selfIssue.identifier;
 
@@ -247,7 +309,7 @@ async function handleLinks(id: string, valueArgs: string[], opts: SetOpts): Prom
   await Promise.all(
     uniqueTargets.map(async (ident) => {
       const issue = await withClient((c) => c.issue(ident));
-      if (!issue) throw new Error(`link target not found: ${ident}`);
+      if (!issue) throw new NotFoundError(`link target not found: ${ident}`);
       targetMap.set(ident, issue.id);
     }),
   );
@@ -293,7 +355,7 @@ async function handleLinks(id: string, valueArgs: string[], opts: SetOpts): Prom
 
   if (opts.json) {
     process.stdout.write(
-      `${JSON.stringify({ schema_version: 1, identifier: selfIdentifier, results }, null, 2)}\n`,
+      `${JSON.stringify(envelope({ identifier: selfIdentifier, results }), null, 2)}\n`,
     );
   } else {
     for (const r of results) {

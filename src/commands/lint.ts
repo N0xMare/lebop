@@ -5,6 +5,8 @@ import chalk from "chalk";
 import type { Command } from "commander";
 import { repoCacheDir, writeAtomic } from "../lib/cache.ts";
 import { resolveConfig } from "../lib/config.ts";
+import { envelope } from "../lib/envelope.ts";
+import { ConfigError } from "../lib/errors.ts";
 import { applyFixesFixpoint, lintContent } from "../lib/lint.ts";
 import type { LintContext, Warning } from "../lib/quirks.ts";
 
@@ -30,14 +32,39 @@ export function registerLint(program: Command): void {
     .option("--strict", "exit non-zero on any warning")
     .option("--json", "emit structured JSON output")
     .action(async (paths: string[], opts: LintOpts) => {
-      const config = await resolveConfig({ teamOverride: opts.team });
-      const ctx: LintContext = {
-        repoConfig: config.repoConfig,
-        workspaceUrlPrefix: config.workspaceUrlPrefix,
-      };
+      // Lint is structurally team-independent for the universal rules
+      // (L001-L006). Team-scoped rules (R001-R002 repo-scoped, L004
+      // bracket-issue-refs) degrade gracefully with an empty repoConfig +
+      // no workspaceUrlPrefix. So when explicit paths are passed AND no
+      // team can be resolved, fall back to a minimal context rather than
+      // failing the whole invocation. Cache-mode (no paths) still
+      // requires a resolved team since `collectCacheMarkdown` needs the
+      // repoHash from config.
+      let ctx: LintContext;
+      let cacheConfig: Awaited<ReturnType<typeof resolveConfig>> | null = null;
+      try {
+        const config = await resolveConfig({ teamOverride: opts.team });
+        ctx = {
+          repoConfig: config.repoConfig,
+          workspaceUrlPrefix: config.workspaceUrlPrefix,
+        };
+        cacheConfig = config;
+      } catch (err) {
+        if (err instanceof ConfigError && paths.length > 0) {
+          ctx = { repoConfig: {}, workspaceUrlPrefix: undefined };
+        } else {
+          // Either a non-ConfigError, or cache-mode (no paths) which
+          // genuinely needs a configured team for repoHash resolution.
+          throw err;
+        }
+      }
 
       const targetFiles =
-        paths.length > 0 ? paths.map((p) => resolvePath(p)) : await collectCacheMarkdown(config);
+        paths.length > 0
+          ? paths.map((p) => resolvePath(p))
+          : cacheConfig
+            ? await collectCacheMarkdown(cacheConfig)
+            : [];
 
       if (targetFiles.length === 0) {
         process.stderr.write(`${chalk.yellow("no markdown files found to lint.")}\n`);
@@ -45,9 +72,11 @@ export function registerLint(program: Command): void {
       }
 
       const fileResults: FileResult[] = [];
+      let missingCount = 0;
       for (const file of targetFiles) {
         if (!existsSync(file)) {
           process.stderr.write(`${chalk.red("missing:")} ${file}\n`);
+          missingCount += 1;
           continue;
         }
         const content = await Bun.file(file).text();
@@ -62,17 +91,30 @@ export function registerLint(program: Command): void {
         fileResults.push({ path: file, warnings: initial.warnings, fixedCount });
       }
 
+      // UX papercut guard (round-5 fix): if EVERY explicit path failed the
+      // existence check, the human-mode output would silently say
+      // "0 file(s) checked · 0 warning(s)" — confusing given the per-file
+      // "missing:" stderr lines above. Emit a clear summary + exit 1 so
+      // CI gates catch this as a failure, not a clean pass.
+      if (paths.length > 0 && missingCount === paths.length && fileResults.length === 0) {
+        process.stderr.write(
+          `${chalk.red("error:")} no files linted — all ${missingCount} explicit path(s) were missing.\n` +
+            `  ${chalk.cyan("hint:")} verify the path(s); lint exits 1 when no input files were readable.\n`,
+        );
+        process.exitCode = 1;
+        return;
+      }
+
       if (opts.json) {
         process.stdout.write(
           `${JSON.stringify(
-            {
-              schema_version: 1,
+            envelope({
               files: fileResults.map((f) => ({
                 path: f.path,
                 warnings: f.warnings,
                 fixed: f.fixedCount,
               })),
-            },
+            }),
             null,
             2,
           )}\n`,

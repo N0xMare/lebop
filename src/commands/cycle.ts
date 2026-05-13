@@ -2,6 +2,8 @@ import chalk from "chalk";
 import type { Command } from "commander";
 import { resolveConfig } from "../lib/config.ts";
 import { getCycle, listCycles } from "../lib/cycles.ts";
+import { envelope } from "../lib/envelope.ts";
+import { NotFoundError } from "../lib/errors.ts";
 
 export function registerCycle(program: Command): void {
   const cmd = program.command("cycle").description("Linear cycles (iterations)");
@@ -25,12 +27,11 @@ export function registerCycle(program: Command): void {
       if (opts.json) {
         process.stdout.write(
           `${JSON.stringify(
-            {
-              schema_version: 1,
+            envelope({
               team: opts.allTeams ? "*" : config.team,
               count: cycles.length,
               cycles,
-            },
+            }),
             null,
             2,
           )}\n`,
@@ -59,10 +60,10 @@ export function registerCycle(program: Command): void {
     .option("--json", "emit structured result")
     .action(async (id: string, opts: { json?: boolean }) => {
       const cycle = await getCycle(id);
-      if (!cycle) throw new Error(`cycle not found: ${id}`);
+      if (!cycle) throw new NotFoundError(`cycle not found: ${id}`);
 
       if (opts.json) {
-        process.stdout.write(`${JSON.stringify({ schema_version: 1, cycle }, null, 2)}\n`);
+        process.stdout.write(`${JSON.stringify(envelope({ cycle }), null, 2)}\n`);
         return;
       }
       const name = cycle.name ?? `Cycle ${cycle.number}`;

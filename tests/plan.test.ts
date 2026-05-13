@@ -2,6 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { NotFoundError, ValidationError } from "../src/lib/errors.ts";
 import { parsePlan, slugFromPath, splitFrontmatter } from "../src/lib/planParse.ts";
 import { validatePlan } from "../src/lib/planValidate.ts";
 
@@ -28,6 +29,35 @@ describe("splitFrontmatter", () => {
   it("rejects scalar frontmatter", () => {
     const raw = ["---", "just a string", "---", "body"].join("\n");
     expect(() => splitFrontmatter(raw)).toThrow(/must be an object/);
+  });
+
+  // Wave 3 / structured-error taxonomy: parse failures must surface as
+  // ValidationError with code + hint.
+  it("missing-frontmatter error is a ValidationError with code + hint", () => {
+    const err = (() => {
+      try {
+        splitFrontmatter("plain body only");
+        return null;
+      } catch (e) {
+        return e;
+      }
+    })();
+    expect(err).toBeInstanceOf(ValidationError);
+    expect(err).toMatchObject({ code: "validation_error", hint: expect.any(String) });
+  });
+
+  it("scalar-frontmatter error is a ValidationError with code + hint", () => {
+    const raw = ["---", "just a string", "---", "body"].join("\n");
+    const err = (() => {
+      try {
+        splitFrontmatter(raw);
+        return null;
+      } catch (e) {
+        return e;
+      }
+    })();
+    expect(err).toBeInstanceOf(ValidationError);
+    expect(err).toMatchObject({ code: "validation_error", hint: expect.any(String) });
   });
 });
 
@@ -79,6 +109,40 @@ describe("parsePlan", () => {
   it("throws when _project.md is missing", async () => {
     dir = writePlanDir({ "01-first.md": "---\ntitle: First\n---\n\nbody" });
     await expect(parsePlan(dir)).rejects.toThrow(/missing required `_project.md`/);
+  });
+
+  // Wave 3 / structured-error taxonomy: parsePlan throws must be typed.
+  it("missing _project.md surfaces as ValidationError with code + hint", async () => {
+    dir = writePlanDir({ "01-first.md": "---\ntitle: First\n---\n\nbody" });
+    const err = await parsePlan(dir).catch((e) => e);
+    expect(err).toBeInstanceOf(ValidationError);
+    expect(err).toMatchObject({ code: "validation_error", hint: expect.any(String) });
+  });
+
+  it("non-existent plan directory surfaces as NotFoundError with code + hint", async () => {
+    const err = await parsePlan("/__lebop_does_not_exist__/nope").catch((e) => e);
+    expect(err).toBeInstanceOf(NotFoundError);
+    expect(err).toMatchObject({ code: "not_found", hint: expect.any(String) });
+  });
+
+  it("missing project.name surfaces as ValidationError with code + hint", async () => {
+    dir = writePlanDir({
+      "_project.md": "---\nteam: UE\n---\n\n",
+      "01.md": "---\ntitle: x\n---\n\n",
+    });
+    const err = await parsePlan(dir).catch((e) => e);
+    expect(err).toBeInstanceOf(ValidationError);
+    expect(err).toMatchObject({ code: "validation_error", hint: expect.any(String) });
+  });
+
+  it("missing issue.title surfaces as ValidationError with code + hint", async () => {
+    dir = writePlanDir({
+      "_project.md": "---\nname: T\nteam: UE\n---\n\n",
+      "01.md": "---\nstate: Backlog\n---\n\n",
+    });
+    const err = await parsePlan(dir).catch((e) => e);
+    expect(err).toBeInstanceOf(ValidationError);
+    expect(err).toMatchObject({ code: "validation_error", hint: expect.any(String) });
   });
 
   it("throws when project.name is missing", async () => {

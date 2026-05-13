@@ -28,7 +28,7 @@ lebop teams
 lebop list --assignee me --state-type started --limit 10
 ```
 
-The installer drops a single self-contained binary (no Bun runtime needed) at `~/.local/bin/lebop` if writable, otherwise `/usr/local/bin/lebop` (sudo). Override with `LEBOP_INSTALL_DIR=…`. Pin a specific version with `LEBOP_VERSION=v1.0.0`.
+The installer drops a single self-contained binary (no Bun runtime needed) at `~/.local/bin/lebop` if writable, otherwise `/usr/local/bin/lebop` (sudo). Override with `LEBOP_INSTALL_DIR=…`. Pin a specific version with `LEBOP_VERSION=v0.0.2`.
 
 **From source** (Bun required):
 
@@ -269,7 +269,7 @@ Option A is required if you want agents started BEFORE you edited your shell con
 | Round-trip | Per-command | Per-tool-call | Pull-edit-push, plan-diff-pull |
 | Mutation batching | Sequential | Sequential | One call per plan or one multi-alias push |
 | CAS / staleness | None | None | `updatedAt` check; `--force` to bypass |
-| Markdown lint | None | None | 8 rules + repo-scoped config |
+| Markdown lint | None | None | 8 rules (L001-L006 universal + R001-R002 repo-scoped) |
 | Declarative planning | Not a goal | Not exposed | Hero feature |
 | GraphQL escape hatch | Yes | No | Yes (`raw`) |
 | Local cache | No | No | Yes (`~/.lebop/cache/`) |

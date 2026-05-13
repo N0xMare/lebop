@@ -6,6 +6,7 @@
  * `Team.memberships(first, after)`.
  */
 
+import { NotFoundError } from "./errors.ts";
 import { paginateRaw } from "./paginate.ts";
 import { linear, withClient } from "./sdk.ts";
 
@@ -76,9 +77,20 @@ export async function listTeamMembers(opts: {
 }): Promise<ListedTeamMember[]> {
   const client = await linear();
   // Step 1: resolve key → UUID. teams(filter: {key}) still works.
-  const teams = await withClient((c) => c.teams({ filter: { key: { eq: opts.teamKey } } }));
+  // Round-6 / M2: Linear's `team.key.eq` filter is case-sensitive. Match
+  // the case-folding pattern used in `lookups.ts:lookupStateByName` so
+  // `--team nox` works the same as `--team NOX` — every team key in the
+  // canary workspace is all-caps by convention, but mixed-case keys exist
+  // in the wild and bare lowercase user input shouldn't silently miss.
+  const upperTeam = opts.teamKey.toUpperCase();
+  const teams = await withClient((c) => c.teams({ filter: { key: { eq: upperTeam } } }));
   const team = teams.nodes[0];
-  if (!team) throw new Error(`team not found: ${opts.teamKey}`);
+  if (!team) {
+    throw new NotFoundError(
+      `team not found: ${opts.teamKey}`,
+      "verify the team key (e.g. `UE`) and that your token has access to it",
+    );
+  }
   const teamRecord = { id: team.id, key: team.key, name: team.name };
 
   // Step 2: walk memberships through the team node.

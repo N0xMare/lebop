@@ -1,5 +1,7 @@
 import type { Command } from "commander";
 import { resolveConfig } from "../lib/config.ts";
+import { envelope } from "../lib/envelope.ts";
+import { ValidationError } from "../lib/errors.ts";
 import { listIssues } from "../lib/listIssues.ts";
 import { printHuman } from "./list.ts";
 
@@ -40,6 +42,22 @@ export function registerMine(program: Command): void {
           ? undefined
           : ["triage", "backlog", "unstarted", "started"];
 
+      // Round-9 / M-5: validate `--priority` at the boundary, parity with
+      // `lebop list` (round-6 / H9, round-8 / R6-LOW-2). Pre-fix `mine
+      // --priority 99` silently returned an empty result; now it fails
+      // loud with `code:"validation_error"` like the sibling command.
+      let priority: number | undefined;
+      if (opts.priority !== undefined) {
+        const n = Number(opts.priority);
+        if (!Number.isInteger(n) || n < 0 || n > 4) {
+          throw new ValidationError(
+            `invalid --priority value "${opts.priority}"`,
+            "priority must be an integer 0..4 (none|urgent|high|normal|low)",
+          );
+        }
+        priority = n;
+      }
+
       const records = await listIssues({
         resolvedTeam: opts.allTeams ? undefined : config.team,
         team: opts.team,
@@ -48,7 +66,7 @@ export function registerMine(program: Command): void {
         stateType: opts.stateType,
         stateTypeIn,
         label: opts.label,
-        priority: opts.priority !== undefined ? Number.parseInt(opts.priority, 10) : undefined,
+        priority,
         cycle: opts.cycle,
         milestone: opts.milestone,
         includeArchived: opts.includeArchived,
@@ -58,12 +76,11 @@ export function registerMine(program: Command): void {
       if (opts.json) {
         process.stdout.write(
           `${JSON.stringify(
-            {
-              schema_version: 1,
+            envelope({
               team: opts.allTeams ? "*" : config.team,
               count: records.length,
               issues: records,
-            },
+            }),
             null,
             2,
           )}\n`,

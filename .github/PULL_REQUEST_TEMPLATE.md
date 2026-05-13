@@ -16,7 +16,7 @@ section if this touches scope. -->
 - [ ] `bun run check` (biome)
 - [ ] `bun run typecheck` (tsc --noEmit)
 - [ ] `bun run test` (vitest)
-- [ ] Manual sandbox run if mutation paths changed (`UE-359` / `UE-360` only)
+- [ ] Manual sandbox run if mutation paths changed (`ENG-359` / `ENG-360` only — these were renamed from `UE-359` / `UE-360` when the workspace team was rekeyed `UE → ENG`; Linear's identifier-redirect still resolves either form)
 
 ## Notes for reviewers
 

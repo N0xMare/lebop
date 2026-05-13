@@ -8,8 +8,10 @@
  */
 
 import type { LinearClient } from "@linear/sdk";
+import { ValidationError } from "./errors.ts";
 import { paginateConnection } from "./paginate.ts";
 import { linear, withClient } from "./sdk.ts";
+import { isUuid } from "./uuid.ts";
 
 type IssueFilter = NonNullable<Parameters<LinearClient["issues"]>[0]>["filter"];
 
@@ -97,19 +99,20 @@ export async function buildIssueFilter(
     filter.labels = { some: { name: { in: opts.label } } };
   }
   if (opts.cycle) {
-    filter.cycle = /^[0-9a-f-]{36}$/i.test(opts.cycle)
-      ? { id: { eq: opts.cycle } }
-      : { name: { eq: opts.cycle } };
+    filter.cycle = isUuid(opts.cycle) ? { id: { eq: opts.cycle } } : { name: { eq: opts.cycle } };
   }
   if (opts.milestone) {
-    filter.projectMilestone = /^[0-9a-f-]{36}$/i.test(opts.milestone)
+    filter.projectMilestone = isUuid(opts.milestone)
       ? { id: { eq: opts.milestone } }
       : { name: { eq: opts.milestone } };
   }
 
   if (opts.unassigned) {
     if (opts.assignee) {
-      throw new Error("`unassigned` and `assignee` are mutually exclusive");
+      throw new ValidationError(
+        "`unassigned` and `assignee` are mutually exclusive",
+        "drop one of the two filters — use `--unassigned` OR `--assignee <who>`",
+      );
     }
     filter.assignee = { null: true };
   } else if (opts.assignee && opts.assignee !== "*") {
@@ -190,7 +193,10 @@ function parseRelative(input: string): Date {
   }
   const d = new Date(input);
   if (Number.isNaN(d.getTime())) {
-    throw new Error(`unrecognised time format: ${input} (use Nd|Nh|Nm or ISO 8601)`);
+    throw new ValidationError(
+      `unrecognised time format: ${input} (use Nd|Nh|Nm or ISO 8601)`,
+      "use a relative form like `7d`, `24h`, `15m`, or an ISO 8601 timestamp",
+    );
   }
   return d;
 }

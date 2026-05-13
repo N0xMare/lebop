@@ -6,8 +6,28 @@
  * surface it as `slug_id` on the shaped record.
  */
 
+import { NotFoundError, tryMapToNull, ValidationError } from "./errors.ts";
 import { paginateRaw } from "./paginate.ts";
 import { linear, withClient } from "./sdk.ts";
+
+/**
+ * Linear's `icon` field is an internal name (PascalCase, e.g. "BarChart" or
+ * "Rocket"). Passing a Unicode emoji silently round-trips as a non-functional
+ * string; reject those up-front with a structured ValidationError so callers
+ * get an actionable message instead of an opaque server-side rejection.
+ *
+ * Uses `\p{Extended_Pictographic}` (Unicode 9+) which covers emoji, dingbats,
+ * symbols, and the bulk of icon-shaped pictographic codepoints.
+ */
+function assertIconNotEmoji(icon: string | undefined, field = "icon"): void {
+  if (icon === undefined) return;
+  if (/^\p{Extended_Pictographic}/u.test(icon)) {
+    throw new ValidationError(
+      `${field} "${icon}" looks like an emoji — Linear expects an internal icon name (PascalCase)`,
+      "use a name like 'BarChart', 'Rocket', 'Target'. Omit if unsure.",
+    );
+  }
+}
 
 export interface ListedDocument {
   id: string;
@@ -113,9 +133,14 @@ const GET_DOCUMENT_QUERY = /* GraphQL */ `
 `;
 
 export async function getDocument(id: string): Promise<FullDocument | null> {
-  const response = (await withClient((c) => c.client.rawRequest(GET_DOCUMENT_QUERY, { id }))) as {
-    data: { document: (DocNode & { content: string | null }) | null };
-  };
+  // `tryMapToNull` turns SDK-boundary `NotFoundError` into a `null` return,
+  // preserving the documented "missing → null" contract while propagating
+  // other LebopError subtypes unchanged.
+  type Resp = { data: { document: (DocNode & { content: string | null }) | null } };
+  const response = await tryMapToNull<Resp>(
+    () => withClient((c) => c.client.rawRequest(GET_DOCUMENT_QUERY, { id })) as Promise<Resp>,
+  );
+  if (!response) return null;
   const d = response.data.document;
   return d ? { ...shape(d), content: d.content } : null;
 }
@@ -142,6 +167,7 @@ const CREATE_DOCUMENT_MUTATION = /* GraphQL */ `
 `;
 
 export async function createDocument(input: CreateDocumentInput): Promise<FullDocument> {
+  assertIconNotEmoji(input.icon);
   // NOT retry-wrapped — non-idempotent.
   const client = await linear();
   const response = (await client.client.rawRequest(CREATE_DOCUMENT_MUTATION, { input })) as {
@@ -179,6 +205,7 @@ export async function updateDocument(
   id: string,
   input: UpdateDocumentInput,
 ): Promise<FullDocument> {
+  assertIconNotEmoji(input.icon);
   // Idempotent at the value level — retry-wrapped.
   const response = (await withClient((c) =>
     c.client.rawRequest(UPDATE_DOCUMENT_MUTATION, { id, input }),
@@ -201,7 +228,31 @@ const DELETE_DOCUMENT_MUTATION = /* GraphQL */ `
 `;
 
 export async function deleteDocument(id: string): Promise<boolean> {
-  // NOT wrapped — not-found after first success.
+  // Round-7 / Q2 (refined): Linear's `documentDelete` is a SOFT delete —
+  // sets `archivedAt` on the document and `documentDelete` itself returns
+  // `success: true` on any id, including already-archived ones. To make
+  // the `tryIdempotentDelete` contract uniform across all six delete
+  // surfaces, pre-flight via `getDocument` AND check `archived_at`. If the
+  // doc is absent OR already archived (= already-deleted), throw
+  // `NotFoundError` so the helper emits `{status: "already-absent"}`.
+  // Without this, re-deleting an already-deleted document returned
+  // `{status: "deleted"}` and lied to callers.
+  //
+  // Round-8 / M5 note: this conflates "user explicitly archived" with
+  // "user already deleted" — both surface as `archived_at !== null`. A
+  // caller who archived then deletes gets `already-absent`, which is
+  // technically a no-op on the second call. Defensible: Linear's
+  // `documentDelete` and `documentArchive` produce the same on-disk
+  // shape, so distinguishing post-hoc would require a separate signal
+  // Linear doesn't expose. Document via the tool description.
+  const existing = await getDocument(id);
+  if (!existing || existing.archived_at !== null) {
+    throw new NotFoundError(
+      `document not found: ${id}`,
+      "the document may have already been deleted",
+    );
+  }
+  // NOT retry-wrapped — second call would error after the first success.
   const client = await linear();
   const response = (await client.client.rawRequest(DELETE_DOCUMENT_MUTATION, { id })) as {
     data: { documentDelete: { success: boolean } };

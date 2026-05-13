@@ -74,4 +74,13 @@ export interface UserConfig {
   workspace_team_defaults?: Record<string, string>;
   workspaces?: Record<string, WorkspaceConfig>;
   repos?: Record<string, RepoConfig>;
+  /**
+   * Time-to-live for the on-disk team metadata cache
+   * (`~/.lebop/cache/<repo-hash>/_team/<TEAM>.yaml`) in seconds. Past this,
+   * the next name-resolution call refetches states/labels/members/projects
+   * from Linear before serving. Default 3600 (1 hour). Lower it if your
+   * workspace's labels/states change often; raise it to cut API traffic on
+   * stable workspaces.
+   */
+  team_metadata_ttl_seconds?: number;
 }

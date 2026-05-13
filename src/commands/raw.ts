@@ -40,6 +40,13 @@ export function registerRaw(program: Command): void {
       const response: unknown = await withClient((c) => c.client.rawRequest(query, variables));
 
       // rawRequest returns { data, errors?, ... } — unwrap for a clean result view.
+      //
+      // Intentional CLI/MCP asymmetry: this CLI path emits the RAW data shape
+      // (no schema_version envelope) because `lebop raw` is documented as the
+      // GraphQL escape hatch and users routinely pipe its output to `jq`
+      // expecting the unwrapped Linear GraphQL response. The MCP analog
+      // (`raw_graphql` tool) wraps `{schema_version, data}` because tool-call
+      // responses must always carry the envelope. See docs/spec.md §15.6.
       const payload = (response as { data?: unknown }).data ?? response;
       process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
     });

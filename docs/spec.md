@@ -85,7 +85,7 @@ Plus the runtime substrate:
   `agents/commands/`) — platform-agnostic markdown; bundled installer
   for Claude Code, point any other agent at the files directly
 - Cursor pagination across all list operations (no silent truncation)
-- Structured error taxonomy (`LebopError` + 6 subtypes) — see §13.1
+- Structured error taxonomy (`LebopError` + 8 subtypes) — see §13.1
 
 ### In scope before public release (see §13)
 
@@ -170,7 +170,7 @@ sudo ln -sf "$HOME/.bun/bin/lebop" /usr/local/bin/lebop
 Verify:
 
 ```sh
-lebop --version       # 0.1.0
+lebop --version       # 0.0.2
 which lebop           # /opt/homebrew/bin/lebop (or /usr/local/bin/lebop)
 ```
 
@@ -230,6 +230,11 @@ rules:
 ```yaml
 default_team: TEAM                              # global fallback (single-workspace setups)
 
+# Time-to-live for the on-disk team-metadata cache (states/labels/members/projects).
+# Default 3600s (1h). Lower it when your workspace's labels/states change often,
+# raise it to cut API traffic on stable workspaces.
+team_metadata_ttl_seconds: 3600
+
 # Multi-workspace? Set per-workspace team defaults keyed by Linear
 # workspace slug (the urlKey — what appears after `linear.app/` and in
 # `lebop auth list`). Avoids `default_team` leaking across workspaces.
@@ -262,6 +267,15 @@ Team resolution precedence (first match wins):
 
 When cwd isn't in a git repo, the cache is keyed by `_global` and the
 above team resolution still applies.
+
+**Tuning via environment variables:**
+
+| Env var | Default | Effect |
+|---|---|---|
+| `LEBOP_MAX_ITEMS` | `10000` | Hard cap on items any paginated list operation will return. lebop emits a one-shot stderr warning when a walk crosses 50% of the cap, and throws `ValidationError` (`code: validation_error`) if the cap is hit while the server still reports more pages. Set higher (`LEBOP_MAX_ITEMS=50000`) for genuinely large workspaces, or lower for tight CI envs. |
+| `LEBOP_HOME` | `~/.lebop` | Root for auth + config + cache. Useful for test isolation. |
+| `LEBOP_WORKSPACE` | unset | Active Linear workspace slug; set by `--workspace <slug>`. |
+| `LEBOP_TEAM` | unset | Active team key; set by `--team KEY` or as an explicit override. |
 
 ### 4.5 Agent integration (optional)
 
@@ -322,7 +336,7 @@ lebop/                                # this repo
 │       ├── expand.ts                 # ID range expansion (TEAM-101..TEAM-109)
 │       ├── argvPrep.ts               # auto-insert `--` before negative `set` deltas
 │       ├── errors.ts                 # rewriteNotFound translator
-│       ├── quirks.ts                 # Linear renderer rules (L001-L006)
+│       ├── quirks.ts                 # Linear renderer rules (L001-L006 universal + R001-R002 repo-scoped)
 │       ├── lint.ts                   # rule runner + fixpoint
 │       ├── planParse.ts              # frontmatter splitter + plan-dir walker
 │       ├── planTypes.ts              # frontmatter schema + LinkKey mapping
@@ -366,8 +380,8 @@ runtime state lives under `~/.lebop/`.
 ### 5.2 Two surfaces, one lib
 
 The `commands/` layer is intentionally thin — each file parses argv, calls
-into `lib/`, and formats output (human or `--json`). The MCP server (v1.0;
-§13) consumes the same `lib/` functions and emits MCP-tool-shaped responses.
+into `lib/`, and formats output (human or `--json`). The MCP server (see
+§13.3) consumes the same `lib/` functions and emits MCP-tool-shaped responses.
 **No business logic lives in `commands/` or in the MCP layer.**
 
 ### 5.3 Atomicity
@@ -549,6 +563,33 @@ _server:
   updated_at: "2026-01-01T00:00:00Z"
 ```
 
+### 7.5 Cache hashing + GC
+
+The per-repo cache lives at `~/.lebop/cache/<repo-hash>/`, where
+`<repo-hash>` is the first 12 chars of `sha256(absolute-git-root-path)` —
+deterministic, short, keeps multi-repo caches separated. When cwd isn't
+inside a git repo, lebop falls back to the literal hash `_global`.
+Implementation: `repoHashForPath` / `detectCwdRepoHash` in `lib/cache.ts`.
+
+Over time the cache accumulates hashes for repos the user no longer
+touches. `lebop cache gc` (and the matching `cache_gc` MCP tool) reports
+or removes stale per-repo subdirs. Defaults are conservative — dry-run
+on, current-repo preserved, age threshold 30 days, total-size cap 500 MB.
+See §8.13 for the full surface. The GC reads + writes only the
+`<repo-hash>/` subdirs; `auth.json`, `config.yaml`, and team caches are
+never touched.
+
+**Constraint: one Linear workspace per repo dir.** The cache key is
+`sha256(repo-root-path)`, **not** `sha256(repo-root-path, workspace-slug)`.
+If you run lebop against two different Linear workspaces from the same
+repo dir, their entities share one `<repo-hash>/` subtree and
+`lebop status` will surface both sets together. The supported usage is:
+one workspace per repo. If you need multi-workspace use against one
+codebase, work from sibling clones (`~/code/proj-foo/`,
+`~/code/proj-bar/`) — they hash to different `<repo-hash>` values and
+their caches stay separated. Workspace-keyed cache layout (and a
+migration path) may be revisited post-v0.0.2; tracked under §13.
+
 ---
 
 ## 8. CLI command reference
@@ -667,19 +708,22 @@ status flag (mirrors linear-cli).
 ### 8.4c `initiative` — org-level planning units (CRUD)
 
 ```
-lebop initiative list [--status NAME] [--archived] [--limit N] [--json]
+lebop initiative list [--status NAME] [--include-archived] [--limit N] [--json]
 lebop initiative view <id-or-name> [--json]
 lebop initiative create <name> [--description] [--status] [--owner-id UUID] [--target-date ISO] [--color HEX] [--icon NAME] [--json]
-lebop initiative update <id> [--name] [--description] [--status] [--owner-id] [--target-date ISO|null] [--color] [--icon] [--json]
-lebop initiative archive <id>      # reversible
-lebop initiative unarchive <id>
-lebop initiative delete <id>       # permanent
+lebop initiative update <id-or-name> [--name] [--description] [--status] [--owner-id] [--target-date ISO|null] [--color] [--icon] [--json]
+lebop initiative archive <id-or-name>      # reversible
+lebop initiative unarchive <id-or-name>
+lebop initiative delete <id-or-name>       # permanent
 lebop initiative add-project <initiative> <project> [--sort-order N] [--json]
 lebop initiative remove-project <initiative> <project> [--json]
 ```
 
-Both `add-project` and `remove-project` accept `<initiative>` and `<project>`
-as either a name or a UUID.
+All six initiative lifecycle commands (`view`/`update`/`archive`/`unarchive`/
+`delete` plus `add-project`/`remove-project`) accept `<id-or-name>` — UUID
+or exact initiative name, resolved via `resolveInitiativeId`. Name lookup
+also surfaces archived initiatives (the `unarchive` and `delete` paths
+need this).
 
 ### 8.4d `initiative-update` — initiative status updates with health
 
@@ -726,10 +770,16 @@ doesn't create or end sessions; that's the agent's job.
 
 ```
 lebop team members [team-key] [--all] [--json]
+lebop team get <key-or-id> [--json]
+lebop team workflow-states [team-key] [--json]
 ```
 
-Currently only `members` ships. `team create / delete / autolinks` are
-managed in the Linear UI. Plural `lebop teams` remains the canonical list.
+`get` fetches one team (with its default workflow-state) by key or UUID;
+mirrors the MCP `get_team` tool. `workflow-states` lists the team's
+workflow states by type (Triage / Backlog / Started / Completed /
+Cancelled), useful for resolving `--state` arguments. `team create /
+delete / autolinks` are managed in the Linear UI. Plural `lebop teams`
+remains the canonical workspace-wide list.
 
 ### 8.5a `label` — manage Linear labels
 
@@ -807,6 +857,11 @@ lebop new --title TEXT [--team KEY] [--project NAME|--project-id UUID]
 
 Creates a single issue. Team metadata auto-refreshes once on label/state/
 project miss. Returns the new identifier and URL on stdout.
+
+If `--state` is omitted, the issue lands in the team's default state —
+typically `Backlog`, but `Triage` on teams that have triage enabled.
+Pass an explicit `--state` (e.g. `--state Backlog`) to avoid the
+Triage hop on triage-enabled teams.
 
 (v1.0 will add `--estimate`, `--parent`, `--milestone`, `--cycle`,
 `--due-date`.)
@@ -903,6 +958,32 @@ The bash script soft-depends on the `bash-completion` package for
 `_init_completion`; if that helper is missing it degrades gracefully to
 the same compgen-only path. macOS users with Homebrew already have it
 (`brew install bash-completion@2`); most Linux distros ship it.
+
+### 8.13 `cache` — inspect and maintain the local cache
+
+```
+lebop cache gc [--max-age <days>] [--max-size <MB>] [--hash <H>]
+               [--no-dry-run] [--no-preserve-cwd] [--json]
+```
+
+Garbage-collects stale per-repo subdirs under `~/.lebop/cache/`.
+**Safe by default**: dry-run mode reports candidates without removing, and
+the current repo's hash is preserved even if it would otherwise qualify.
+Pass `--no-dry-run` to actually delete; pass `--no-preserve-cwd` to allow
+eviction of the cwd's repo cache.
+
+Selection rules:
+
+- `--hash <H>` evicts exactly that hash and skips age/size scoring.
+- Otherwise candidates are the **union** of `--max-age` (repos whose newest
+  file is older than N days; default 30) and `--max-size` (oldest repos
+  removed until total cache size is below N MB; default 500).
+
+Output lists each candidate with hash + reason (`age` / `size` /
+`explicit`) + size + last-modified, plus before/after totals. `--json`
+emits `{ schema_version, dry_run, candidates, removed, totalSizeBeforeMb,
+totalSizeAfterMb }`. The same surface is available over MCP as the
+`cache_gc` tool.
 
 ---
 
@@ -1358,6 +1439,28 @@ Facts that cost time on first encounter. **Check here before re-deriving.**
   graphql-request's `ClientError`). For multi-alias queries with partial
   errors, successful aliases are LOST. `pull` works around this by falling
   back to per-id `Promise.allSettled` on multi-alias failure.
+- **Archive-bug matrix for single-record getters.** Some entity types'
+  `*(id:)` queries throw `"Entity not found"` for ARCHIVED rows even
+  though the row exists; others surface archived rows transparently. The
+  asymmetry is per-entity-type Linear API behavior; not documented in
+  Linear's public docs. Lebop probed each (2026-05-12):
+
+  | Entity | `*(id: archived)` | Workaround needed |
+  |---|---|---|
+  | `initiative` | throws Entity not found | YES — use `initiatives(filter: {id: {eq: $id}}, includeArchived: true, first: 1) { nodes { ... } }` |
+  | `projectMilestone` | throws Entity not found | YES — same pattern via `projectMilestones(filter:...)` |
+  | `project` | returns archived | no |
+  | `document` | returns archived | no |
+  | `issue` | returns archived (per §12.1 above) | no |
+  | `cycle` / `agentSession` / `team` | not user-archived in normal UX | (unverified) |
+
+  Affected lebop functions (all use the workaround now):
+  `src/lib/initiatives.ts` — `getInitiative`, `isInitiativeArchived`,
+  `listInitiativeUpdates`; `src/lib/milestones.ts` — `getMilestone`.
+  Bound the outer pagination to `first: 1` since the ID filter
+  guarantees at-most-one result (also keeps complexity within Linear's
+  per-query budget — unbounded outer hit `Query too complex: 16500 >
+  10000` in testing).
 
 ### 12.2 Tooling / environment
 
@@ -1407,20 +1510,37 @@ Versioning ramps to 1.0.0 only when this section is complete.
   The MCP server consumes lib directly.
 - ✅ **Structured error taxonomy** — `LebopError` base + `AuthError`,
   `ConfigError`, `ValidationError`, `CASError`, `NetworkError`,
-  `RateLimitError`. Stable `code` field for programmatic consumers; `hint`
-  for user-facing remediation. CLI handler renders `error[code]: msg` +
-  `hint:` line; MCP server maps to MCP error responses.
+  `RateLimitError`, `NotFoundError`, `InvalidArgumentsError` (round-6 /
+  H11, MCP-only — emitted by the envelope-validator when zod input
+  validation rejects unknown keys or type mismatches; carries an
+  `issues[]` array of per-field detail). Stable `code` field on every
+  error (`"auth_error" | "config_error" | "validation_error" |
+  "cas_error" | "network_error" | "rate_limit_error" | "not_found" |
+  "invalid_arguments"`) for programmatic consumers; optional `hint` for
+  user-facing remediation. SDK-boundary
+  `mapSdkError` (in `lib/errors.ts`) classifies raw `@linear/sdk` failures
+  by structured `extensions.code` first, then by message regex — so
+  callers don't grep error strings. CLI handler renders
+  `error[code]: msg` + `hint:` line; MCP server maps to MCP error
+  responses preserving `code` + `hint`.
 - ✅ **Cursor pagination everywhere** — `lib/paginate.ts` exposes
   `paginateConnection` (SDK) and `paginateRaw` (GraphQL). All list ops walk
   pages; comments fragment bumped 100→250 with overflow warning.
-- ⬜ **Retry + rate-limit handling** at the SDK boundary — wrap rawRequest
-  with exponential-backoff on `429` / `RATE_LIMITED`; throw
-  `RateLimitError` if exhausted; pair with `NetworkError` for transient
-  failures.
-- ⬜ **`status` shows "stale (remote newer)"** by querying remote `updatedAt`
-  (spec §6.3 promised this; not yet shipped).
-- ⬜ **CLI integration tests** under `tests/integration/` against a recorded
-  SDK fake. Currently 138 pass at lib level; zero CLI-level tests.
+- ✅ **Retry + rate-limit handling** at the SDK boundary — `lib/retry.ts`
+  classifies thrown errors (`rate-limit` / `transient` / `non-retryable`)
+  and applies exponential backoff with ±20% jitter on the first two.
+  Every SDK call routed through `withClient` in `lib/sdk.ts` gets it for
+  free. `RateLimitError` after the retry budget is exhausted;
+  `NetworkError` for transient failures.
+- ✅ **`status` shows "stale (remote newer)"** — `lebop status` queries
+  remote `updatedAt` for every clean entry (`--no-remote` to skip);
+  staleness surfaces as its own bucket in human + JSON output. Same path
+  via the `cache_status` MCP tool with the `check_remote` flag (default
+  true). `lib/cache.ts` exposes the underlying primitive.
+- ✅ **CLI integration tests** — `tests/integration/cli.test.ts` shells
+  out to the built CLI through a process-spawning harness, exercising
+  auth/error/exit-code/JSON shapes. Adds ~30 CLI-level tests on top of
+  the lib suite.
 - ⬜ **Per-issue paginated comment fetch** — for the rare >250-comments-per-
   issue case. Today: warning emitted; full pagination is a follow-up.
 
@@ -1470,11 +1590,17 @@ HTTP+SSE transport is post-release for hosted/multi-user setups.
   `{content: [{type, text}], isError: true}` with `LebopError.code` +
   `hint` preserved. MCP clients see the structured taxonomy.
 
-#### Shipped tools (41)
+#### Shipped tools (73)
 
-**Issues** (1): `list_issues`
+**Issues — list** (1): `list_issues`
+
+**Issues — lifecycle** (5): `get_issue`, `create_issue`, `update_issue`,
+`archive_issue`, `unarchive_issue`
 
 **Relations** (2): `add_relation`, `list_relations`
+
+**Comments** (4): `list_comments`, `add_comment`, `update_comment`,
+`delete_comment`
 
 **Labels** (4): `list_labels`, `create_label`, `delete_label`,
 `lookup_label_by_name`
@@ -1499,12 +1625,37 @@ HTTP+SSE transport is post-release for hosted/multi-user setups.
 
 **Agent sessions** (2): `list_agent_sessions`, `get_agent_session`
 
-**Team members** (1): `list_team_members`
+**Teams** (2): `list_team_members`, `get_team`
 
-**Differentiator** (1): `lint_text` — runs L001-L006 against arbitrary
+**Attachments** (3): `list_attachments`, `update_attachment`,
+`delete_attachment`
+
+**Cache loop** (5): `pull_issues`, `push_changes`, `cache_status`,
+`diff_issue`, `cache_gc`
+
+**Plan workflow** (4): `plan_validate`, `plan_apply`, `plan_diff`,
+`plan_pull`
+
+**Workspace mgmt** (4): `list_workspaces`, `set_default_workspace`,
+`whoami`, `set_workspace_default_team`
+
+**Bulk** (1): `bulk_update_issues` — partial-success batch update with
+per-row result; the patch is resolved once and applied to every
+identifier.
+
+**Lookups** (2): `lookup_state_by_name`, `lookup_user_by_email`
+
+**Workflow states** (1): `list_workflow_states`
+
+**Linker** (1): `link_url_to_issue`
+
+**GraphQL escape hatch** (1): `raw_graphql`
+
+**Differentiator** (1): `lint_text` — runs the full rule set
+(L001-L006 universal + R001-R002 repo-scoped) against arbitrary
 markdown. Neither linear-cli nor Linear's hosted MCP exposes this.
 
-#### MCP tool inventory (~63 tools)
+#### MCP tool inventory (73 tools)
 
 The MCP server is **self-sufficient** — agents (especially in fully
 sandboxed containers / VMs where Linear's hosted OAuth-based MCP isn't
@@ -1542,8 +1693,14 @@ top-level connections).
 Workspace management: `list_workspaces`, `set_default_workspace`,
 `whoami`.
 
+Cache maintenance: `cache_gc` — mirrors `lebop cache gc`; reports or
+removes stale per-repo subdirs under `~/.lebop/cache/`, dry-run by
+default, cwd-repo preserved.
+
 Linter: `lint_text` — the lebop-only differentiator that catches Linear
-markdown-renderer quirks (L001–L006) before push.
+markdown-renderer quirks (L001–L006 universal + R001–R002 repo-scoped)
+before push. Invalid repo-scoped regex configs now surface as their own
+`R002` warning at line 1 instead of being silently dropped.
 
 #### CLI-only by design (3 commands)
 
@@ -1675,7 +1832,40 @@ Every read command (`list`, `projects`, `teams`, `show`, `pull` summary,
 suitable for programmatic composition. Write commands respect `--json` by
 emitting per-entity result objects.
 
-### 15.7 What NOT to build
+**Intentional CLI/MCP asymmetry — `raw` / `raw_graphql`:** every other
+paired CLI/MCP operation emits the same envelope on both surfaces. `lebop
+raw` is the documented exception: it prints Linear's raw `response.data`
+with NO `schema_version` wrap so callers can pipe directly to `jq`. The
+MCP `raw_graphql` tool wraps `{schema_version, data}` like every other
+MCP tool. If you're consuming the JSON programmatically across both
+surfaces, account for this one field of drift; for everything else the
+envelopes are identical.
+
+### 15.7 Exit code convention
+
+lebop follows a `gh`-style two-code split:
+
+- **`0`** — success.
+- **`1`** — runtime or validation failure that surfaced after the CLI
+  parser accepted the invocation. Covers `LebopError` subtypes
+  (`AuthError`, `ConfigError`, `ValidationError`, `NotFoundError`,
+  `RateLimitError`, `NetworkError`, `CASError`,
+  `InvalidArgumentsError`), Linear API rejections, and explicit
+  `process.exitCode = 1` paths like the destructive-delete `--yes`
+  gate. This is the default for anything thrown out of an action
+  handler.
+- **`2`** — command-syntax error rejected by commander's parser
+  before any action body ran. Unknown subcommand, unknown option,
+  missing required argument, wrong-arity positionals. Routed via
+  `exitOverride` in `cli.ts` (round-8 / R8-LOW-7).
+
+Scripts that only care "did it succeed" should check `$? -eq 0`. Scripts
+that want to distinguish "I mis-typed the command" from "the command ran
+and failed" can check `$? -eq 2`. The 1-vs-2 boundary is the
+parser/action boundary: if commander accepted the argv, you'll see 1;
+if commander rejected it, you'll see 2. `--help` and `--version` exit 0.
+
+### 15.8 What NOT to build
 
 - No cache-format schema migrations. If format changes, nuke cache and
   re-pull.
@@ -1705,7 +1895,7 @@ in).
 | Round-trip | Per-command | Per-tool-call | Pull → edit → push, plan → diff → pull |
 | Mutation batching | Sequential CLI | Sequential tool calls | One call per plan or one multi-alias push |
 | CAS / staleness | None | None | `updatedAt` check; `--force` to bypass |
-| Markdown lint | None | None | 8 rules (L001–L006) + repo-scoped config |
+| Markdown lint | None | None | 8 rules (L001–L006 universal + R001–R002 repo-scoped) |
 | Declarative planning | Not a goal | Not exposed | **Hero feature** (`plan apply`) |
 | GraphQL escape hatch | Yes (`api`) | No | Yes (`raw`) |
 | Local cache | No | No | Yes (`~/.lebop/cache/`) |

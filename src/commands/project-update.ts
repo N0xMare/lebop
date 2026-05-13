@@ -1,5 +1,7 @@
 import chalk from "chalk";
 import type { Command } from "commander";
+import { envelope } from "../lib/envelope.ts";
+import { NotFoundError } from "../lib/errors.ts";
 import { resolveBody } from "../lib/io.ts";
 import { resolveProjectId } from "../lib/milestones.ts";
 import { createProjectUpdate, listProjectUpdates, type ProjectHealth } from "../lib/projects.ts";
@@ -36,7 +38,7 @@ export function registerProjectUpdate(program: Command): void {
         },
       ) => {
         const projectId = await resolveProjectId(project);
-        if (!projectId) throw new Error(`project not found: ${project}`);
+        if (!projectId) throw new NotFoundError(`project not found: ${project}`);
 
         const body = await resolveBody(opts);
         if (!body.trim()) throw new Error("empty update body");
@@ -55,7 +57,7 @@ export function registerProjectUpdate(program: Command): void {
 
         if (opts.json) {
           process.stdout.write(
-            `${JSON.stringify({ schema_version: 1, project_update: created }, null, 2)}\n`,
+            `${JSON.stringify(envelope({ project_update: created }), null, 2)}\n`,
           );
           return;
         }
@@ -71,18 +73,17 @@ export function registerProjectUpdate(program: Command): void {
     .option("--json", "emit structured records")
     .action(async (project: string, opts: { json?: boolean }) => {
       const projectId = await resolveProjectId(project);
-      if (!projectId) throw new Error(`project not found: ${project}`);
+      if (!projectId) throw new NotFoundError(`project not found: ${project}`);
 
       const updates = await listProjectUpdates(projectId);
       if (opts.json) {
         process.stdout.write(
           `${JSON.stringify(
-            {
-              schema_version: 1,
+            envelope({
               project_id: projectId,
               count: updates.length,
               updates,
-            },
+            }),
             null,
             2,
           )}\n`,

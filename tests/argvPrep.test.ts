@@ -114,4 +114,48 @@ describe("preprocessSetArgv", () => {
       "+baz",
     ]);
   });
+
+  // ============================================================================
+  // Round-8 backlog: lift recognized flags from AFTER the unknown -TOKEN to
+  // BEFORE the `--` separator, so `lebop set labels ID -urgent --json` doesn't
+  // result in commander consuming `--json` as a positional label token.
+  // ============================================================================
+
+  it("lifts a single --json flag past the -- separator (round-8 backlog)", () => {
+    // Pre-fix: `set labels UE-351 -urgent --json` → `set labels UE-351 -- -urgent --json`
+    //   (commander then ate `--json` as positional; preAction never saw the flag)
+    // Post-fix: `--json` is lifted to before `--` so commander parses it as the flag.
+    expect(preprocessSetArgv(["set", "labels", "UE-351", "-urgent", "--json"])).toEqual([
+      "set",
+      "labels",
+      "UE-351",
+      "--json",
+      "--",
+      "-urgent",
+    ]);
+  });
+
+  it("lifts --team <value> + --json together (round-8 backlog)", () => {
+    expect(
+      preprocessSetArgv(["set", "links", "UE-355", "-blocks:UE-356", "--team", "OPS", "--json"]),
+    ).toEqual(["set", "links", "UE-355", "--team", "OPS", "--json", "--", "-blocks:UE-356"]);
+  });
+
+  it("lifts --team=inline + --json with multiple unknown -TOKENs (round-8 backlog)", () => {
+    expect(
+      preprocessSetArgv(["set", "labels", "UE-351", "-urgent", "-clients", "--team=ENG", "--json"]),
+    ).toEqual(["set", "labels", "UE-351", "--team=ENG", "--json", "--", "-urgent", "-clients"]);
+  });
+
+  it("omits the `--` separator when every tail token is a recognized flag (no unknowns to escape)", () => {
+    // Defensive: if there's nothing actually needing escape, just lift the
+    // flags into their natural position and skip the separator entirely.
+    // This branch only fires if the trigger token (the unknown -TOKEN that
+    // entered the lift branch) turns out NOT to require lifting itself —
+    // which can't happen given how the algorithm walks, so this is a
+    // theoretical guard. Test left in to lock the no-op behavior.
+    const argv = ["set", "labels", "UE-351", "+keep"];
+    // No unknown -TOKEN at all — preprocessor walks to end and returns argv.
+    expect(preprocessSetArgv(argv)).toEqual(argv);
+  });
 });

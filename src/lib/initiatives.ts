@@ -7,8 +7,29 @@
  * `InitiativeUpdate`, `IssueLabel`/`Project` join via `initiative.projects`.
  */
 
+import { LebopError, mapSdkError, NotFoundError, tryMapToNull, ValidationError } from "./errors.ts";
 import { paginateRaw } from "./paginate.ts";
 import { linear, withClient } from "./sdk.ts";
+import { isUuid } from "./uuid.ts";
+
+/**
+ * Linear's `icon` field is an internal name (PascalCase, e.g. "BarChart" or
+ * "Rocket"). Passing a Unicode emoji silently round-trips as a non-functional
+ * string; reject those up-front with a structured ValidationError so callers
+ * get an actionable message instead of an opaque server-side rejection.
+ *
+ * Uses `\p{Extended_Pictographic}` (Unicode 9+) which covers emoji, dingbats,
+ * symbols, and the bulk of icon-shaped pictographic codepoints.
+ */
+function assertIconNotEmoji(icon: string | undefined, field = "icon"): void {
+  if (icon === undefined) return;
+  if (/^\p{Extended_Pictographic}/u.test(icon)) {
+    throw new ValidationError(
+      `${field} "${icon}" looks like an emoji — Linear expects an internal icon name (PascalCase)`,
+      "use a name like 'BarChart', 'Rocket', 'Target'. Omit if unsure.",
+    );
+  }
+}
 
 export type InitiativeHealth = "onTrack" | "atRisk" | "offTrack";
 
@@ -109,21 +130,30 @@ export async function listInitiatives(opts: ListInitiativesOpts = {}): Promise<L
   return raw.map(shapeInitiative);
 }
 
+// Uses the list-shape query (with includeArchived: true) rather than the
+// single-record `initiative(id:)` getter. The latter throws "Entity not
+// found" for ARCHIVED initiatives (Linear hides archived entities from
+// single-record reads), which would silently return null here for
+// initiatives that genuinely exist but are archived. Same trap caught
+// `isInitiativeArchived` upstream; this is the same fix in a sibling
+// code path. Variable typed ID! (not String!) per Linear's schema.
 const GET_INITIATIVE_QUERY = /* GraphQL */ `
-  query GetInitiative($id: String!) {
-    initiative(id: $id) {
-      id
-      name
-      description
-      status
-      color
-      icon
-      url
-      targetDate
-      archivedAt
-      owner { id name email }
-      projects(first: 250) {
-        nodes { id name state }
+  query GetInitiative($id: ID!) {
+    initiatives(filter: { id: { eq: $id } }, includeArchived: true, first: 1) {
+      nodes {
+        id
+        name
+        description
+        status
+        color
+        icon
+        url
+        targetDate
+        archivedAt
+        owner { id name email }
+        projects(first: 250) {
+          nodes { id name state }
+        }
       }
     }
   }
@@ -134,16 +164,25 @@ export interface FullInitiative extends ListedInitiative {
 }
 
 export async function getInitiative(id: string): Promise<FullInitiative | null> {
-  const response = (await withClient((c) => c.client.rawRequest(GET_INITIATIVE_QUERY, { id }))) as {
+  // List-shape query with includeArchived: true correctly surfaces both
+  // live AND archived initiatives. Null result means "no initiative with
+  // this id exists at all" (the stable "missing → null" contract).
+  type Resp = {
     data: {
-      initiative:
-        | (InitiativeNode & {
+      initiatives: {
+        nodes: Array<
+          InitiativeNode & {
             projects: { nodes: { id: string; name: string; state: string }[] };
-          })
-        | null;
+          }
+        >;
+      };
     };
   };
-  const i = response.data.initiative;
+  const response = await tryMapToNull<Resp>(
+    () => withClient((c) => c.client.rawRequest(GET_INITIATIVE_QUERY, { id })) as Promise<Resp>,
+  );
+  if (!response) return null;
+  const i = response.data.initiatives.nodes[0];
   if (!i) return null;
   return { ...shapeInitiative(i), projects: i.projects.nodes };
 }
@@ -171,6 +210,7 @@ const CREATE_INITIATIVE_MUTATION = /* GraphQL */ `
 `;
 
 export async function createInitiative(input: CreateInitiativeInput): Promise<ListedInitiative> {
+  assertIconNotEmoji(input.icon);
   // NOT retry-wrapped — non-idempotent.
   const client = await linear();
   const response = (await client.client.rawRequest(CREATE_INITIATIVE_MUTATION, { input })) as {
@@ -205,6 +245,7 @@ export async function updateInitiative(
   id: string,
   input: UpdateInitiativeInput,
 ): Promise<ListedInitiative> {
+  assertIconNotEmoji(input.icon);
   // Idempotent — retry-wrapped.
   const response = (await withClient((c) =>
     c.client.rawRequest(UPDATE_INITIATIVE_MUTATION, { id, input }),
@@ -250,6 +291,18 @@ const DELETE_INITIATIVE_MUTATION = /* GraphQL */ `
 `;
 
 export async function deleteInitiative(id: string): Promise<boolean> {
+  // Round-7 / Q2 (refined): Linear's `initiativeDelete` is a SOFT delete —
+  // sets `archivedAt` on the initiative; the delete mutation itself
+  // returns `success: true` on any id. Pre-flight + archived_at check
+  // ensures `tryIdempotentDelete` emits `{status: "already-absent"}` on
+  // re-runs (matching the noisy delete sibling APIs).
+  const existing = await getInitiative(id);
+  if (!existing || existing.archived_at !== null) {
+    throw new NotFoundError(
+      `initiative not found: ${id}`,
+      "the initiative may have already been deleted",
+    );
+  }
   const client = await linear();
   const response = (await client.client.rawRequest(DELETE_INITIATIVE_MUTATION, { id })) as {
     data: { initiativeDelete: { success: boolean } };
@@ -308,6 +361,21 @@ const REMOVE_PROJECT_MUTATION = /* GraphQL */ `
   }
 `;
 
+// Archive-state probe used when an initiative's edges look absent. Uses
+// `initiatives(filter:..., includeArchived: true)` rather than the
+// single-record `initiative(id:)` getter — the latter throws
+// "Entity not found" for archived initiatives (Linear hides them from
+// single-record reads), which would defeat the entire point of the probe.
+// The list query DOES surface archived initiatives when `includeArchived`
+// is true. Variable typed as ID! (not String!) per Linear's schema.
+const INITIATIVE_ARCHIVED_PROBE_QUERY = /* GraphQL */ `
+  query InitiativeArchivedProbe($id: ID!) {
+    initiatives(filter: { id: { eq: $id } }, includeArchived: true) {
+      nodes { id archivedAt }
+    }
+  }
+`;
+
 interface ProjectInitiativeLinksPage {
   data: {
     project: {
@@ -319,10 +387,99 @@ interface ProjectInitiativeLinksPage {
   };
 }
 
+/**
+ * Structured result for `initiativeRemoveProject`. The boolean `removed`
+ * answers "did we actually delete a link?"; `reason` disambiguates the falsy
+ * cases (link absent, initiative archived, server-side rejection).
+ *
+ * Why not just throw? Linear's `initiativeToProjectDelete` returns
+ * `success: false` for several distinct user-recoverable conditions (the
+ * link wasn't there to begin with; the initiative is archived and refuses
+ * mutations; some other server-side refusal). Collapsing all of those into
+ * a bare `false` is the bug this shape fixes — agents need to disambiguate.
+ */
+export interface InitiativeRemoveProjectResult {
+  removed: boolean;
+  reason?: "absent" | "archived" | "other";
+  message?: string;
+}
+
+/**
+ * Probe whether an initiative is currently archived. Used to disambiguate
+ * three failure modes that all look like "edge not found" on the surface:
+ *
+ *   1. Genuine concurrent removal (another caller deleted the edge first)
+ *   2. The user's identifier is bogus / wrong project / wrong initiative
+ *   3. **The initiative is archived** — Linear hides every edge from
+ *      `Project.initiativeToProjects` and returns "Entity not found" on
+ *      `initiativeToProjectDelete(edgeId)`. The user's input is correct;
+ *      the operation can't proceed until they `unarchive_initiative`.
+ *
+ * Live probe (2026-05-12) confirmed Linear NEVER returns an "archived"
+ * error message for this operation — the edge is silently invisible. So
+ * we MUST probe to classify (1)+(2) vs (3); message-text matching would
+ * never distinguish them.
+ *
+ * Probe failures (network, auth, etc.) return `false` — never mask the
+ * original outcome with a probe error.
+ */
+async function isInitiativeArchived(id: string): Promise<boolean> {
+  try {
+    const response = (await withClient((c) =>
+      c.client.rawRequest(INITIATIVE_ARCHIVED_PROBE_QUERY, { id }),
+    )) as {
+      data: { initiatives: { nodes: Array<{ id: string; archivedAt: string | null }> } };
+    };
+    const node = response.data.initiatives.nodes[0];
+    return node?.archivedAt != null;
+  } catch {
+    // Probe is advisory — never let it mask the original outcome.
+    return false;
+  }
+}
+
+/**
+ * Higher-order probe-then-classify helper. Probes the initiative's archive
+ * state; if archived returns the canonical archived result; otherwise calls
+ * `notArchivedResult()` to build whatever the context-specific fallback is
+ * (typically `reason: "absent"` for no-edge paths or `reason: "other"` for
+ * post-mutation refusals).
+ */
+async function probeArchiveOr(
+  initiativeId: string,
+  notArchivedResult: () => InitiativeRemoveProjectResult,
+): Promise<InitiativeRemoveProjectResult> {
+  const archived = await isInitiativeArchived(initiativeId);
+  if (archived) {
+    return {
+      removed: false,
+      reason: "archived",
+      message: `initiative ${initiativeId} is archived; unarchive it before removing project links`,
+    };
+  }
+  return notArchivedResult();
+}
+
+/**
+ * Build the "absent vs archived" structured result for the case where no
+ * edge is visible. Runs the archive probe once and returns the appropriate
+ * `reason` + actionable message. Thin wrapper around `probeArchiveOr`.
+ */
+async function absentOrArchived(
+  initiativeId: string,
+  absentMessage: string,
+): Promise<InitiativeRemoveProjectResult> {
+  return probeArchiveOr(initiativeId, () => ({
+    removed: false,
+    reason: "absent",
+    message: absentMessage,
+  }));
+}
+
 export async function initiativeRemoveProject(input: {
   initiativeId: string;
   projectId: string;
-}): Promise<boolean> {
+}): Promise<InitiativeRemoveProjectResult> {
   // Walk the project's initiativeToProjects connection, looking for the
   // edge whose initiative.id matches. Stops as soon as we find it.
   const client = await linear();
@@ -335,7 +492,15 @@ export async function initiativeRemoveProject(input: {
       after,
     })) as ProjectInitiativeLinksPage;
     const conn = response.data.project?.initiativeToProjects;
-    if (!conn) return false;
+    if (!conn) {
+      // Project itself wasn't found — disambiguate: was the initiative
+      // archived (Linear hides the edge for archived initiatives) or is
+      // the project genuinely missing? Probe to classify.
+      return absentOrArchived(
+        input.initiativeId,
+        `project ${input.projectId} has no initiative link to ${input.initiativeId}`,
+      );
+    }
     const match = conn.nodes.find((n) => n.initiative.id === input.initiativeId);
     if (match) {
       edgeId = match.id;
@@ -344,12 +509,48 @@ export async function initiativeRemoveProject(input: {
     if (!conn.pageInfo.hasNextPage) break;
     after = conn.pageInfo.endCursor;
   }
-  if (!edgeId) return false; // already absent
+  if (!edgeId) {
+    // Walk finished without finding the edge. Three cases collapsed into
+    // one observation; probe to classify archived vs truly-absent.
+    return absentOrArchived(
+      input.initiativeId,
+      `project ${input.projectId} is not linked to initiative ${input.initiativeId}`,
+    );
+  }
 
-  const response = (await client.client.rawRequest(REMOVE_PROJECT_MUTATION, { id: edgeId })) as {
-    data: { initiativeToProjectDelete: { success: boolean } };
-  };
-  return response.data.initiativeToProjectDelete.success;
+  // Edge found. Attempt the delete.
+  try {
+    const response = (await client.client.rawRequest(REMOVE_PROJECT_MUTATION, {
+      id: edgeId,
+    })) as {
+      data: { initiativeToProjectDelete: { success: boolean } };
+    };
+    if (response.data.initiativeToProjectDelete.success) {
+      return { removed: true };
+    }
+    // success: false — Linear refused without throwing. Probe archive
+    // state to classify (race: initiative archived between our walk and
+    // the mutation). Falls through to `reason: "other"` if not archived
+    // since the edge existed at walk time, so it's not "absent".
+    return probeArchiveOr(input.initiativeId, () => ({
+      removed: false,
+      reason: "other",
+      message: "Linear refused the removal (initiativeToProjectDelete returned success: false)",
+    }));
+  } catch (err) {
+    const mapped = err instanceof LebopError ? err : mapSdkError(err);
+    // NotFound on the edge id: either (a) a concurrent removal got there
+    // first, OR (b) the initiative was archived between our walk and the
+    // mutation. Probe to disambiguate — same logic as the no-edge branch
+    // above.
+    if (mapped instanceof NotFoundError) {
+      return absentOrArchived(
+        input.initiativeId,
+        `edge ${edgeId} was already deleted (concurrent removal)`,
+      );
+    }
+    throw mapped;
+  }
 }
 
 // ---------- initiative-update (status posts with health) ----------
@@ -363,20 +564,27 @@ export interface ListedInitiativeUpdate {
 }
 
 // Linear renamed the connection on Initiative from `updates` to
-// `initiativeUpdates` in 2026. The arg type for `Query.initiative(id)` is
-// `String!`, not `ID!`.
+// `initiativeUpdates` in 2026. We use the list-shape `initiatives(filter,
+// includeArchived: true)` query rather than the single-record
+// `initiative(id:)` getter for the same reason as `getInitiative` —
+// `initiative(id:)` throws NOT_FOUND for archived initiatives, so updates
+// on an archived initiative would surface as a `NotFoundError` thrown
+// from page 1 of the paginated walk. The list-shape query handles
+// archived initiatives transparently. Variable typed ID! (not String!).
 const LIST_INITIATIVE_UPDATES_QUERY = /* GraphQL */ `
-  query ListInitiativeUpdates($initiativeId: String!, $first: Int!, $after: String) {
-    initiative(id: $initiativeId) {
-      initiativeUpdates(first: $first, after: $after) {
-        nodes {
-          id
-          body
-          health
-          createdAt
-          user { id name email }
+  query ListInitiativeUpdates($initiativeId: ID!, $first: Int!, $after: String) {
+    initiatives(filter: { id: { eq: $initiativeId } }, includeArchived: true, first: 1) {
+      nodes {
+        initiativeUpdates(first: $first, after: $after) {
+          nodes {
+            id
+            body
+            health
+            createdAt
+            user { id name email }
+          }
+          pageInfo { hasNextPage endCursor }
         }
-        pageInfo { hasNextPage endCursor }
       }
     }
   }
@@ -392,12 +600,14 @@ interface InitiativeUpdateNode {
 
 interface InitiativeUpdatesPage {
   data: {
-    initiative: {
-      initiativeUpdates: {
-        nodes: InitiativeUpdateNode[];
-        pageInfo: { hasNextPage: boolean; endCursor: string | null };
-      };
-    } | null;
+    initiatives: {
+      nodes: Array<{
+        initiativeUpdates: {
+          nodes: InitiativeUpdateNode[];
+          pageInfo: { hasNextPage: boolean; endCursor: string | null };
+        };
+      }>;
+    };
   };
 }
 
@@ -412,7 +622,7 @@ export async function listInitiativeUpdates(
         first,
         after,
       }) as Promise<InitiativeUpdatesPage>,
-    (response) => response.data.initiative?.initiativeUpdates ?? null,
+    (response) => response.data.initiatives.nodes[0]?.initiativeUpdates ?? null,
     { pageSize: 250 },
   );
   return raw.map((u) => ({
@@ -472,10 +682,14 @@ export async function createInitiativeUpdate(
  * filtering by name uses `name: { eq }`.
  */
 export async function resolveInitiativeId(nameOrId: string): Promise<string | null> {
-  if (/^[0-9a-f-]{36}$/i.test(nameOrId)) return nameOrId;
+  if (isUuid(nameOrId)) return nameOrId;
+  // includeArchived: true so name lookup works for unarchive/delete on
+  // already-archived initiatives. Linear treats archived as soft-deleted
+  // and excludes them from default queries; without this, the smoke
+  // `unarchive_initiative {id: "<name>"}` cannot find its target.
   const RESOLVE = /* GraphQL */ `
     query ResolveInitiative($name: String!) {
-      initiatives(filter: { name: { eq: $name } }, first: 1) {
+      initiatives(filter: { name: { eq: $name } }, first: 1, includeArchived: true) {
         nodes { id name }
       }
     }

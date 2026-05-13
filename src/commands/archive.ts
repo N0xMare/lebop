@@ -1,8 +1,8 @@
 import chalk from "chalk";
 import type { Command } from "commander";
-import { rewriteNotFound } from "../lib/errors.ts";
+import { envelope } from "../lib/envelope.ts";
 import { expandIds } from "../lib/expand.ts";
-import { linear, withClient } from "../lib/sdk.ts";
+import { archiveIssues, type LifecycleResult } from "../lib/issues.ts";
 
 interface ArchiveOpts {
   json?: boolean;
@@ -27,12 +27,6 @@ function parseIdentifierList(text: string): string[] {
     .filter((s) => s.length > 0 && !s.startsWith("#"));
 }
 
-interface ArchiveResult {
-  identifier: string;
-  status: "archived" | "not-found" | "error";
-  error?: string;
-}
-
 export function registerArchive(program: Command): void {
   program
     .command("archive [ids...]")
@@ -55,47 +49,18 @@ export function registerArchive(program: Command): void {
         );
       }
       const identifiers = expandIds(allArgs);
-      const client = await linear();
 
-      const results: ArchiveResult[] = [];
-      for (const ident of identifiers) {
-        try {
-          // Read with retry; the archive itself is NOT wrapped — retry on
-          // already-archived issue would surface as a spurious not-found.
-          const issue = await withClient((c) => c.issue(ident));
-          if (!issue) {
-            results.push({ identifier: ident, status: "not-found" });
-            continue;
-          }
-          await client.client.rawRequest(ARCHIVE_MUTATION, { id: issue.id });
-          results.push({ identifier: ident, status: "archived" });
-        } catch (err) {
-          const translated = rewriteNotFound(err, ident);
-          if (translated.message.startsWith("not found:")) {
-            results.push({ identifier: ident, status: "not-found" });
-          } else {
-            results.push({ identifier: ident, status: "error", error: translated.message });
-          }
-        }
-      }
+      // Wave-3 parity: delegate to the lib's archiveIssues so the CLI and MCP
+      // emit the same per-row status enum (`"ok"` instead of CLI-only
+      // `"archived"`). The human renderer maps the lib enum back to a
+      // human-friendly verb.
+      const results = await archiveIssues(identifiers);
 
       if (opts.json) {
-        process.stdout.write(`${JSON.stringify({ schema_version: 1, results }, null, 2)}\n`);
+        process.stdout.write(`${JSON.stringify(envelope({ results }), null, 2)}\n`);
       } else {
         for (const r of results) {
-          const icon =
-            r.status === "archived"
-              ? chalk.green("✓")
-              : r.status === "not-found"
-                ? chalk.yellow("?")
-                : chalk.red("✗");
-          const note =
-            r.status === "archived"
-              ? chalk.gray("archived")
-              : r.status === "not-found"
-                ? chalk.yellow("not found")
-                : chalk.red(r.error ?? "error");
-          process.stdout.write(`${icon} ${chalk.bold(r.identifier)} ${note}\n`);
+          process.stdout.write(`${renderHumanLine(r)}\n`);
         }
       }
 
@@ -105,8 +70,12 @@ export function registerArchive(program: Command): void {
     });
 }
 
-const ARCHIVE_MUTATION = /* GraphQL */ `
-  mutation ArchiveIssue($id: String!) {
-    issueArchive(id: $id) { success }
+function renderHumanLine(r: LifecycleResult): string {
+  if (r.status === "ok") {
+    return `${chalk.green("✓")} ${chalk.bold(r.identifier)} ${chalk.gray("archived")}`;
   }
-`;
+  if (r.status === "not-found") {
+    return `${chalk.yellow("?")} ${chalk.bold(r.identifier)} ${chalk.yellow("not found")}`;
+  }
+  return `${chalk.red("✗")} ${chalk.bold(r.identifier)} ${chalk.red(r.error ?? "error")}`;
+}

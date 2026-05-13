@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { ValidationError } from "../src/lib/errors.ts";
 import { findConnectionKey, isConnection, paginateRawQuery } from "../src/lib/rawPaginate.ts";
 
 interface Page<T> {
@@ -129,6 +130,15 @@ describe("paginateRawQuery", () => {
   it("throws when no connection-shaped field exists", async () => {
     const { fetch } = makeFetcher([{ viewer: { id: "x" }, count: 5 }]);
     await expect(paginateRawQuery({}, fetch)).rejects.toThrow(/no connection-shaped field/);
+  });
+
+  // Wave 3 / structured-error taxonomy: the no-connection guard must be a
+  // ValidationError with code + hint.
+  it("no-connection error is a ValidationError with code + hint", async () => {
+    const { fetch } = makeFetcher([{ viewer: { id: "x" }, count: 5 }]);
+    const err = await paginateRawQuery({}, fetch).catch((e) => e);
+    expect(err).toBeInstanceOf(ValidationError);
+    expect(err).toMatchObject({ code: "validation_error", hint: expect.any(String) });
   });
 
   it("stops on hasNextPage:true with null endCursor (defensive)", async () => {

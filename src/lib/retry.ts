@@ -1,9 +1,11 @@
-import { NetworkError, RateLimitError } from "./errors.ts";
+import { mapSdkError, NetworkError, RateLimitError } from "./errors.ts";
 
 /**
  * Retry-with-backoff for Linear API calls. Wraps any async operation that
  * might hit a transient failure or rate limit. Non-retryable errors (auth,
- * validation, not-found) propagate immediately on the first attempt.
+ * validation, not-found) propagate immediately on the first attempt — and
+ * are mapped through `mapSdkError` into structured LebopError subtypes at
+ * the boundary so callers see a consistent taxonomy.
  *
  * Important: only safe for **idempotent operations** — reads, paginated
  * fetches, `issueUpdate` / `projectUpdate` (Linear's update mutations are
@@ -39,7 +41,7 @@ export async function withRetry<T>(fn: () => Promise<T>, opts: RetryOpts = {}): 
     } catch (err) {
       lastError = err;
       const klass = classifyError(err);
-      if (klass === "non-retryable") throw err;
+      if (klass === "non-retryable") throw mapSdkError(err);
 
       if (attempt === max - 1) {
         // Final attempt failed; surface as a structured error.

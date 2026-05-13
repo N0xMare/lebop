@@ -1,8 +1,9 @@
 import chalk from "chalk";
 import type { Command } from "commander";
+import { addComment, deleteComment, listComments, updateComment } from "../lib/comments.ts";
+import { envelope } from "../lib/envelope.ts";
+import { tryIdempotentDelete, ValidationError } from "../lib/errors.ts";
 import { resolveBody } from "../lib/io.ts";
-import { paginateRaw } from "../lib/paginate.ts";
-import { linear, withClient } from "../lib/sdk.ts";
 
 /**
  * `lebop comment add|list|update|delete` — full CRUD over Linear comments.
@@ -10,6 +11,10 @@ import { linear, withClient } from "../lib/sdk.ts";
  * Note: `comment add` replaces the legacy bare `lebop comment <id>` form.
  * For agents/scripts upgrading: prefix all your existing comment-add calls
  * with `add`. The flags (--body / --body-file / --stdin) are unchanged.
+ *
+ * The GraphQL + structured-error mapping (issue-not-found, Linear-rejected,
+ * etc.) lives in `../lib/comments.ts` so the CLI here and the MCP server
+ * share one code path.
  */
 export function registerComment(program: Command): void {
   const cmd = program.command("comment").description("manage comments on Linear issues");
@@ -25,42 +30,28 @@ export function registerComment(program: Command): void {
     .action(async (id: string, opts: AddOpts) => {
       const body = await resolveBody(opts);
       if (!body.trim()) {
-        throw new Error("empty comment body");
+        throw new ValidationError(
+          "empty comment body",
+          "pass a non-empty body via --body, --body-file, or stdin",
+        );
       }
-
-      // Read is wrapped (idempotent); the createComment mutation is NOT
-      // wrapped — retry-after-success would post a duplicate.
-      const issue = await withClient((c) => c.issue(id));
-      if (!issue) throw new Error(`issue not found: ${id}`);
-
-      const client = await linear();
-      const input: { issueId: string; body: string; parentId?: string } = {
-        issueId: issue.id,
+      const result = await addComment({
+        identifier: id,
         body,
-      };
-      if (opts.parent) input.parentId = opts.parent;
-      const payload = await client.createComment(input);
-      if (!payload.success) {
-        throw new Error(`Linear rejected the comment on ${id}`);
-      }
-      const created = await payload.comment;
+        parentId: opts.parent,
+      });
 
       if (opts.json) {
+        // Round-7 / MED-4: echo A26's full response (body/url/user) for
+        // CLI/MCP parity. Pre-fix the CLI emitted only `{id, created_at}`;
+        // MCP path already echoed the full shape via `result` pass-through.
         process.stdout.write(
-          `${JSON.stringify(
-            {
-              schema_version: 1,
-              issue: id,
-              comment: { id: created?.id ?? null, created_at: created?.createdAt ?? null },
-            },
-            null,
-            2,
-          )}\n`,
+          `${JSON.stringify(envelope({ identifier: id, comment: result }), null, 2)}\n`,
         );
         return;
       }
       process.stdout.write(
-        `${chalk.green("✓")} commented on ${chalk.bold(id)}${created?.id ? chalk.gray(` (${created.id})`) : ""}\n`,
+        `${chalk.green("✓")} commented on ${chalk.bold(id)}${result.id ? chalk.gray(` (${result.id})`) : ""}\n`,
       );
     });
 
@@ -70,45 +61,16 @@ export function registerComment(program: Command): void {
     .option("--json", "emit structured records")
     .action(async (id: string, opts: { json?: boolean }) => {
       const upperId = id.toUpperCase();
-      type CommentNode = {
-        id: string;
-        body: string;
-        createdAt: string;
-        updatedAt: string;
-        user: { id: string; name: string; email: string } | null;
-        parent: { id: string } | null;
-      };
-      type CommentsPage = {
-        data: {
-          issue: {
-            comments: {
-              nodes: CommentNode[];
-              pageInfo: { hasNextPage: boolean; endCursor: string | null };
-            };
-          } | null;
-        };
-      };
-      const client = await linear();
-      const comments = await paginateRaw<CommentNode, CommentsPage>(
-        ({ first, after }) =>
-          client.client.rawRequest(LIST_COMMENTS_QUERY, {
-            id: upperId,
-            first,
-            after,
-          }) as Promise<CommentsPage>,
-        (response) => response.data.issue?.comments ?? null,
-        { pageSize: 250 },
-      );
+      const comments = await listComments(upperId);
 
       if (opts.json) {
         process.stdout.write(
           `${JSON.stringify(
-            {
-              schema_version: 1,
+            envelope({
               issue: upperId,
               count: comments.length,
               comments,
-            },
+            }),
             null,
             2,
           )}\n`,
@@ -121,9 +83,9 @@ export function registerComment(program: Command): void {
       }
       for (const c of comments) {
         const who = c.user ? `${c.user.name} <${c.user.email}>` : "unknown";
-        const reply = c.parent ? chalk.gray(` (reply to ${c.parent.id.slice(0, 8)})`) : "";
+        const reply = c.parent_id ? chalk.gray(` (reply to ${c.parent_id.slice(0, 8)})`) : "";
         process.stdout.write(
-          `\n${chalk.dim(c.createdAt)}  ${chalk.bold(who)}  ${chalk.gray(c.id)}${reply}\n${c.body}\n`,
+          `\n${chalk.dim(c.created_at)}  ${chalk.bold(who)}  ${chalk.gray(c.id)}${reply}\n${c.body}\n`,
         );
       }
     });
@@ -138,63 +100,57 @@ export function registerComment(program: Command): void {
     .action(async (commentId: string, opts: AddOpts) => {
       const body = await resolveBody(opts);
       if (!body.trim()) {
-        throw new Error("empty comment body");
-      }
-      const response = (await withClient((c) =>
-        c.client.rawRequest(UPDATE_COMMENT_MUTATION, {
-          id: commentId,
-          input: { body },
-        }),
-      )) as {
-        data: {
-          commentUpdate: {
-            success: boolean;
-            comment: { id: string; updatedAt: string };
-          };
-        };
-      };
-      const updated = response.data.commentUpdate.comment;
-      if (opts.json) {
-        process.stdout.write(
-          `${JSON.stringify(
-            { schema_version: 1, comment: { id: updated.id, updated_at: updated.updatedAt } },
-            null,
-            2,
-          )}\n`,
+        throw new ValidationError(
+          "empty comment body",
+          "pass a non-empty body via --body, --body-file, or stdin",
         );
+      }
+      const updated = await updateComment(commentId, body);
+      if (opts.json) {
+        process.stdout.write(`${JSON.stringify(envelope({ comment: updated }), null, 2)}\n`);
         return;
       }
       process.stdout.write(
-        `${chalk.green("✓")} updated ${chalk.bold(commentId)} ${chalk.gray(updated.updatedAt)}\n`,
+        `${chalk.green("✓")} updated ${chalk.bold(commentId)} ${chalk.gray(updated.updated_at)}\n`,
       );
     });
 
   cmd
     .command("delete <comment-id>")
-    .description("delete a comment by its UUID")
+    .description("delete a comment by its UUID (irreversible — requires --yes)")
+    .option("--yes", "confirm destructive operation (required)")
     .option("--json", "emit structured result")
-    .action(async (commentId: string, opts: { json?: boolean }) => {
-      // Delete is NOT wrapped with retry — re-running after first success
-      // would surface as "not found" since the comment is already gone.
-      const client = await linear();
-      const response = (await client.client.rawRequest(DELETE_COMMENT_MUTATION, {
-        id: commentId,
-      })) as { data: { commentDelete: { success: boolean } } };
+    .action(async (commentId: string, opts: { yes?: boolean; json?: boolean }) => {
+      if (!opts.yes) {
+        process.stderr.write(
+          `${chalk.red("error:")} refusing to delete comment ${chalk.bold(commentId)} without --yes\n` +
+            `  ${chalk.cyan("hint:")} re-run with --yes to confirm. This operation is irreversible.\n`,
+        );
+        process.exitCode = 1;
+        return;
+      }
+      const { status } = await tryIdempotentDelete(() => deleteComment(commentId));
       if (opts.json) {
         process.stdout.write(
           `${JSON.stringify(
-            {
-              schema_version: 1,
-              comment_id: commentId,
-              success: response.data.commentDelete.success,
-            },
+            envelope({
+              id: commentId,
+              status,
+              success: status === "deleted",
+            }),
             null,
             2,
           )}\n`,
         );
         return;
       }
-      process.stdout.write(`${chalk.green("✓")} deleted ${chalk.bold(commentId)}\n`);
+      if (status === "already-absent") {
+        process.stdout.write(
+          `${chalk.gray("✓")} already absent: ${chalk.bold(commentId)} (no-op)\n`,
+        );
+      } else {
+        process.stdout.write(`${chalk.green("✓")} deleted ${chalk.bold(commentId)}\n`);
+      }
     });
 }
 
@@ -205,36 +161,3 @@ interface AddOpts {
   parent?: string;
   json?: boolean;
 }
-
-const LIST_COMMENTS_QUERY = /* GraphQL */ `
-  query ListComments($id: String!, $first: Int!, $after: String) {
-    issue(id: $id) {
-      comments(first: $first, after: $after) {
-        nodes {
-          id
-          body
-          createdAt
-          updatedAt
-          user { id name email }
-          parent { id }
-        }
-        pageInfo { hasNextPage endCursor }
-      }
-    }
-  }
-`;
-
-const UPDATE_COMMENT_MUTATION = /* GraphQL */ `
-  mutation UpdateComment($id: String!, $input: CommentUpdateInput!) {
-    commentUpdate(id: $id, input: $input) {
-      success
-      comment { id updatedAt }
-    }
-  }
-`;
-
-const DELETE_COMMENT_MUTATION = /* GraphQL */ `
-  mutation DeleteComment($id: String!) {
-    commentDelete(id: $id) { success }
-  }
-`;

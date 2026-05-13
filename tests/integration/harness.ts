@@ -27,9 +27,13 @@
  *       expect(r.stdout).toContain("ENG");
  *     });
  *   });
+ *
+ * For MCP integration tests, see `startMcpClient` further down — it spawns
+ * `bin/lebop mcp`, drives JSON-RPC over stdio, and exposes a tight API
+ * (initialize / listTools / callTool / close).
  */
 
-import { spawn } from "node:child_process";
+import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -180,13 +184,21 @@ export async function makeAuthFile(
  * Spawn `bin/lebop` as a child process with the supplied args + env, wait
  * for exit, and return captured streams + exit code. Inherits the parent
  * process env minus anything overridden in `env`.
+ *
+ * Round-6 / H1: `cwd` is now configurable. Tests that exercise repo-scoped
+ * paths (`diff`, `push`, cache mode) must control the spawn's working
+ * directory so `findGitRoot()` resolves predictably — either to the test's
+ * tmpdir (no git, `repoHash="_global"`) or to a fixture directory the test
+ * has prepared.
  */
 export async function runLebop(
   args: string[],
   env: Record<string, string> = {},
+  cwd?: string,
 ): Promise<RunResult> {
   return new Promise((resolve) => {
     const child = spawn("bun", [LEBOP_BIN, ...args], {
+      cwd,
       env: {
         ...process.env,
         // Force colors off so chalk doesn't pollute stdout assertions.
@@ -208,4 +220,248 @@ export async function runLebop(
       resolve({ stdout, stderr, exitCode: code });
     });
   });
+}
+
+// ============================================================================
+// MCP client — JSON-RPC stdio harness for `bin/lebop mcp`.
+// ============================================================================
+
+export interface McpToolDescriptor {
+  name: string;
+  description?: string;
+  inputSchema?: Record<string, unknown>;
+  annotations?: Record<string, unknown>;
+}
+
+export interface McpToolContent {
+  type: "text";
+  text: string;
+}
+
+export interface McpToolResult {
+  content: McpToolContent[];
+  isError?: boolean;
+  /** Parsed body of the first text content block as JSON; `null` if unparsable. */
+  parsed: unknown;
+}
+
+export interface McpInitializeResult {
+  protocolVersion: string;
+  capabilities?: Record<string, unknown>;
+  serverInfo?: Record<string, unknown>;
+}
+
+export interface McpClient {
+  /** Send JSON-RPC `initialize` and return the server's reply. */
+  initialize(): Promise<McpInitializeResult>;
+  /** Send the post-initialize notification per spec. No reply expected. */
+  notifyInitialized(): Promise<void>;
+  /** Send JSON-RPC `tools/list` and return the parsed `tools` array. */
+  listTools(): Promise<{ tools: McpToolDescriptor[] }>;
+  /** Send JSON-RPC `tools/call` with `{name, arguments}`. */
+  callTool(name: string, args: Record<string, unknown>): Promise<McpToolResult>;
+  /** Close stdin and wait for the child to exit (or kill on timeout). */
+  close(): Promise<void>;
+  /** Captured stderr from the child (useful for debugging flakes). */
+  readonly stderr: string;
+}
+
+interface JsonRpcResponse {
+  jsonrpc: "2.0";
+  id?: number | string | null;
+  result?: unknown;
+  error?: { code: number; message: string; data?: unknown };
+}
+
+/**
+ * Spawn `bin/lebop mcp` and return a thin JSON-RPC client. Messages are
+ * newline-delimited per the MCP stdio transport spec. Responses are routed
+ * back to their callers by `id`; the rare unsolicited message (e.g. a server
+ * notification) is dropped on the floor (no current tests need it).
+ *
+ * Timeouts default to 10s per request — well above any in-process mock
+ * round-trip and short enough to fail a hung test before vitest's default
+ * suite timeout. Override per-call by chaining your own `Promise.race`.
+ *
+ * The child's stderr is captured into the `stderr` field; failures throw an
+ * Error that includes it for fast diagnosis.
+ */
+export async function startMcpClient(env: Record<string, string> = {}): Promise<McpClient> {
+  const child: ChildProcessWithoutNullStreams = spawn("bun", [LEBOP_BIN, "mcp"], {
+    env: {
+      ...process.env,
+      NO_COLOR: "1",
+      FORCE_COLOR: "0",
+      ...env,
+    },
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+
+  let stderr = "";
+  child.stderr.on("data", (d) => {
+    stderr += d.toString();
+  });
+
+  // Line-buffered stdout reader: the MCP SDK writes one JSON-RPC message per
+  // line. We buffer partial lines until a `\n` arrives, then route each
+  // complete line to the waiter registered for its `id`.
+  let buf = "";
+  const pending = new Map<
+    number,
+    { resolve: (r: JsonRpcResponse) => void; reject: (e: Error) => void }
+  >();
+  let nextId = 1;
+  let exited = false;
+
+  child.stdout.on("data", (chunk: Buffer) => {
+    buf += chunk.toString("utf8");
+    let nl = buf.indexOf("\n");
+    while (nl !== -1) {
+      const line = buf.slice(0, nl).trim();
+      buf = buf.slice(nl + 1);
+      if (line.length > 0) {
+        try {
+          const msg = JSON.parse(line) as JsonRpcResponse;
+          if (typeof msg.id === "number" && pending.has(msg.id)) {
+            const waiter = pending.get(msg.id);
+            pending.delete(msg.id);
+            waiter?.resolve(msg);
+          }
+          // Else: server notification or unknown id — ignore silently.
+        } catch {
+          // Non-JSON line (shouldn't happen, but tolerate stray logging).
+        }
+      }
+      nl = buf.indexOf("\n");
+    }
+  });
+
+  child.on("exit", () => {
+    exited = true;
+    // Reject any in-flight waiters so tests fail fast instead of hanging
+    // until the vitest suite-level timeout.
+    for (const [, waiter] of pending) {
+      waiter.reject(
+        new Error(`MCP child exited before responding. stderr:\n${stderr || "(empty)"}`),
+      );
+    }
+    pending.clear();
+  });
+
+  child.on("error", (err) => {
+    for (const [, waiter] of pending) {
+      waiter.reject(err);
+    }
+    pending.clear();
+  });
+
+  function send(method: string, params?: Record<string, unknown>): Promise<JsonRpcResponse> {
+    if (exited) {
+      return Promise.reject(new Error(`MCP child already exited. stderr:\n${stderr || "(empty)"}`));
+    }
+    const id = nextId++;
+    const message: Record<string, unknown> = { jsonrpc: "2.0", id, method };
+    if (params !== undefined) message.params = params;
+    const promise = new Promise<JsonRpcResponse>((resolve, reject) => {
+      pending.set(id, { resolve, reject });
+      const timer = setTimeout(() => {
+        if (pending.has(id)) {
+          pending.delete(id);
+          reject(
+            new Error(
+              `MCP request "${method}" (id=${id}) timed out after 10s. stderr:\n${stderr || "(empty)"}`,
+            ),
+          );
+        }
+      }, 10_000);
+      // Best-effort clear-timer on resolve; harmless if already fired.
+      const original = pending.get(id);
+      if (original) {
+        pending.set(id, {
+          resolve: (r) => {
+            clearTimeout(timer);
+            original.resolve(r);
+          },
+          reject: (e) => {
+            clearTimeout(timer);
+            original.reject(e);
+          },
+        });
+      }
+    });
+    child.stdin.write(`${JSON.stringify(message)}\n`);
+    return promise;
+  }
+
+  function sendNotification(method: string, params?: Record<string, unknown>): void {
+    if (exited) return;
+    const message: Record<string, unknown> = { jsonrpc: "2.0", method };
+    if (params !== undefined) message.params = params;
+    child.stdin.write(`${JSON.stringify(message)}\n`);
+  }
+
+  return {
+    get stderr() {
+      return stderr;
+    },
+    async initialize() {
+      const res = await send("initialize", {
+        protocolVersion: "2024-11-05",
+        capabilities: {},
+        clientInfo: { name: "lebop-integration-test", version: "0.0.1" },
+      });
+      if (res.error) {
+        throw new Error(`MCP initialize failed: ${res.error.message}`);
+      }
+      return res.result as McpInitializeResult;
+    },
+    async notifyInitialized() {
+      sendNotification("notifications/initialized");
+      // The SDK reads it asynchronously; a tiny tick keeps tests deterministic
+      // without introducing a real sleep.
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    },
+    async listTools() {
+      const res = await send("tools/list", {});
+      if (res.error) {
+        throw new Error(`MCP tools/list failed: ${res.error.message}`);
+      }
+      return res.result as { tools: McpToolDescriptor[] };
+    },
+    async callTool(name, args) {
+      const res = await send("tools/call", { name, arguments: args });
+      if (res.error) {
+        // Protocol-level error (e.g. unknown tool). Surface as thrown Error
+        // so tests can distinguish from tool-level `isError: true`.
+        throw new Error(`MCP tools/call protocol error: ${res.error.message}`);
+      }
+      const raw = res.result as { content: McpToolContent[]; isError?: boolean };
+      let parsed: unknown = null;
+      const first = raw.content?.[0];
+      if (first?.type === "text") {
+        try {
+          parsed = JSON.parse(first.text);
+        } catch {
+          parsed = null;
+        }
+      }
+      return { ...raw, parsed };
+    },
+    async close() {
+      if (exited) return;
+      // Closing stdin signals EOF; the server's stdio transport resolves and
+      // the process exits cleanly. Fall back to a kill if it doesn't.
+      child.stdin.end();
+      await new Promise<void>((resolve) => {
+        const killer = setTimeout(() => {
+          child.kill("SIGTERM");
+          resolve();
+        }, 2_000);
+        child.once("exit", () => {
+          clearTimeout(killer);
+          resolve();
+        });
+      });
+    },
+  };
 }
