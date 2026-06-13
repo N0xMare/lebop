@@ -1,7 +1,7 @@
 /**
  * lebop's MCP server. Exposes lib functions as MCP tools so non-CLI agents
  * (Cursor, Claude Desktop, Windsurf, IDE extensions) can drive Linear with
- * the same retry/CAS/lint guarantees the CLI provides.
+ * the same retry/stale-guard/lint guarantees the CLI provides.
  *
  * Auth: bearer-token via the existing `~/.lebop/auth.json` (multi-workspace).
  * Tool calls accept an optional `workspace` arg to target a specific
@@ -13,35 +13,29 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import {
-  normalizeObjectSchema,
-  safeParseAsync,
-} from "@modelcontextprotocol/sdk/server/zod-compat.js";
-import { CallToolRequestSchema } from "@modelcontextprotocol/sdk/types.js";
-import { createTwoFilesPatch } from "diff";
 import { z } from "zod";
 import { getAgentSession, listAgentSessions } from "../lib/agentSessions.ts";
-import { deleteAttachment, listAttachments, updateAttachment } from "../lib/attachments.ts";
-import { loadAuth, loadAuthForWorkspace, setDefaultWorkspace, validateToken } from "../lib/auth.ts";
-import { buildComments, buildIssueMetadata } from "../lib/build.ts";
-import { bulkUpdateIssues } from "../lib/bulk.ts";
 import {
-  gcCache,
-  type IssueMetadata,
-  issueDir,
-  listCachedIssues,
-  listCachedProjectIds,
-  type ProjectMetadata,
-  readIssue,
-  readProject,
-  writeComment,
-  writeIssue,
-} from "../lib/cache.ts";
+  deleteAttachment,
+  linkUrlAttachment,
+  listAttachments,
+  updateAttachment,
+} from "../lib/attachments.ts";
+import { addWorkspace, loadAuth, loadAuthForWorkspace, setDefaultWorkspace } from "../lib/auth.ts";
+import { gcCache, invalidateTeamMetadata } from "../lib/cache.ts";
+import { commentCacheNotRefreshed, issueCacheNotRefreshed } from "../lib/cacheCoherence.ts";
+import { applyCachePushPlans, collectCachePushPlans } from "../lib/cachePush.ts";
+import {
+  type IssueCacheRefreshResult,
+  refreshCachedIssueByIdentifier,
+  refreshCachedProjectAfterUpdate,
+} from "../lib/cacheRefresh.ts";
+import { collectCacheStatus } from "../lib/cacheStatus.ts";
 import { addComment, deleteComment, listComments, updateComment } from "../lib/comments.ts";
 import { resolveConfig } from "../lib/config.ts";
 import { setWorkspaceDefaultTeam } from "../lib/configWrite.ts";
 import { getCycle, listCycles } from "../lib/cycles.ts";
-import { arraysEqual, diffIssueMetadata, diffProjectMetadata } from "../lib/diff.ts";
+import { diffIssueCacheVsRemote, diffProjectCacheVsRemote } from "../lib/diff.ts";
 import {
   createDocument,
   deleteDocument,
@@ -49,16 +43,11 @@ import {
   listDocuments,
   updateDocument,
 } from "../lib/documents.ts";
-import { envelope, SCHEMA_VERSION } from "../lib/envelope.ts";
-import {
-  InvalidArgumentsError,
-  LebopError,
-  NotFoundError,
-  tryIdempotentDelete,
-  ValidationError,
-} from "../lib/errors.ts";
+import { envelope } from "../lib/envelope.ts";
+import { LebopError, NotFoundError, tryIdempotentDelete, ValidationError } from "../lib/errors.ts";
 import {
   archiveInitiative,
+  assertInitiativeUpdateBody,
   createInitiative,
   createInitiativeUpdate,
   deleteInitiative,
@@ -68,70 +57,116 @@ import {
   initiativeRemoveProject,
   listInitiatives,
   listInitiativeUpdates,
+  resolveExistingInitiativeId,
   resolveInitiativeId,
   unarchiveInitiative,
   updateInitiative,
 } from "../lib/initiatives.ts";
-import {
-  archiveIssues,
-  createIssue,
-  getIssue,
-  unarchiveIssues,
-  updateIssue,
-} from "../lib/issues.ts";
-import { createLabel, deleteLabel, listLabels, resolveLabelByName } from "../lib/labels.ts";
-import { lintContent } from "../lib/lint.ts";
-import { listIssues } from "../lib/listIssues.ts";
+import { createLabel, deleteLabel, listLabels, resolveLabelSelectorToId } from "../lib/labels.ts";
+import { applyFixesFixpoint, lintContent } from "../lib/lint.ts";
+import { lintFiles } from "../lib/lintFiles.ts";
 import { lookupStateByName, lookupUserByEmail } from "../lib/lookups.ts";
 import {
   createMilestone,
   deleteMilestone,
   getMilestone,
   listMilestones,
+  resolveExistingProjectId,
   resolveProjectId,
   updateMilestone,
 } from "../lib/milestones.ts";
-import { paginateRaw } from "../lib/paginate.ts";
-import { applyPlan } from "../lib/planApply.ts";
+import { paginateConnection } from "../lib/paginate.ts";
+import { AUTH_FILE_DISPLAY, AUTH_STORAGE_KIND } from "../lib/paths.ts";
+import { applyPlan, preflightPlanApply } from "../lib/planApply.ts";
 import { diffPlan } from "../lib/planDiff.ts";
+import { countRemainingPlanLintWarnings, lintPlanFiles } from "../lib/planLint.ts";
 import { parsePlan } from "../lib/planParse.ts";
 import { pullPlan } from "../lib/planPull.ts";
-import { validatePlan } from "../lib/planValidate.ts";
+import { validatePlanWithFreshTeamMetadata } from "../lib/planValidate.ts";
 import {
-  createProject,
+  assertProjectUpdateBody,
   createProjectUpdate,
-  deleteProject,
-  getProject,
-  listProjects,
   listProjectUpdates,
   type ProjectHealth,
-  updateProject,
 } from "../lib/projects.ts";
-import { buildPullIssuesQuery, type FetchedIssue } from "../lib/pullQuery.ts";
-import { buildIssueUpdateInput } from "../lib/pushBuild.ts";
-import { buildCasQuery, ISSUE_UPDATE_MUTATION } from "../lib/pushMutations.ts";
-import { createLink, LINK_KINDS, type LinkKind, listRelations } from "../lib/relations.ts";
+import {
+  assertRawGraphQLOperationAllowed,
+  assertRawGraphQLPaginateAllowed,
+} from "../lib/rawGraphql.ts";
+import { paginateRawQuery } from "../lib/rawPaginate.ts";
+import {
+  assertRelationCreateConfirmed,
+  createLink,
+  deleteLink,
+  findLink,
+  LINK_KINDS,
+  type LinkDelta,
+  type LinkKind,
+  listRelations,
+  parseLinkToken,
+  preflightCreateLink,
+  relationBatchAddsRequireConfirmation,
+  relationDeltaKey,
+  relationPairKey,
+} from "../lib/relations.ts";
+import { runWithRequestContext } from "../lib/requestContext.ts";
 import { deriveTeamFromIdentifiers, getTeamMetadata } from "../lib/resolve.ts";
-import { withClient } from "../lib/sdk.ts";
+import { linear, withClient } from "../lib/sdk.ts";
 import { listTeamMembers } from "../lib/teamMembers.ts";
 import { getTeam } from "../lib/teams.ts";
+import { LEBOP_VERSION } from "../lib/version.ts";
 import { listWorkflowStates } from "../lib/workflowStates.ts";
+import { safe } from "./adapter.ts";
+import {
+  requireConfirm,
+  requireMcpEntity,
+  resolveMcpRepoCacheContext,
+  resolveTeamSelectorToId,
+  WORKSPACE_PARAM_DESCRIPTION,
+} from "./common.ts";
+import { installEnvelopeValidator } from "./envelopeValidator.ts";
+import { text } from "./response.ts";
 
-// resolveMilestoneIdByName / resolveCycleIdByName moved to ../lib/resolve.ts
-// in wave 3 — both updateIssue (lib) and update_issue (MCP) now share the
-// same implementations. The cycle resolver gained a required `teamKey`
-// scoping parameter to fix the pick-first-cross-team-match bug the wave-2
-// reviewer flagged.
+export { formatToolError } from "./response.ts";
 
-// Canonical description for the `workspace` param shared across all tools.
-// Centralizing here lets agents memorize the precedence once instead of per-tool.
-const WORKSPACE_PARAM_DESCRIPTION =
-  "Target Linear workspace slug. Precedence: this param > LEBOP_WORKSPACE env > auth file default. Omit to use the default.";
+import { registerAllMcpTools } from "./tools/index.ts";
+import type { McpServerLike, RegisteredMcpToolDefinition } from "./types.ts";
+
+// Both the CLI/lib update path and MCP `update_issue` share the same milestone
+// and cycle resolvers from ../lib/resolve.ts. The cycle resolver requires
+// `teamKey` because cycle names are not unique across teams.
+
+export function collectMcpToolDefinitions(): RegisteredMcpToolDefinition[] {
+  const definitions: RegisteredMcpToolDefinition[] = [];
+  const collector = {
+    registerTool(
+      name: string,
+      config: RegisteredMcpToolDefinition["config"],
+      handler: unknown,
+    ): void {
+      definitions.push({ name, config, handler });
+    },
+  };
+  registerTools(collector);
+  return definitions;
+}
+
+function relationWritebackFailed(cache: IssueCacheRefreshResult): boolean {
+  return cache.present && !cache.refreshed && cache.error !== undefined;
+}
+
+function relationMutationStatus(
+  base: "created" | "deleted",
+  cache: IssueCacheRefreshResult,
+): "created" | "deleted" | "created-writeback-failed" | "deleted-writeback-failed" {
+  if (!relationWritebackFailed(cache)) return base;
+  return base === "created" ? "created-writeback-failed" : "deleted-writeback-failed";
+}
 
 export async function startMcpServer(): Promise<void> {
   const server = new McpServer({
     name: "lebop",
-    version: "0.0.2",
+    version: LEBOP_VERSION,
   });
 
   registerTools(server);
@@ -143,104 +178,109 @@ export async function startMcpServer(): Promise<void> {
   // implicitly by returning. Stay alive until stdin EOF / parent exit.
 }
 
-/**
- * Register the initial vertical slice of MCP tools. This proves the lib
- * shape under both the CLI and MCP surfaces; expanded coverage lands as
- * §13.2 commands ship and their lib helpers stabilize.
- */
-function registerTools(server: McpServer): void {
-  // ---------- list_issues ----------
-  server.registerTool(
-    "list_issues",
+/** Register the MCP tools exposed through the stdio server. */
+function registerTools(server: McpServerLike): void {
+  registerAllMcpTools(
+    server,
     {
-      title: "List Linear issues by filter",
+      workspace: {
+        workspaceParamDescription: WORKSPACE_PARAM_DESCRIPTION,
+      },
+      issues: {
+        workspaceParamDescription: WORKSPACE_PARAM_DESCRIPTION,
+        resolveTeam: async (team) => (await resolveConfig({ teamOverride: team })).team,
+        getTeam: async (team) => getTeam(team),
+        resolveConfig: async (options) => resolveConfig(options),
+        resolveCacheContext: resolveMcpRepoCacheContext,
+        requireConfirm,
+        requireMcpEntity,
+      },
+      projects: {
+        workspaceParamDescription: WORKSPACE_PARAM_DESCRIPTION,
+        requireConfirm,
+        resolveMcpRepoCacheContext,
+        resolveTeamSelectorToId,
+        resolveDefaultTeamKey: async () => (await resolveConfig()).team,
+        resolveTeam: async (team) => (await resolveConfig({ teamOverride: team })).team,
+        refreshCachedProjectAfterUpdate,
+      },
+      pull: {
+        workspaceParamDescription: WORKSPACE_PARAM_DESCRIPTION,
+        requireConfirm,
+      },
+      publish: {
+        workspaceParamDescription: WORKSPACE_PARAM_DESCRIPTION,
+      },
+    },
+    {
+      afterIssueListBeforeProjects: registerLegacyMcpToolsAfterIssueListBeforeProjects,
+      afterProjectsBeforeIssueLifecycle: registerLegacyMcpToolsAfterProjectsBeforeIssueLifecycle,
+      afterIssueLifecycleBeforePull: registerLegacyMcpToolsAfterIssueLifecycleBeforePull,
+      afterPullBeforePublish: registerLegacyMcpToolsAfterPullBeforePublish,
+      afterPublishBeforeBulk: registerLegacyMcpToolsAfterPublishBeforeBulk,
+      afterBulk: registerLegacyMcpToolsAfterBulk,
+    },
+  );
+
+  // ---------- lint_files ----------
+  server.registerTool(
+    "lint_files",
+    {
+      title: "Lint local markdown files for Linear renderer quirks",
       description:
-        "Filter, paginate, and return Linear issues. Same surface as `lebop list` — search, assignee, state, label, project, cycle, milestone, priority, time filters. Returns plain records.",
+        "MCP parity with `lebop lint`: lint explicit local markdown paths, or omit paths to lint cached issue/project markdown for the resolved repo/team. Supports fix and strict like the CLI.",
       inputSchema: {
-        team: z
-          .string()
+        paths: z
+          .array(z.string())
           .optional()
-          .describe("Team key (e.g. 'ENG'). Omit + set allTeams to search across all teams."),
-        all_teams: z
+          .describe("Local markdown file paths. Omit to lint cached issue/project markdown."),
+        team: z.string().optional().describe("Override the resolved team for cache-mode config."),
+        fix: z
           .boolean()
           .optional()
-          .describe("Drop the team filter for cross-workspace search."),
-        project: z.string().optional(),
-        project_id: z.string().optional(),
-        state: z.string().optional(),
-        state_type: z
-          .enum(["triage", "backlog", "unstarted", "started", "completed", "canceled"])
-          .optional(),
-        assignee: z.string().optional().describe("'me'/'@me', email, name, or '*' for any."),
-        unassigned: z.boolean().optional(),
-        label: z.array(z.string()).optional(),
-        priority: z.number().int().min(0).max(4).optional(),
-        cycle: z.string().optional().describe("Cycle name or UUID."),
-        milestone: z.string().optional().describe("Project milestone name or UUID."),
-        updated_since: z
+          .describe("Apply safe autofixes to files before returning results."),
+        strict: z
+          .boolean()
+          .optional()
+          .describe("Set strict_failed=true when remaining warnings exist."),
+        repo_root: z
           .string()
           .optional()
-          .describe("Relative ('7d'/'24h'/'15m') or ISO timestamp."),
-        created_after: z.string().optional(),
-        search: z.string().optional().describe("Full-text across title + body."),
-        include_archived: z.boolean().optional(),
-        limit: z.number().int().min(0).optional().describe("0 = no user cap."),
+          .describe("Repo root for config/cache resolution and relative path handling."),
         workspace: z.string().optional().describe(WORKSPACE_PARAM_DESCRIPTION),
       },
       annotations: {
-        title: "List Linear issues by filter",
-        readOnlyHint: true,
+        title: "Lint local markdown files for Linear renderer quirks",
+        readOnlyHint: false,
+        destructiveHint: false,
         idempotentHint: true,
-        openWorldHint: true,
+        openWorldHint: false,
       },
     },
     safe(async (args) => {
-      const limit = args.limit ?? 50;
-      const max = limit === 0 ? Number.POSITIVE_INFINITY : limit;
-      // Round-6 / A11: validate team existence at the boundary so unknown
-      // team keys surface as `code: not_found` instead of silently filtering
-      // to empty `count: 0`. Matches the loud behavior of `list_projects`
-      // and `list_team_members`. Skipped when `all_teams: true`.
-      if (!args.all_teams && args.team) {
-        const t = await getTeam(args.team as string);
-        if (!t) {
-          throw new NotFoundError(
-            `team not found: ${args.team}`,
-            "use `lebop teams` (or the `list_workspaces` MCP tool) to see available team keys",
-          );
-        }
-      }
-      const issues = await listIssues({
-        resolvedTeam: args.all_teams ? undefined : args.team,
-        team: args.team,
-        allTeams: args.all_teams,
-        project: args.project,
-        projectId: args.project_id,
-        state: args.state,
-        stateType: args.state_type,
-        assignee: args.assignee,
-        unassigned: args.unassigned,
-        label: args.label,
-        priority: args.priority,
-        cycle: args.cycle,
-        milestone: args.milestone,
-        updatedSince: args.updated_since,
-        createdAfter: args.created_after,
-        search: args.search,
-        includeArchived: args.include_archived,
-        max,
+      const result = await lintFiles({
+        paths: args.paths as string[] | undefined,
+        team: args.team as string | undefined,
+        fix: args.fix as boolean | undefined,
+        strict: args.strict as boolean | undefined,
+        repoRoot: args.repo_root as string | undefined,
       });
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(envelope({ count: issues.length, issues }), null, 2),
-          },
-        ],
-      };
+      return text(
+        envelope({
+          files: result.files,
+          warning_count: result.warning_count,
+          fixed_count: result.fixed_count,
+          missing_count: result.missing_count,
+          missing_paths: result.missing_paths,
+          strict_failed: result.strict_failed,
+          cache_mode: result.cache_mode,
+        }),
+      );
     }),
   );
+}
 
+function registerLegacyMcpToolsAfterIssueListBeforeProjects(server: McpServerLike): void {
   // ---------- add_relation ----------
   server.registerTool(
     "add_relation",
@@ -251,12 +291,22 @@ function registerTools(server: McpServer): void {
         from: z.string().describe("Source issue identifier (e.g. 'TEAM-101')."),
         kind: z.enum(LINK_KINDS as readonly [LinkKind, ...LinkKind[]]),
         to: z.string().describe("Target issue identifier."),
+        confirm: z
+          .boolean()
+          .optional()
+          .describe(
+            "Required true only when creating this relation would replace an existing pair relation or create a duplicate relation with workflow side effects.",
+          ),
+        repo_root: z
+          .string()
+          .optional()
+          .describe("Repo root whose local cache should be refreshed after relation mutation."),
         workspace: z.string().optional().describe(WORKSPACE_PARAM_DESCRIPTION),
       },
       annotations: {
         title: "Create a relation between two issues",
         readOnlyHint: false,
-        destructiveHint: false,
+        destructiveHint: true,
         idempotentHint: true,
         openWorldHint: true,
       },
@@ -264,6 +314,8 @@ function registerTools(server: McpServer): void {
     safe(async (args) => {
       const upperFrom = args.from.toUpperCase();
       const upperTo = args.to.toUpperCase();
+      const preflight = await preflightCreateLink(upperFrom, upperTo, args.kind);
+      assertRelationCreateConfirmed(preflight, args.confirm === true);
       const [self, target] = await Promise.all([
         withClient((c) => c.issue(upperFrom)),
         withClient((c) => c.issue(upperTo)),
@@ -278,17 +330,46 @@ function registerTools(server: McpServer): void {
           `link target not found: ${upperTo}`,
           `verify ${upperTo} exists and is visible to your token`,
         );
+      if (preflight.exact) {
+        return text(
+          envelope({
+            from: self.identifier,
+            requested_from: upperFrom,
+            kind: args.kind,
+            to: upperTo,
+            status: "unchanged",
+            relation_id: preflight.exact.id,
+            relation_preflight: preflight,
+            cache: {
+              checked: false,
+              present: false,
+              refreshed: false,
+              identifier: upperFrom,
+            },
+          }),
+        );
+      }
+      const cacheContext = resolveMcpRepoCacheContext(args.repo_root as string | undefined);
       const result = await createLink(self.id, target.id, args.kind);
+      const cache = await refreshCachedIssueByIdentifier(upperFrom, {
+        repoHash: cacheContext.repoHash,
+        repoRoot: cacheContext.repoRoot,
+      });
+      const status = relationMutationStatus("created", cache);
       return {
         content: [
           {
             type: "text",
             text: JSON.stringify(
               envelope({
-                from: upperFrom,
+                from: self.identifier,
+                requested_from: upperFrom,
                 kind: args.kind,
                 to: upperTo,
+                status,
                 relation_id: result.id,
+                relation_preflight: preflight,
+                cache,
               }),
               null,
               2,
@@ -296,6 +377,196 @@ function registerTools(server: McpServer): void {
           },
         ],
       };
+    }),
+  );
+
+  server.registerTool(
+    "update_relations",
+    {
+      title: "Apply relation deltas for one issue",
+      description:
+        "Batch equivalent of `lebop set links`: apply multiple add/remove relation deltas for one source issue in one MCP call. Removals require confirm:true. Adds require confirm:true only when preflight reports relation replacement or duplicate-state side effects.",
+      inputSchema: {
+        from: z.string().describe("Source issue identifier (e.g. 'TEAM-101')."),
+        deltas: z
+          .array(
+            z.object({
+              op: z.enum(["add", "remove", "+", "-"]),
+              kind: z.enum(LINK_KINDS as readonly [LinkKind, ...LinkKind[]]),
+              to: z.string().describe("Target issue identifier."),
+            }),
+          )
+          .min(1)
+          .describe("Relation deltas to apply in order."),
+        confirm: z
+          .boolean()
+          .optional()
+          .describe(
+            "Required true when any delta removes a relation, or when an add preflight reports replacement/duplicate side effects.",
+          ),
+        repo_root: z
+          .string()
+          .optional()
+          .describe("Repo root whose local cache should be refreshed after relation mutations."),
+        workspace: z.string().optional().describe(WORKSPACE_PARAM_DESCRIPTION),
+      },
+      annotations: {
+        title: "Apply relation deltas for one issue",
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: true,
+        openWorldHint: true,
+      },
+    },
+    safe(async (args) => {
+      const upperFrom = (args.from as string).toUpperCase();
+      const deltas = ((args.deltas as Array<{ op: string; kind: LinkKind; to: string }>) ?? []).map(
+        (delta): LinkDelta =>
+          parseLinkToken(
+            `${delta.op === "add" || delta.op === "+" ? "+" : "-"}${delta.kind}:${delta.to}`,
+          ),
+      );
+      if (
+        deltas.some((delta) => delta.op === "-") ||
+        relationBatchAddsRequireConfirmation(deltas)
+      ) {
+        requireConfirm(args, "update_relations");
+      }
+
+      const self = await withClient((c) => c.issue(upperFrom));
+      if (!self) {
+        throw new NotFoundError(
+          `issue not found: ${upperFrom}`,
+          `verify ${upperFrom} exists and is visible to your token`,
+        );
+      }
+
+      const uniqueTargets = [...new Set(deltas.map((delta) => delta.target))];
+      const targetMap = new Map<string, string>();
+      await Promise.all(
+        uniqueTargets.map(async (targetIdentifier) => {
+          const target = await withClient((c) => c.issue(targetIdentifier));
+          if (!target) {
+            throw new NotFoundError(
+              `link target not found: ${targetIdentifier}`,
+              `verify ${targetIdentifier} exists and is visible to your token`,
+            );
+          }
+          targetMap.set(targetIdentifier, target.id);
+        }),
+      );
+
+      const confirmed = args.confirm === true;
+      const createPreflights = new Map<string, Awaited<ReturnType<typeof preflightCreateLink>>>();
+      for (const delta of deltas.filter((entry) => entry.op === "+")) {
+        const key = relationDeltaKey(delta);
+        if (createPreflights.has(key)) continue;
+        const preflight = await preflightCreateLink(self.identifier, delta.target, delta.kind);
+        assertRelationCreateConfirmed(preflight, confirmed);
+        createPreflights.set(key, preflight);
+      }
+
+      const results: Array<{
+        op: "+" | "-";
+        kind: LinkKind;
+        to: string;
+        status:
+          | "created"
+          | "deleted"
+          | "unchanged"
+          | "already-absent"
+          | "created-writeback-failed"
+          | "deleted-writeback-failed"
+          | "error";
+        relation_id?: string;
+        relation_preflight?: Awaited<ReturnType<typeof preflightCreateLink>>;
+        error?: string;
+      }> = [];
+
+      const dirtyPairs = new Set<string>();
+      for (const delta of deltas) {
+        try {
+          if (delta.op === "+") {
+            const pairKey = relationPairKey(delta.target);
+            const preflight = dirtyPairs.has(pairKey)
+              ? await preflightCreateLink(self.identifier, delta.target, delta.kind)
+              : createPreflights.get(relationDeltaKey(delta));
+            if (preflight) assertRelationCreateConfirmed(preflight, confirmed);
+            if (preflight?.exact) {
+              results.push({
+                op: "+",
+                kind: delta.kind,
+                to: delta.target,
+                status: "unchanged",
+                relation_id: preflight.exact.id,
+                relation_preflight: preflight,
+              });
+              continue;
+            }
+            const targetId = targetMap.get(delta.target);
+            if (!targetId) throw new NotFoundError(`link target not found: ${delta.target}`);
+            const created = await createLink(self.id, targetId, delta.kind);
+            dirtyPairs.add(pairKey);
+            results.push({
+              op: "+",
+              kind: delta.kind,
+              to: delta.target,
+              status: "created",
+              relation_id: created.id,
+              ...(preflight ? { relation_preflight: preflight } : {}),
+            });
+          } else {
+            const relationId = await findLink(self.identifier, delta.target, delta.kind);
+            if (!relationId) {
+              results.push({
+                op: "-",
+                kind: delta.kind,
+                to: delta.target,
+                status: "already-absent",
+              });
+              continue;
+            }
+            await deleteLink(relationId);
+            dirtyPairs.add(relationPairKey(delta.target));
+            results.push({
+              op: "-",
+              kind: delta.kind,
+              to: delta.target,
+              status: "deleted",
+              relation_id: relationId,
+            });
+          }
+        } catch (err) {
+          results.push({
+            op: delta.op,
+            kind: delta.kind,
+            to: delta.target,
+            status: "error",
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+
+      const cacheContext = resolveMcpRepoCacheContext(args.repo_root as string | undefined);
+      const cache = await refreshCachedIssueByIdentifier(self.identifier, {
+        repoHash: cacheContext.repoHash,
+        repoRoot: cacheContext.repoRoot,
+      });
+      if (relationWritebackFailed(cache)) {
+        for (const result of results) {
+          if (result.status === "created") result.status = "created-writeback-failed";
+          if (result.status === "deleted") result.status = "deleted-writeback-failed";
+        }
+      }
+
+      return text(
+        envelope({
+          from: self.identifier,
+          requested_from: upperFrom,
+          results,
+          cache,
+        }),
+      );
     }),
   );
 
@@ -330,6 +601,68 @@ function registerTools(server: McpServer): void {
     }),
   );
 
+  server.registerTool(
+    "delete_relation",
+    {
+      title: "Delete a relation between two issues",
+      description:
+        "Remove a Linear relation. Idempotent at the pair level: returns status='already-absent' when no matching relation exists.",
+      inputSchema: {
+        from: z.string().describe("Source issue identifier (e.g. 'TEAM-101')."),
+        kind: z.enum(LINK_KINDS as readonly [LinkKind, ...LinkKind[]]),
+        to: z.string().describe("Target issue identifier."),
+        confirm: z.boolean().optional().describe("Required true for deletion."),
+        repo_root: z
+          .string()
+          .optional()
+          .describe("Repo root whose local cache should be refreshed after relation mutation."),
+        workspace: z.string().optional().describe(WORKSPACE_PARAM_DESCRIPTION),
+      },
+      annotations: {
+        title: "Delete a relation between two issues",
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: true,
+        openWorldHint: true,
+      },
+    },
+    safe(async (args) => {
+      requireConfirm(args, "delete_relation");
+      const upperFrom = (args.from as string).toUpperCase();
+      const upperTo = (args.to as string).toUpperCase();
+      const kind = args.kind as LinkKind;
+      const relationId = await findLink(upperFrom, upperTo, kind);
+      if (!relationId) {
+        return text(
+          envelope({
+            op: "delete",
+            from: upperFrom,
+            kind,
+            to: upperTo,
+            status: "already-absent",
+          }),
+        );
+      }
+      const cacheContext = resolveMcpRepoCacheContext(args.repo_root as string | undefined);
+      await deleteLink(relationId);
+      const cache = await refreshCachedIssueByIdentifier(upperFrom, {
+        repoHash: cacheContext.repoHash,
+        repoRoot: cacheContext.repoRoot,
+      });
+      return text(
+        envelope({
+          op: "delete",
+          from: upperFrom,
+          kind,
+          to: upperTo,
+          status: relationMutationStatus("deleted", cache),
+          relation_id: relationId,
+          cache,
+        }),
+      );
+    }),
+  );
+
   // ---------- labels ----------
   server.registerTool(
     "list_labels",
@@ -340,7 +673,9 @@ function registerTools(server: McpServer): void {
         team: z
           .string()
           .optional()
-          .describe("Team key. Omit + workspace_only=true for workspace labels."),
+          .describe(
+            "Team key. Omit to use the configured default team; pass all=true for every visible label or workspace_only=true for workspace labels.",
+          ),
         workspace_only: z.boolean().optional(),
         all: z.boolean().optional(),
         workspace: z.string().optional().describe(WORKSPACE_PARAM_DESCRIPTION),
@@ -353,26 +688,33 @@ function registerTools(server: McpServer): void {
       },
     },
     safe(async (args) => {
-      // Round-6 / A11: same team-existence pre-check as list_issues. When
-      // a `team` arg is passed without `workspace_only`/`all`, validate it
-      // exists so callers get `code: not_found` instead of `count: <random>`
-      // (labels are partially workspace-scoped, so a bad team key silently
-      // returned the workspace-wide labels — confusing).
-      if (!args.workspace_only && !args.all && args.team) {
-        const t = await getTeam(args.team as string);
+      const resolvedTeam =
+        args.workspace_only || args.all
+          ? undefined
+          : (await resolveConfig({ teamOverride: args.team as string | undefined })).team;
+      // When a `team` arg is passed without `workspace_only`/`all`, validate
+      // it exists so callers get `code: not_found` instead of workspace-wide
+      // labels from the partially workspace-scoped label API.
+      if (!args.workspace_only && !args.all && resolvedTeam) {
+        const t = await getTeam(resolvedTeam);
         if (!t) {
           throw new NotFoundError(
-            `team not found: ${args.team}`,
+            `team not found: ${resolvedTeam}`,
             "use `lebop teams` to see available team keys; or pass `workspace_only: true` to skip team scoping",
           );
         }
       }
       const labels = await listLabels({
-        team: args.workspace_only || args.all ? undefined : args.team,
+        team: resolvedTeam,
         workspaceOnly: args.workspace_only,
         all: args.all,
       });
-      return text(envelope({ count: labels.length, labels }));
+      const scope = args.all
+        ? { type: "all" as const, team: null }
+        : args.workspace_only
+          ? { type: "workspace" as const, team: null }
+          : { type: "team" as const, team: resolvedTeam ?? null };
+      return text(envelope({ scope, team: resolvedTeam ?? null, count: labels.length, labels }));
     }),
   );
 
@@ -381,16 +723,20 @@ function registerTools(server: McpServer): void {
     {
       title: "Create a Linear label",
       description:
-        'Create a team-scoped or workspace-scoped label. Pass `scope: "team"` with `team_id` for a team label, or `scope: "workspace"` (with no team_id) for a workspace-wide label. NOT retry-wrapped (would duplicate).',
+        'Create a team-scoped or workspace-scoped label. Pass `scope: "team"` with `team` (key) or `team_id` (UUID) for a team label, or `scope: "workspace"` for a workspace-wide label. NOT retry-wrapped (would duplicate).',
       inputSchema: {
         name: z.string(),
         scope: z
           .enum(["team", "workspace"])
           .optional()
           .describe(
-            "Discriminator: 'team' requires team_id; 'workspace' forbids team_id. Backward-compat: if omitted, presence of team_id selects 'team', absence selects 'workspace'.",
+            "Discriminator: 'team' uses team/team_id or the configured default team; 'workspace' forbids both. Defaults to team scope for CLI parity.",
           ),
-        team_id: z.string().optional().describe("Team UUID (NOT key). Required when scope='team'."),
+        team: z
+          .string()
+          .optional()
+          .describe("Team key, e.g. NOX. Mutually exclusive with team_id."),
+        team_id: z.string().optional().describe("Team UUID. Mutually exclusive with team."),
         color: z.string().optional().describe("Hex color (e.g. '#ff0000')."),
         description: z.string().optional(),
         workspace: z.string().optional().describe(WORKSPACE_PARAM_DESCRIPTION),
@@ -404,30 +750,44 @@ function registerTools(server: McpServer): void {
       },
     },
     safe(async (args) => {
-      // Cross-field validation for scope discriminator. Defaults preserve
-      // pre-wave-2 behavior so existing callers don't break: team_id present
-      // → team; otherwise workspace. New callers should pass scope explicitly.
       const scope: "team" | "workspace" =
-        (args.scope as "team" | "workspace" | undefined) ?? (args.team_id ? "team" : "workspace");
-      if (scope === "team" && !args.team_id) {
+        (args.scope as "team" | "workspace" | undefined) ?? "team";
+      if (args.team && args.team_id) {
         throw new ValidationError(
-          "scope='team' requires team_id",
-          "pass a team UUID via team_id, or set scope='workspace' for a workspace-wide label",
+          "create_label accepts either team or team_id, not both",
+          "pass team for a key selector, or team_id for a UUID selector",
         );
       }
-      if (scope === "workspace" && args.team_id) {
+      if (scope === "workspace" && (args.team || args.team_id)) {
         throw new ValidationError(
-          "scope='workspace' forbids team_id",
-          "drop team_id, or set scope='team' to scope the label to that team",
+          "scope='workspace' forbids team and team_id",
+          "drop team/team_id, or set scope='team' to scope the label to that team",
         );
       }
+      const config =
+        scope === "team" && !args.team_id ? await resolveConfig({ teamOverride: args.team }) : null;
+      const teamId =
+        scope === "team"
+          ? (args.team_id ?? (await resolveTeamSelectorToId(config?.team as string)))
+          : undefined;
       const label = await createLabel({
         name: args.name,
-        teamId: scope === "team" ? (args.team_id as string) : undefined,
+        teamId,
         color: args.color,
         description: args.description,
       });
-      return text(envelope({ label }));
+      await invalidateTeamMetadata(
+        config?.repoHash ?? resolveMcpRepoCacheContext(undefined).repoHash,
+        scope === "team" ? (label.team?.key ?? config?.team) : undefined,
+      );
+      return text(
+        envelope({
+          label,
+          scope,
+          team: scope === "team" ? (label.team?.key ?? config?.team ?? null) : null,
+          team_id: teamId ?? null,
+        }),
+      );
     }),
   );
 
@@ -436,11 +796,21 @@ function registerTools(server: McpServer): void {
     {
       title: "Delete a Linear label",
       description:
-        "Delete by UUID. Idempotent — re-deleting an already-absent label returns `{status: 'already-absent'}` without error. Round-7 / Q2.",
+        "Delete by UUID or exact label name. Requires confirm:true. Idempotent — re-deleting an already-absent UUID returns `{status: 'already-absent'}` without error.",
       inputSchema: {
-        id: z
+        id: z.string().optional().describe("Label UUID. Preserved for backward compatibility."),
+        name_or_id: z
           .string()
-          .describe("Label UUID. Use lookup_label_by_name first if you only have the name."),
+          .optional()
+          .describe("Label name or UUID. When a name is passed, team can scope lookup."),
+        scope: z
+          .enum(["team", "workspace"])
+          .optional()
+          .describe(
+            "Name lookup scope. Defaults to team scope using team or configured default team.",
+          ),
+        team: z.string().optional().describe("Team key for name lookup."),
+        confirm: z.boolean().optional().describe("Required true for deletion."),
         workspace: z.string().optional().describe(WORKSPACE_PARAM_DESCRIPTION),
       },
       annotations: {
@@ -452,8 +822,46 @@ function registerTools(server: McpServer): void {
       },
     },
     safe(async (args) => {
-      const { status } = await tryIdempotentDelete(() => deleteLabel(args.id));
-      return text(envelope({ id: args.id, status, success: status === "deleted" }));
+      requireConfirm(args, "delete_label");
+      if (args.id && args.name_or_id) {
+        throw new ValidationError(
+          "delete_label accepts either id or name_or_id, not both",
+          "pass id for UUID deletion, or name_or_id with optional team for name lookup",
+        );
+      }
+      const selector = args.id ?? args.name_or_id;
+      if (!selector) {
+        throw new ValidationError(
+          "delete_label requires id or name_or_id",
+          "pass id for UUID deletion, or name_or_id with optional team for name lookup",
+        );
+      }
+      const scope = (args.scope as "team" | "workspace" | undefined) ?? "team";
+      if (scope === "workspace" && args.team) {
+        throw new ValidationError(
+          "scope='workspace' forbids team",
+          "drop team, or set scope='team' to delete a team-scoped label",
+        );
+      }
+      const resolved = await resolveLabelSelectorToId(selector, scope, args.team);
+      const id = resolved.id;
+      const { status } = await tryIdempotentDelete(() => deleteLabel(id));
+      if (status === "deleted") {
+        await invalidateTeamMetadata(
+          resolveMcpRepoCacheContext(undefined).repoHash,
+          resolved.team ?? undefined,
+        );
+      }
+      return text(
+        envelope({
+          id,
+          selector,
+          scope: resolved.scope,
+          team: resolved.team,
+          status,
+          success: status === "deleted",
+        }),
+      );
     }),
   );
 
@@ -461,9 +869,14 @@ function registerTools(server: McpServer): void {
     "lookup_label_by_name",
     {
       title: "Resolve a label name to a UUID",
-      description: "Returns the matching label or null. Useful before delete_label.",
+      description:
+        "Returns the matching label in the same scope semantics used by delete_label. Defaults to team scope.",
       inputSchema: {
         name: z.string(),
+        scope: z
+          .enum(["team", "workspace"])
+          .optional()
+          .describe("Lookup scope. Defaults to team scope using team or configured default team."),
         team: z.string().optional(),
         workspace: z.string().optional().describe(WORKSPACE_PARAM_DESCRIPTION),
       },
@@ -475,8 +888,22 @@ function registerTools(server: McpServer): void {
       },
     },
     safe(async (args) => {
-      const label = await resolveLabelByName(args.name, args.team);
-      return text(envelope({ label }));
+      const scope = (args.scope as "team" | "workspace" | undefined) ?? "team";
+      try {
+        const resolved = await resolveLabelSelectorToId(args.name, scope, args.team);
+        return text(
+          envelope({
+            label: resolved.label,
+            scope: resolved.scope,
+            team: resolved.team,
+          }),
+        );
+      } catch (err) {
+        if (err instanceof NotFoundError) {
+          return text(envelope({ label: null, scope, team: args.team ?? null }));
+        }
+        throw err;
+      }
     }),
   );
 
@@ -486,7 +913,7 @@ function registerTools(server: McpServer): void {
     {
       title: "List project milestones",
       description:
-        "List milestones; pass project to filter to one project (name or UUID). Each milestone includes `archived_at` (string | null). Defaults to live milestones only — pass `include_archived: true` to also surface cascade-archived rows (parent-project archived). Round-7 / HIGH-2.",
+        "List milestones; pass project to filter to one project (name or UUID). Each milestone includes `archived_at` (string | null). Defaults to live milestones only — pass `include_archived: true` to also surface cascade-archived rows (parent-project archived).",
       inputSchema: {
         project: z.string().optional().describe("Project name or UUID."),
         include_archived: z
@@ -505,7 +932,7 @@ function registerTools(server: McpServer): void {
     safe(async (args) => {
       let projectId: string | undefined;
       if (args.project) {
-        const resolved = await resolveProjectId(args.project);
+        const resolved = await resolveExistingProjectId(args.project);
         if (!resolved)
           throw new NotFoundError(
             `project not found: ${args.project}`,
@@ -526,7 +953,7 @@ function registerTools(server: McpServer): void {
     {
       title: "Get one milestone by UUID",
       description:
-        "Returns the milestone or null. Cascade-archived milestones (parent-project archived) are surfaced — distinguish via `archived_at`. Uses an archive-resilient list-shape query (the single-record `projectMilestone(id:)` getter silently drops cascade-archived rows; see docs/spec.md §12.1).",
+        "Returns one milestone. Missing ids surface as structured not_found errors, matching `lebop milestone view --json`. Cascade-archived milestones (parent-project archived) are surfaced — distinguish via `archived_at`. Uses an archive-resilient list-shape query (the single-record `projectMilestone(id:)` getter silently drops cascade-archived rows; see docs/spec.md §12.1).",
       inputSchema: {
         id: z.string(),
         workspace: z.string().optional().describe(WORKSPACE_PARAM_DESCRIPTION),
@@ -539,7 +966,12 @@ function registerTools(server: McpServer): void {
       },
     },
     safe(async (args) => {
-      const milestone = await getMilestone(args.id);
+      const milestone = requireMcpEntity(
+        await getMilestone(args.id),
+        "milestone",
+        args.id,
+        "verify the milestone UUID; run list_milestones to discover ids",
+      );
       return text(envelope({ milestone }));
     }),
   );
@@ -566,7 +998,7 @@ function registerTools(server: McpServer): void {
       },
     },
     safe(async (args) => {
-      const projectId = await resolveProjectId(args.project);
+      const projectId = await resolveExistingProjectId(args.project);
       if (!projectId)
         throw new NotFoundError(
           `project not found: ${args.project}`,
@@ -639,9 +1071,10 @@ function registerTools(server: McpServer): void {
     {
       title: "Delete a milestone",
       description:
-        "Delete a milestone by UUID. Idempotent — re-deleting an already-absent milestone returns `{status: 'already-absent'}`. Round-7 / Q2.",
+        "Delete a milestone by UUID. Idempotent — re-deleting an already-absent milestone returns `{status: 'already-absent'}`.",
       inputSchema: {
         id: z.string(),
+        confirm: z.boolean().optional().describe("Required true for deletion."),
         workspace: z.string().optional().describe(WORKSPACE_PARAM_DESCRIPTION),
       },
       annotations: {
@@ -653,171 +1086,14 @@ function registerTools(server: McpServer): void {
       },
     },
     safe(async (args) => {
+      requireConfirm(args, "delete_milestone");
       const { status } = await tryIdempotentDelete(() => deleteMilestone(args.id));
       return text(envelope({ id: args.id, status, success: status === "deleted" }));
     }),
   );
+}
 
-  // ---------- projects ----------
-  server.registerTool(
-    "list_projects",
-    {
-      title: "List Linear projects",
-      description: "List projects scoped to a team (default) or workspace-wide.",
-      inputSchema: {
-        team: z.string().optional().describe("Team key. Omit for workspace-wide."),
-        state: z.string().optional(),
-        limit: z.number().int().min(0).optional(),
-        workspace: z.string().optional().describe(WORKSPACE_PARAM_DESCRIPTION),
-      },
-      annotations: {
-        title: "List Linear projects",
-        readOnlyHint: true,
-        idempotentHint: true,
-        openWorldHint: true,
-      },
-    },
-    safe(async (args) => {
-      const limit = args.limit ?? 50;
-      const max = limit === 0 ? Number.POSITIVE_INFINITY : limit;
-      const records = await listProjects({ team: args.team, state: args.state, max });
-      // Wave-3 minor parity: include `team` in the envelope to mirror
-      // `lebop projects --json`. Null for workspace-wide listings.
-      return text(
-        envelope({
-          team: (args.team as string | null | undefined) ?? null,
-          count: records.length,
-          projects: records,
-        }),
-      );
-    }),
-  );
-
-  server.registerTool(
-    "get_project",
-    {
-      title: "Get one project by UUID",
-      description: "Returns the project (with content + lead + teams) or null.",
-      inputSchema: {
-        id: z.string(),
-        workspace: z.string().optional().describe(WORKSPACE_PARAM_DESCRIPTION),
-      },
-      annotations: {
-        title: "Get one project by UUID",
-        readOnlyHint: true,
-        idempotentHint: true,
-        openWorldHint: true,
-      },
-    },
-    safe(async (args) => {
-      const project = await getProject(args.id);
-      return text(envelope({ project }));
-    }),
-  );
-
-  server.registerTool(
-    "create_project",
-    {
-      title: "Create a project",
-      description: "Requires team_ids (UUIDs). NOT retry-wrapped (would duplicate).",
-      inputSchema: {
-        name: z.string(),
-        team_ids: z.array(z.string()).describe("Team UUIDs (NOT keys)."),
-        description: z.string().optional(),
-        content: z.string().optional(),
-        state: z.string().optional(),
-        start_date: z.string().optional(),
-        target_date: z.string().optional(),
-        workspace: z.string().optional().describe(WORKSPACE_PARAM_DESCRIPTION),
-      },
-      annotations: {
-        title: "Create a project",
-        readOnlyHint: false,
-        destructiveHint: false,
-        idempotentHint: false,
-        openWorldHint: true,
-      },
-    },
-    safe(async (args) => {
-      const project = await createProject({
-        name: args.name,
-        teamIds: args.team_ids,
-        description: args.description,
-        content: args.content,
-        state: args.state,
-        startDate: args.start_date,
-        targetDate: args.target_date,
-      });
-      return text(envelope({ project }));
-    }),
-  );
-
-  server.registerTool(
-    "update_project",
-    {
-      title: "Update a project",
-      description: "Idempotent at the value level — safe to retry.",
-      inputSchema: {
-        id: z.string(),
-        name: z.string().optional(),
-        description: z.string().optional(),
-        content: z.string().optional(),
-        state: z.string().optional(),
-        start_date: z.union([z.string(), z.null()]).optional(),
-        target_date: z.union([z.string(), z.null()]).optional(),
-        workspace: z.string().optional().describe(WORKSPACE_PARAM_DESCRIPTION),
-      },
-      annotations: {
-        title: "Update a project",
-        readOnlyHint: false,
-        destructiveHint: false,
-        idempotentHint: true,
-        openWorldHint: true,
-      },
-    },
-    safe(async (args) => {
-      const input: Parameters<typeof updateProject>[1] = {};
-      if (args.name !== undefined) input.name = args.name;
-      if (args.description !== undefined) input.description = args.description;
-      if (args.content !== undefined) input.content = args.content;
-      if (args.state !== undefined) input.state = args.state;
-      if (args.start_date !== undefined) input.startDate = args.start_date;
-      if (args.target_date !== undefined) input.targetDate = args.target_date;
-      if (Object.keys(input).length === 0) {
-        throw new ValidationError(
-          "nothing to update — pass at least one field",
-          "pass at least one of the optional update fields",
-        );
-      }
-      const project = await updateProject(args.id, input);
-      return text(envelope({ project }));
-    }),
-  );
-
-  server.registerTool(
-    "delete_project",
-    {
-      title: "Delete a project",
-      description:
-        "Delete a project by UUID. Soft delete server-side (sets `archived_at`); not user-restorable via Linear's standard UI flows. Idempotent — re-deleting an already-soft-deleted project returns `{status: 'already-absent'}`. Round-7 / Q2.",
-      inputSchema: {
-        id: z.string(),
-        workspace: z.string().optional().describe(WORKSPACE_PARAM_DESCRIPTION),
-      },
-      annotations: {
-        title: "Delete a project",
-        readOnlyHint: false,
-        destructiveHint: true,
-        idempotentHint: true,
-        openWorldHint: true,
-      },
-    },
-    safe(async (args) => {
-      const { status } = await tryIdempotentDelete(() => deleteProject(args.id));
-      return text(envelope({ id: args.id, status, success: status === "deleted" }));
-    }),
-  );
-
+function registerLegacyMcpToolsAfterProjectsBeforeIssueLifecycle(server: McpServerLike): void {
   // ---------- project updates (with health) ----------
   server.registerTool(
     "list_project_updates",
@@ -868,6 +1144,7 @@ function registerTools(server: McpServer): void {
       },
     },
     safe(async (args) => {
+      assertProjectUpdateBody(args.body);
       const projectId = await resolveProjectId(args.project);
       if (!projectId)
         throw new NotFoundError(
@@ -920,7 +1197,8 @@ function registerTools(server: McpServer): void {
     "get_initiative",
     {
       title: "Get one initiative (with linked projects)",
-      description: "Returns null if not found. `id` accepts UUID or initiative name.",
+      description:
+        "Returns one initiative. Missing ids/names surface as structured not_found errors, matching `lebop initiative view --json`. `id` accepts UUID or initiative name.",
       inputSchema: {
         id: z
           .string()
@@ -936,9 +1214,23 @@ function registerTools(server: McpServer): void {
     },
     safe(async (args) => {
       const resolved = await resolveInitiativeId(args.id as string);
-      if (!resolved) return text(envelope({ initiative: null }));
+      if (!resolved) {
+        throw new NotFoundError(
+          `initiative not found: ${args.id}`,
+          "verify the initiative UUID/name; run list_initiatives to discover ids",
+        );
+      }
       const initiative = await getInitiative(resolved);
-      return text(envelope({ initiative }));
+      return text(
+        envelope({
+          initiative: requireMcpEntity(
+            initiative,
+            "initiative",
+            args.id as string,
+            "verify the initiative UUID/name; run list_initiatives to discover ids",
+          ),
+        }),
+      );
     }),
   );
 
@@ -958,7 +1250,7 @@ function registerTools(server: McpServer): void {
           .string()
           .optional()
           .describe(
-            "Linear internal icon name (PascalCase, e.g. 'BarChart', 'Rocket', 'Target'). Emoji and arbitrary strings are rejected. Omit if unsure.",
+            "Linear internal icon name (PascalCase, e.g. 'BarChart', 'Rocket', 'Target'). Emoji are rejected locally; invalid non-emoji names may be rejected by Linear. Omit if unsure.",
           ),
         workspace: z.string().optional().describe(WORKSPACE_PARAM_DESCRIPTION),
       },
@@ -991,10 +1283,8 @@ function registerTools(server: McpServer): void {
       description:
         "Idempotent at the value level — safe to retry. The `id` field accepts a UUID OR an initiative name (resolved via `resolveInitiativeId`, matching the behavior of `get_initiative` and `archive_initiative`).",
       inputSchema: {
-        // Round-6 / A20: name lookup parity. `get_initiative` and
-        // `archive_initiative` already accept either a UUID or a name;
-        // `update_initiative` previously required a UUID only. We now route
-        // both through `resolveInitiativeId` for consistency.
+        // Keep initiative lookup parity with sibling tools: UUIDs and exact
+        // initiative names both route through `resolveInitiativeId`.
         id: z.string().describe("Initiative UUID OR name (resolved server-side)."),
         name: z.string().optional(),
         description: z.string().optional(),
@@ -1006,7 +1296,7 @@ function registerTools(server: McpServer): void {
           .string()
           .optional()
           .describe(
-            "Linear internal icon name (PascalCase, e.g. 'BarChart', 'Rocket', 'Target'). Emoji and arbitrary strings are rejected. Omit if unsure.",
+            "Linear internal icon name (PascalCase, e.g. 'BarChart', 'Rocket', 'Target'). Emoji are rejected locally; invalid non-emoji names may be rejected by Linear. Omit if unsure.",
           ),
         workspace: z.string().optional().describe(WORKSPACE_PARAM_DESCRIPTION),
       },
@@ -1032,7 +1322,7 @@ function registerTools(server: McpServer): void {
           "nothing to update — pass at least one field",
           "pass at least one of the optional update fields",
         );
-      // Round-6 / A20: accept name OR UUID — siblings already do.
+      // Accept name OR UUID, matching the sibling initiative tools.
       const initiativeId = await resolveInitiativeId(args.id as string);
       if (!initiativeId) {
         throw new NotFoundError(
@@ -1054,6 +1344,7 @@ function registerTools(server: McpServer): void {
         id: z
           .string()
           .describe("Initiative UUID OR exact name (resolved via `resolveInitiativeId`)."),
+        confirm: z.boolean().optional().describe("Required true for destructive execution."),
         workspace: z.string().optional().describe(WORKSPACE_PARAM_DESCRIPTION),
       },
       annotations: {
@@ -1065,6 +1356,7 @@ function registerTools(server: McpServer): void {
       },
     },
     safe(async (args) => {
+      requireConfirm(args as { confirm?: boolean }, "archive_initiative");
       const initiativeId = await resolveInitiativeId(args.id);
       if (!initiativeId) throw new NotFoundError(`initiative not found: ${args.id}`);
       const success = await archiveInitiative(initiativeId);
@@ -1104,11 +1396,12 @@ function registerTools(server: McpServer): void {
     {
       title: "Delete an initiative permanently",
       description:
-        "Delete an initiative by UUID or exact name. Soft delete server-side (sets `archived_at`); not user-restorable via Linear's standard UI flows. Idempotent — re-deleting an already-soft-deleted initiative returns `{status: 'already-absent'}`. Round-7 / Q2.",
+        "Delete an initiative by UUID or exact name. Soft delete server-side (sets `archived_at`); not user-restorable via Linear's standard UI flows. Idempotent — re-deleting an already-soft-deleted initiative returns `{status: 'already-absent'}`.",
       inputSchema: {
         id: z
           .string()
           .describe("Initiative UUID OR exact name (resolved via `resolveInitiativeId`)."),
+        confirm: z.boolean().optional().describe("Required true for deletion."),
         workspace: z.string().optional().describe(WORKSPACE_PARAM_DESCRIPTION),
       },
       annotations: {
@@ -1120,9 +1413,9 @@ function registerTools(server: McpServer): void {
       },
     },
     safe(async (args) => {
-      // Round-9 / M-1: envelope `id` is null when name lookup fails so
-      // callers don't get a name-string in one branch and a UUID in the
-      // other. `query` carries the original lookup token.
+      requireConfirm(args as { confirm?: boolean }, "delete_initiative");
+      // Keep the envelope shape stable when name lookup fails: `id` is null
+      // and `query` carries the original lookup token.
       const initiativeId = await resolveInitiativeId(args.id);
       if (!initiativeId)
         return text(
@@ -1155,7 +1448,7 @@ function registerTools(server: McpServer): void {
       },
     },
     safe(async (args) => {
-      const initiativeId = await resolveInitiativeId(args.initiative);
+      const initiativeId = await resolveExistingInitiativeId(args.initiative);
       if (!initiativeId)
         throw new NotFoundError(
           `initiative not found: ${args.initiative}`,
@@ -1191,6 +1484,7 @@ function registerTools(server: McpServer): void {
       inputSchema: {
         initiative: z.string(),
         project: z.string(),
+        confirm: z.boolean().optional().describe("Required true for destructive execution."),
         workspace: z.string().optional().describe(WORKSPACE_PARAM_DESCRIPTION),
       },
       annotations: {
@@ -1202,6 +1496,7 @@ function registerTools(server: McpServer): void {
       },
     },
     safe(async (args) => {
+      requireConfirm(args as { confirm?: boolean }, "initiative_remove_project");
       const initiativeId = await resolveInitiativeId(args.initiative);
       if (!initiativeId)
         throw new NotFoundError(
@@ -1273,6 +1568,7 @@ function registerTools(server: McpServer): void {
       },
     },
     safe(async (args) => {
+      assertInitiativeUpdateBody(args.body);
       const initiativeId = await resolveInitiativeId(args.initiative);
       if (!initiativeId)
         throw new NotFoundError(
@@ -1295,7 +1591,11 @@ function registerTools(server: McpServer): void {
       title: "List cycles for a team (or all teams)",
       description: "Cycles are read-only via lebop — manage in the Linear UI.",
       inputSchema: {
-        team: z.string().optional(),
+        team: z.string().optional().describe("Team key. Omit to use the configured default team."),
+        all_teams: z
+          .boolean()
+          .optional()
+          .describe("Drop the team filter for workspace-wide cycle listing."),
         limit: z.number().int().min(0).optional(),
         workspace: z.string().optional().describe(WORKSPACE_PARAM_DESCRIPTION),
       },
@@ -1309,8 +1609,20 @@ function registerTools(server: McpServer): void {
     safe(async (args) => {
       const limit = args.limit ?? 50;
       const max = limit === 0 ? Number.POSITIVE_INFINITY : limit;
-      const cycles = await listCycles({ team: args.team, max });
-      return text(envelope({ count: cycles.length, cycles }));
+      const team = args.all_teams
+        ? undefined
+        : (await resolveConfig({ teamOverride: args.team as string | undefined })).team;
+      if (!args.all_teams && team) {
+        const resolvedTeam = await getTeam(team);
+        if (!resolvedTeam) {
+          throw new NotFoundError(
+            `team not found: ${team}`,
+            "use list_teams to see available team keys, or pass all_teams: true to skip team scoping",
+          );
+        }
+      }
+      const cycles = await listCycles({ team, max });
+      return text(envelope({ team: args.all_teams ? "*" : team, count: cycles.length, cycles }));
     }),
   );
 
@@ -1318,7 +1630,8 @@ function registerTools(server: McpServer): void {
     "get_cycle",
     {
       title: "Get one cycle by UUID",
-      description: "Returns null if not found.",
+      description:
+        "Returns one cycle. Missing ids surface as structured not_found errors, matching `lebop cycle view --json`.",
       inputSchema: {
         id: z.string(),
         workspace: z.string().optional().describe(WORKSPACE_PARAM_DESCRIPTION),
@@ -1331,7 +1644,12 @@ function registerTools(server: McpServer): void {
       },
     },
     safe(async (args) => {
-      const cycle = await getCycle(args.id);
+      const cycle = requireMcpEntity(
+        await getCycle(args.id),
+        "cycle",
+        args.id,
+        "verify the cycle UUID; run list_cycles to discover ids",
+      );
       return text(envelope({ cycle }));
     }),
   );
@@ -1357,7 +1675,7 @@ function registerTools(server: McpServer): void {
     safe(async (args) => {
       let projectId: string | undefined;
       if (args.project) {
-        const resolved = await resolveProjectId(args.project);
+        const resolved = await resolveExistingProjectId(args.project);
         if (!resolved)
           throw new NotFoundError(
             `project not found: ${args.project}`,
@@ -1376,7 +1694,8 @@ function registerTools(server: McpServer): void {
     "get_document",
     {
       title: "Get one document by UUID (with content)",
-      description: "Returns null if not found.",
+      description:
+        "Returns one document with content. Missing ids surface as structured not_found errors, matching `lebop document view --json`.",
       inputSchema: {
         id: z.string(),
         workspace: z.string().optional().describe(WORKSPACE_PARAM_DESCRIPTION),
@@ -1389,7 +1708,12 @@ function registerTools(server: McpServer): void {
       },
     },
     safe(async (args) => {
-      const document = await getDocument(args.id);
+      const document = requireMcpEntity(
+        await getDocument(args.id),
+        "document",
+        args.id,
+        "verify the document UUID; run list_documents to discover ids",
+      );
       return text(envelope({ document }));
     }),
   );
@@ -1407,7 +1731,7 @@ function registerTools(server: McpServer): void {
           .string()
           .optional()
           .describe(
-            "Linear internal icon name (PascalCase, e.g. 'BarChart', 'Rocket', 'Target'). Emoji and arbitrary strings are rejected. Omit if unsure.",
+            "Linear internal icon name (PascalCase, e.g. 'BarChart', 'Rocket', 'Target'). Emoji are rejected locally; invalid non-emoji names may be rejected by Linear. Omit if unsure.",
           ),
         workspace: z.string().optional().describe(WORKSPACE_PARAM_DESCRIPTION),
       },
@@ -1476,9 +1800,10 @@ function registerTools(server: McpServer): void {
     {
       title: "Delete a document permanently",
       description:
-        "Delete a document by UUID. Soft delete server-side (sets `archived_at`); not user-restorable via Linear's standard UI flows. Idempotent — re-deleting an already-soft-deleted document returns `{status: 'already-absent'}`. Round-7 / Q2.",
+        "Delete a document by UUID. Soft delete server-side (sets `archived_at`); not user-restorable via Linear's standard UI flows. Idempotent — re-deleting an already-soft-deleted document returns `{status: 'already-absent'}`.",
       inputSchema: {
         id: z.string(),
+        confirm: z.boolean().optional().describe("Required true for deletion."),
         workspace: z.string().optional().describe(WORKSPACE_PARAM_DESCRIPTION),
       },
       annotations: {
@@ -1490,6 +1815,7 @@ function registerTools(server: McpServer): void {
       },
     },
     safe(async (args) => {
+      requireConfirm(args as { confirm?: boolean }, "delete_document");
       const { status } = await tryIdempotentDelete(() => deleteDocument(args.id));
       return text(envelope({ id: args.id, status, success: status === "deleted" }));
     }),
@@ -1530,7 +1856,8 @@ function registerTools(server: McpServer): void {
     "get_agent_session",
     {
       title: "Get one agent session by UUID",
-      description: "Returns null if not found.",
+      description:
+        "Returns one agent session. Missing ids surface as structured not_found errors, matching `lebop agent-session view --json`.",
       inputSchema: {
         id: z.string(),
         workspace: z.string().optional().describe(WORKSPACE_PARAM_DESCRIPTION),
@@ -1543,7 +1870,12 @@ function registerTools(server: McpServer): void {
       },
     },
     safe(async (args) => {
-      const session = await getAgentSession(args.id);
+      const session = requireMcpEntity(
+        await getAgentSession(args.id),
+        "agent session",
+        args.id,
+        "verify the agent session UUID; run list_agent_sessions to discover ids",
+      );
       return text(envelope({ agent_session: session }));
     }),
   );
@@ -1560,7 +1892,10 @@ function registerTools(server: McpServer): void {
         // calls the value a `teamKey` internally; the MCP boundary
         // normalizes naming. RELEASE NOTE BREAKING CHANGE: MCP clients
         // wiring up list_team_members must rename `team_key` → `team`.
-        team: z.string().describe("Team key (e.g. 'NOX')."),
+        team: z
+          .string()
+          .optional()
+          .describe("Team key (e.g. 'NOX'). Omit to use the configured default team."),
         include_inactive: z.boolean().optional(),
         workspace: z.string().optional().describe(WORKSPACE_PARAM_DESCRIPTION),
       },
@@ -1572,11 +1907,12 @@ function registerTools(server: McpServer): void {
       },
     },
     safe(async (args) => {
+      const config = await resolveConfig({ teamOverride: args.team as string | undefined });
       const members = await listTeamMembers({
-        teamKey: args.team as string,
+        teamKey: config.team,
         includeInactive: args.include_inactive as boolean | undefined,
       });
-      return text(envelope({ team: args.team, count: members.length, members }));
+      return text(envelope({ team: config.team, count: members.length, members }));
     }),
   );
 
@@ -1587,19 +1923,21 @@ function registerTools(server: McpServer): void {
     {
       title: "Lint markdown for Linear renderer quirks",
       description:
-        "Run lebop's universal lint rules (L001-L006) against in-memory text content. Catches table-cell ordered-list markers, setext H2 from `text\\n---`, etc. Returns warnings + a fixed version when --fix-equivalent applied. NOTE: this tool takes a content string, NOT a file path. For path-based linting (walking cache directories, in-repo markdown files) use the CLI: `lebop lint [paths...]`. The two surfaces are intentionally different operations sharing one rules engine.",
+        "Run lebop's in-memory Linear renderer lint rules (L001, L002, L003, L005, L006) against text content. Catches table-cell ordered-list markers, setext H2 from `text\\n---`, etc. Pass fix=true to also return fixed_content and remaining warnings after in-memory autofixes. NOTE: this tool takes a content string, NOT a file path. Repo-scoped rules such as L004/R001/R002 require config/path context and run through the CLI/file lint surfaces instead.",
       inputSchema: {
         content: z.string().describe("Markdown content to lint."),
+        fix: z.boolean().optional().describe("Return fixed_content after applying safe autofixes."),
       },
       annotations: {
         title: "Lint markdown for Linear renderer quirks",
         readOnlyHint: true,
         idempotentHint: true,
-        openWorldHint: true,
+        openWorldHint: false,
       },
     },
     safe(async (args) => {
       const { warnings } = lintContent(args.content, {});
+      const fixed = args.fix === true ? applyFixesFixpoint(args.content as string, {}) : undefined;
       return {
         content: [
           {
@@ -1613,6 +1951,20 @@ function registerTools(server: McpServer): void {
                   message: w.message,
                   line: w.line,
                 })),
+                ...(fixed
+                  ? {
+                      fixed: fixed.content !== args.content,
+                      fixed_content: fixed.content,
+                      fix_passes: fixed.passes,
+                      remaining_warning_count: fixed.warnings.length,
+                      remaining_warnings: fixed.warnings.map((w) => ({
+                        rule: w.rule,
+                        severity: w.severity,
+                        message: w.message,
+                        line: w.line,
+                      })),
+                    }
+                  : {}),
               }),
               null,
               2,
@@ -1622,197 +1974,9 @@ function registerTools(server: McpServer): void {
       };
     }),
   );
+}
 
-  // ==========================================================================
-  // Issue lifecycle (5 tools): get / create / update / archive / unarchive
-  // ==========================================================================
-
-  server.registerTool(
-    "get_issue",
-    {
-      title: "Get a single Linear issue",
-      description:
-        "Fetch one issue by identifier (TEAM-NN). Returns full metadata + description + comments + relations + parent/sub-issues. Returns `{issue: null}` if the identifier is not found (round-8 / H1 alignment with the other `get_*` tools).",
-      inputSchema: {
-        identifier: z.string().describe("Issue identifier, e.g. 'NOX-321'."),
-        workspace: z.string().optional().describe(WORKSPACE_PARAM_DESCRIPTION),
-      },
-      annotations: {
-        title: "Get a single Linear issue",
-        readOnlyHint: true,
-        idempotentHint: true,
-        openWorldHint: true,
-      },
-    },
-    safe(async (args) => {
-      const issue = await getIssue(args.identifier as string);
-      return text(envelope({ issue }));
-    }),
-  );
-
-  server.registerTool(
-    "create_issue",
-    {
-      title: "Create a new Linear issue",
-      description:
-        "Creates one issue. NOT retry-wrapped — duplicate creation could result if the response is lost mid-call.",
-      inputSchema: {
-        team: z.string().describe("Team key (e.g. 'NOX')."),
-        title: z.string(),
-        description: z.string().optional(),
-        project: z.string().optional().describe("Project name (resolved against the team)."),
-        project_id: z.string().optional().describe("Project UUID (skips name lookup)."),
-        state: z.string().optional().describe("State name; defaults to team default state."),
-        priority: z
-          .union([z.string(), z.number()])
-          .optional()
-          .describe("'urgent' | 'high' | 'normal' | 'low' | 'none' or 0..4."),
-        estimate: z.number().optional(),
-        labels: z.array(z.string()).optional().describe("Label names; resolved per team."),
-        assignee: z.string().optional().describe("'me' | email | display-name."),
-        workspace: z.string().optional().describe(WORKSPACE_PARAM_DESCRIPTION),
-      },
-      annotations: {
-        title: "Create a new Linear issue",
-        readOnlyHint: false,
-        destructiveHint: false,
-        idempotentHint: false,
-        openWorldHint: true,
-      },
-    },
-    safe(async (args) => {
-      const issue = await createIssue({
-        team: args.team as string,
-        title: args.title as string,
-        description: args.description as string | undefined,
-        project: args.project as string | undefined,
-        projectId: args.project_id as string | undefined,
-        state: args.state as string | undefined,
-        priority: args.priority as string | number | undefined,
-        estimate: args.estimate as number | undefined,
-        labels: args.labels as string[] | undefined,
-        assignee: args.assignee as string | undefined,
-      });
-      return text(envelope({ issue }));
-    }),
-  );
-
-  server.registerTool(
-    "update_issue",
-    {
-      title: "Update fields on an existing Linear issue",
-      description:
-        "Set any combination of: title, description, state, priority, estimate, labels, assignee, parent, project, milestone, cycle. Idempotent at the value level — safe to retry.",
-      inputSchema: {
-        identifier: z.string().describe("Issue identifier (TEAM-NN)."),
-        team: z
-          .string()
-          .optional()
-          .describe(
-            "Team key. Auto-derived from the issue identifier prefix when omitted (e.g. 'NOX-1' → 'NOX'). Pass explicitly only to override the derived team. Required when state/labels/assignee names are passed AND the identifier prefix can't be derived.",
-          ),
-        title: z.string().optional(),
-        description: z.string().optional(),
-        state: z.string().optional(),
-        priority: z.union([z.string(), z.number()]).optional(),
-        estimate: z.number().nullable().optional().describe("Number, or null to clear."),
-        labels: z.array(z.string()).optional().describe("Replaces the full label set."),
-        assignee: z.string().nullable().optional().describe("'me'|email|name, or null to clear."),
-        parent: z
-          .string()
-          .nullable()
-          .optional()
-          .describe("Parent issue identifier, or null to clear."),
-        project: z.string().nullable().optional().describe("Project name or UUID; null to detach."),
-        milestone: z
-          .string()
-          .nullable()
-          .optional()
-          .describe("Milestone name or UUID; null to detach. Belongs to the issue's project."),
-        cycle: z.string().nullable().optional().describe("Cycle name or UUID; null to detach."),
-        workspace: z.string().optional().describe(WORKSPACE_PARAM_DESCRIPTION),
-      },
-      annotations: {
-        title: "Update fields on an existing Linear issue",
-        readOnlyHint: false,
-        destructiveHint: false,
-        idempotentHint: true,
-        openWorldHint: true,
-      },
-    },
-    safe(async (args) => {
-      // Wave-3: thin pass-through to lib/updateIssue, which now handles all
-      // 11 update fields (title/description/state/priority/estimate/labels/
-      // assignee/parent/project/milestone/cycle) in a single GraphQL
-      // mutation. The wave-2 two-step "call lib, then raw extras mutation"
-      // dance is gone — fewer round-trips, no half-applied state on a bad
-      // milestone name, single source of truth for resolution semantics.
-      const issue = await updateIssue({
-        identifier: args.identifier as string,
-        team: args.team as string | undefined,
-        title: args.title as string | undefined,
-        description: args.description as string | undefined,
-        state: args.state as string | undefined,
-        priority: args.priority as string | number | undefined,
-        estimate: args.estimate as number | null | undefined,
-        labels: args.labels as string[] | undefined,
-        assignee: args.assignee as string | null | undefined,
-        parent: args.parent as string | null | undefined,
-        project: args.project as string | null | undefined,
-        milestone: args.milestone as string | null | undefined,
-        cycle: args.cycle as string | null | undefined,
-      });
-      return text(envelope({ issue }));
-    }),
-  );
-
-  server.registerTool(
-    "archive_issue",
-    {
-      title: "Archive one or more issues",
-      description:
-        "Archives one or more issues (reversible from the Linear UI; reversible programmatically via unarchive_issue). NOT retry-wrapped.",
-      inputSchema: {
-        identifiers: z.array(z.string()).describe("Issue identifiers (TEAM-NN format)."),
-        workspace: z.string().optional().describe(WORKSPACE_PARAM_DESCRIPTION),
-      },
-      annotations: {
-        title: "Archive one or more issues",
-        readOnlyHint: false,
-        destructiveHint: true,
-        idempotentHint: false,
-        openWorldHint: true,
-      },
-    },
-    safe(async (args) => {
-      const results = await archiveIssues(args.identifiers as string[]);
-      return text(envelope({ results }));
-    }),
-  );
-
-  server.registerTool(
-    "unarchive_issue",
-    {
-      title: "Unarchive one or more issues",
-      description: "Reverse of archive_issue. NOT retry-wrapped.",
-      inputSchema: {
-        identifiers: z.array(z.string()),
-        workspace: z.string().optional().describe(WORKSPACE_PARAM_DESCRIPTION),
-      },
-      annotations: {
-        title: "Unarchive one or more issues",
-        readOnlyHint: false,
-        destructiveHint: false,
-        idempotentHint: true,
-        openWorldHint: true,
-      },
-    },
-    safe(async (args) => {
-      const results = await unarchiveIssues(args.identifiers as string[]);
-      return text(envelope({ results }));
-    }),
-  );
-
+function registerLegacyMcpToolsAfterIssueLifecycleBeforePull(server: McpServerLike): void {
   // ==========================================================================
   // Comments (4 tools): list / add / update / delete
   // ==========================================================================
@@ -1854,6 +2018,10 @@ function registerTools(server: McpServer): void {
         identifier: z.string().describe("Issue identifier (TEAM-NN)."),
         body: z.string(),
         parent_id: z.string().optional().describe("UUID of parent comment when replying."),
+        repo_root: z
+          .string()
+          .optional()
+          .describe("Override cwd-derived repo root for cache-coherence reporting."),
         workspace: z.string().optional().describe(WORKSPACE_PARAM_DESCRIPTION),
       },
       annotations: {
@@ -1865,12 +2033,25 @@ function registerTools(server: McpServer): void {
       },
     },
     safe(async (args) => {
+      const cacheContext = resolveMcpRepoCacheContext(args.repo_root as string | undefined);
       const result = await addComment({
         identifier: args.identifier as string,
         body: args.body as string,
         parentId: args.parent_id as string | undefined,
       });
-      return text(envelope({ identifier: args.identifier, comment: result }));
+      return text(
+        envelope({
+          identifier: args.identifier,
+          comment: result,
+          cache: issueCacheNotRefreshed({
+            identifiers: [(args.identifier as string).toUpperCase()],
+            reason: "comment add does not rewrite the cached issue comment collection in place",
+            repairHint: `call pull_issues with identifiers=[${JSON.stringify((args.identifier as string).toUpperCase())}], refresh=true, confirm=true to refresh cached comments after verifying local cache overwrite is intended`,
+            repoHash: cacheContext.repoHash,
+            repoRoot: cacheContext.repoRoot,
+          }),
+        }),
+      );
     }),
   );
 
@@ -1882,6 +2063,10 @@ function registerTools(server: McpServer): void {
       inputSchema: {
         id: z.string().describe("Comment UUID (visible in list_comments)."),
         body: z.string(),
+        repo_root: z
+          .string()
+          .optional()
+          .describe("Override cwd-derived repo root for cache-coherence reporting."),
         workspace: z.string().optional().describe(WORKSPACE_PARAM_DESCRIPTION),
       },
       annotations: {
@@ -1893,8 +2078,22 @@ function registerTools(server: McpServer): void {
       },
     },
     safe(async (args) => {
+      const cacheContext = resolveMcpRepoCacheContext(args.repo_root as string | undefined);
       const result = await updateComment(args.id as string, args.body as string);
-      return text(envelope({ comment: result }));
+      return text(
+        envelope({
+          comment: result,
+          cache: commentCacheNotRefreshed({
+            commentIds: [args.id as string],
+            reason:
+              "comment update receives only a comment UUID and does not know which cached issue comment collection to refresh",
+            repairHint:
+              "call pull_issues with the parent issue identifier, refresh=true, confirm=true before relying on cached comments, after verifying local cache overwrite is intended",
+            repoHash: cacheContext.repoHash,
+            repoRoot: cacheContext.repoRoot,
+          }),
+        }),
+      );
     }),
   );
 
@@ -1903,9 +2102,14 @@ function registerTools(server: McpServer): void {
     {
       title: "Delete a comment by UUID",
       description:
-        "Delete a comment by UUID. Idempotent — re-deleting an already-absent comment returns `{status: 'already-absent'}`. Round-7 / Q2.",
+        "Delete a comment by UUID. Idempotent — re-deleting an already-absent comment returns `{status: 'already-absent'}`.",
       inputSchema: {
         id: z.string().describe("Comment UUID."),
+        confirm: z.boolean().optional().describe("Required true for deletion."),
+        repo_root: z
+          .string()
+          .optional()
+          .describe("Override cwd-derived repo root for cache-coherence reporting."),
         workspace: z.string().optional().describe(WORKSPACE_PARAM_DESCRIPTION),
       },
       annotations: {
@@ -1917,13 +2121,30 @@ function registerTools(server: McpServer): void {
       },
     },
     safe(async (args) => {
+      requireConfirm(args, "delete_comment");
+      const cacheContext = resolveMcpRepoCacheContext(args.repo_root as string | undefined);
       const { status } = await tryIdempotentDelete(() => deleteComment(args.id as string));
-      return text(envelope({ id: args.id, status, success: status === "deleted" }));
+      return text(
+        envelope({
+          id: args.id,
+          status,
+          success: status === "deleted",
+          cache: commentCacheNotRefreshed({
+            commentIds: [args.id as string],
+            reason:
+              "comment delete receives only a comment UUID and does not know which cached issue comment collection to refresh",
+            repairHint:
+              "call pull_issues with the parent issue identifier, refresh=true, confirm=true before relying on cached comments, after verifying local cache overwrite is intended",
+            repoHash: cacheContext.repoHash,
+            repoRoot: cacheContext.repoRoot,
+          }),
+        }),
+      );
     }),
   );
 
   // ==========================================================================
-  // Cache loop (4 tools): pull_issues / push_changes / cache_status / diff_issue
+  // Cache loop pre-pull tools: cache_status / diff_issue / diff_project
   // ==========================================================================
 
   server.registerTool(
@@ -1931,7 +2152,7 @@ function registerTools(server: McpServer): void {
     {
       title: "git-like status for the local lebop cache",
       description:
-        "Returns modified / clean / stale entries in the cache. `stale` means the remote `updatedAt` is newer than the local `_server.updated_at` snapshot — pull_issues with refresh=true to update.",
+        "Returns modified / clean / stale entries in the cache. `stale` means the remote `updatedAt` is newer than the local `_server.updated_at` snapshot — call pull_issues or pull_project with refresh=true and confirm=true to update after verifying local cache overwrite is intended.",
       inputSchema: {
         repo_root: z
           .string()
@@ -1954,117 +2175,19 @@ function registerTools(server: McpServer): void {
       },
     },
     safe(async (args) => {
-      // Wave-3 parity (item #2): emit the same nested {modified:{issues,projects},
-      // clean:{issues,projects}} shape the CLI's `lebop status --json` uses.
-      // The CLI shape is strictly richer (project entries carry name + fields),
-      // and unifying on it costs nothing for agents that previously read the
-      // flat MCP shape — the project arrays are simply additive.
-      //
-      // Item #5: cache_status has no `identifiers` arg to derive from, so we
-      // can't short-circuit team resolution the way pull/diff/push do. If a
-      // team is required and missing, resolveConfig surfaces the standard
-      // error.
       const config = await resolveConfig({
         cwd: args.repo_root as string | undefined,
         teamOverride: args.team as string | undefined,
+        requireGitRoot: Boolean(args.repo_root),
       });
-
-      const issueIds = await listCachedIssues(config.repoHash);
-      type IssueEntry = {
-        identifier: string;
-        metadata: IssueMetadata;
-        fields: string[];
-      };
-      const validIssues: IssueEntry[] = [];
-      for (const id of issueIds) {
-        const loaded = await readIssue(config.repoHash, id);
-        if (!loaded) continue;
-        const changes = diffIssueMetadata(loaded.metadata, loaded.description);
-        validIssues.push({
-          identifier: id,
-          metadata: loaded.metadata,
-          fields: changes.map((c) => c.field),
-        });
-      }
-      const modifiedIssues = validIssues.filter((r) => r.fields.length > 0);
-      const cleanIssues = validIssues.filter((r) => r.fields.length === 0);
-
-      const projectIds = await listCachedProjectIds(config.repoHash);
-      type ProjectEntry = {
-        id: string;
-        metadata: ProjectMetadata;
-        fields: string[];
-      };
-      const validProjects: ProjectEntry[] = [];
-      for (const pid of projectIds) {
-        const loaded = await readProject(config.repoHash, pid);
-        if (!loaded) continue;
-        const changes = diffProjectMetadata(loaded.metadata, loaded.content);
-        validProjects.push({
-          id: pid,
-          metadata: loaded.metadata,
-          fields: changes.map((c) => c.field),
-        });
-      }
-      const modifiedProjects = validProjects.filter((r) => r.fields.length > 0);
-      const cleanProjects = validProjects.filter((r) => r.fields.length === 0);
-
-      let stale: { identifier: string; server_updated_at: string; remote_updated_at: string }[] =
-        [];
-      let stale_check: "ok" | "errored" | "skipped" = "skipped";
-      const checkRemote = args.check_remote !== false && cleanIssues.length > 0;
-      if (checkRemote) {
-        try {
-          const ids = cleanIssues.map((r) => r.identifier);
-          const query = buildCasQuery(ids);
-          const response = (await withClient((c) => c.client.rawRequest(query))) as {
-            data: Record<string, { id: string; identifier: string; updatedAt: string } | null>;
-          };
-          stale = ids.flatMap((_id, i) => {
-            const entry = cleanIssues[i];
-            const remote = response.data[`a${i}`];
-            if (!entry || !remote) return [];
-            const localT = Date.parse(entry.metadata._server.updated_at);
-            const remoteT = Date.parse(remote.updatedAt);
-            if (remoteT > localT) {
-              return [
-                {
-                  identifier: entry.identifier,
-                  server_updated_at: entry.metadata._server.updated_at,
-                  remote_updated_at: remote.updatedAt,
-                },
-              ];
-            }
-            return [];
-          });
-          stale_check = "ok";
-        } catch {
-          stale_check = "errored";
-        }
-      }
-      const staleSet = new Set(stale.map((s) => s.identifier));
       return text(
         envelope({
-          team: config.team,
-          repo_root: config.repoRoot,
-          repo_hash: config.repoHash,
-          modified: {
-            issues: modifiedIssues.map((m) => ({
-              identifier: m.identifier,
-              fields: m.fields,
-            })),
-            projects: modifiedProjects.map((p) => ({
-              id: p.id,
-              name: p.metadata.name,
-              fields: p.fields,
-            })),
-          },
-          stale,
-          stale_check,
-          clean: {
-            issues: cleanIssues.filter((c) => !staleSet.has(c.identifier)).map((c) => c.identifier),
-            projects: cleanProjects.map((c) => c.id),
-          },
+          ...(await collectCacheStatus({
+            team: config.team,
+            repoRoot: config.repoRoot,
+            repoHash: config.repoHash,
+            checkRemote: args.check_remote !== false,
+          })),
         }),
       );
     }),
@@ -2090,246 +2213,89 @@ function registerTools(server: McpServer): void {
       },
     },
     safe(async (args) => {
-      const upperId = (args.identifier as string).toUpperCase();
-      // Round-6 / A15: Linear may have renamed the team (e.g. UE → ENG)
-      // after the cache was written, in which case `UE-359` resolves on
-      // Linear but the cache is keyed under `ENG-359`. Fetch the remote
-      // FIRST and use its canonical `identifier` for the cache lookup so
-      // the rename-edge-case stops surfacing as "not in local cache".
-      // Item #5: derive team from the identifier when not explicitly given.
-      const teamOverride =
-        (args.team as string | undefined) ?? deriveTeamFromIdentifiers([upperId]) ?? undefined;
-      const config = await resolveConfig({
-        cwd: args.repo_root as string | undefined,
-        teamOverride,
-      });
-      const query = buildPullIssuesQuery([upperId], false);
-      const response = (await withClient((c) => c.client.rawRequest(query))) as {
-        data: Record<string, FetchedIssue | null>;
-      };
-      const remoteNode = response.data.a0;
-      if (!remoteNode)
-        throw new NotFoundError(`not found: ${upperId}`, `verify ${upperId} exists on Linear`);
-      // Canonical identifier (Linear normalizes via team-rename redirect).
-      const canonicalId = remoteNode.identifier.toUpperCase();
-      // Try cache under canonical first, then the user-supplied form for
-      // legacy caches written before the rename. Either is fine — Linear's
-      // identifier maps uniquely back to the same UUID.
-      const local =
-        (await readIssue(config.repoHash, canonicalId)) ??
-        (canonicalId !== upperId ? await readIssue(config.repoHash, upperId) : null);
-      if (!local) {
-        throw new ValidationError(
-          `${canonicalId} is not in the local cache`,
-          "run pull_issues with this identifier first",
-        );
-      }
-
-      const { metadata: remoteMeta } = buildIssueMetadata(remoteNode);
-      const remoteBody = remoteNode.description ?? "";
-
-      const fields: { field: string; local: unknown; remote: unknown }[] = [];
-      if (local.metadata.title !== remoteMeta.title) {
-        fields.push({ field: "title", local: local.metadata.title, remote: remoteMeta.title });
-      }
-      if (local.metadata.state !== remoteMeta.state) {
-        fields.push({ field: "state", local: local.metadata.state, remote: remoteMeta.state });
-      }
-      if (local.metadata.priority !== remoteMeta.priority) {
-        fields.push({
-          field: "priority",
-          local: local.metadata.priority,
-          remote: remoteMeta.priority,
-        });
-      }
-      if ((local.metadata.estimate ?? null) !== (remoteMeta.estimate ?? null)) {
-        fields.push({
-          field: "estimate",
-          local: local.metadata.estimate,
-          remote: remoteMeta.estimate,
-        });
-      }
-      const localLabels = [...local.metadata.labels].sort();
-      const remoteLabels = [...remoteMeta.labels].sort();
-      if (!arraysEqual(localLabels, remoteLabels)) {
-        fields.push({ field: "labels", local: localLabels, remote: remoteLabels });
-      }
-      if ((local.metadata.assignee ?? null) !== (remoteMeta.assignee ?? null)) {
-        fields.push({
-          field: "assignee",
-          local: local.metadata.assignee,
-          remote: remoteMeta.assignee,
-        });
-      }
-      if ((local.metadata.parent ?? null) !== (remoteMeta.parent ?? null)) {
-        fields.push({ field: "parent", local: local.metadata.parent, remote: remoteMeta.parent });
-      }
-
-      const patch = createTwoFilesPatch(
-        `a/${upperId}/description.md`,
-        `b/${upperId}/description.md`,
-        remoteBody,
-        local.description,
-        "remote (live)",
-        "local (cache)",
-        { context: 3 },
-      );
-      const descChanged = patch
-        .split("\n")
-        .some(
-          (l) =>
-            (l.startsWith("+") && !l.startsWith("+++")) ||
-            (l.startsWith("-") && !l.startsWith("---")),
-        );
-
       return text(
-        envelope({
-          identifier: upperId,
-          fields,
-          description_changed: descChanged,
-          description_patch: descChanged ? patch : null,
-        }),
+        envelope(
+          await diffIssueCacheVsRemote(args.identifier as string, {
+            repoRoot: args.repo_root as string | undefined,
+            team: args.team as string | undefined,
+          }),
+        ),
       );
     }),
   );
 
   server.registerTool(
-    "pull_issues",
+    "diff_project",
     {
-      title: "Fetch issues into the local cache",
+      title: "unified diff: local cache vs live remote (one project)",
       description:
-        "Pull a set of issues by identifier into ~/.lebop/cache/<repo-hash>/issues/<id>/. Refuses to overwrite cached issues with unpushed local edits unless refresh=true.",
+        "Field-level diff + content unified-patch for a single cached project. Returns null patch if no content drift.",
       inputSchema: {
-        identifiers: z.array(z.string()).describe("Issue identifiers (TEAM-NN)."),
+        project_id: z.string().describe("Project UUID cached by pull_project."),
         repo_root: z.string().optional(),
         team: z.string().optional(),
-        refresh: z
-          .boolean()
-          .optional()
-          .describe("Overwrite cached issues that have unpushed local edits."),
-        include_comments: z.boolean().optional().describe("Default true."),
         workspace: z.string().optional().describe(WORKSPACE_PARAM_DESCRIPTION),
       },
       annotations: {
-        title: "Fetch issues into the local cache",
-        readOnlyHint: false,
-        destructiveHint: false,
+        title: "unified diff: local cache vs live remote (one project)",
+        readOnlyHint: true,
         idempotentHint: true,
         openWorldHint: true,
       },
     },
     safe(async (args) => {
-      const ids = args.identifiers as string[];
-      // Item #5: if no explicit team, derive from identifier prefixes so the
-      // common single-team case doesn't fail with "no team resolved" when the
-      // identifier itself unambiguously names the team.
-      const teamOverride =
-        (args.team as string | undefined) ?? deriveTeamFromIdentifiers(ids) ?? undefined;
-      const config = await resolveConfig({
-        cwd: args.repo_root as string | undefined,
-        teamOverride,
-      });
-      const refresh = args.refresh === true;
-      const withComments = args.include_comments !== false;
-
-      // Refuse to overwrite unpushed edits unless refresh=true.
-      if (!refresh) {
-        const conflicts: string[] = [];
-        for (const id of ids) {
-          const existing = await readIssue(config.repoHash, id);
-          if (existing && diffIssueMetadata(existing.metadata, existing.description).length > 0) {
-            conflicts.push(id);
-          }
-        }
-        if (conflicts.length > 0) {
-          throw new ValidationError(
-            `refusing to overwrite local edits on: ${conflicts.join(", ")}`,
-            "push the modified issues first, or pass refresh=true to discard local edits",
-          );
-        }
-      }
-
-      const query = buildPullIssuesQuery(ids, withComments);
-      const response = (await withClient((c) => c.client.rawRequest(query))) as {
-        data: Record<string, FetchedIssue | null>;
-      };
-
-      // Wave-3 parity (item #4): emit the same envelope shape as `lebop pull
-      // --json` — adds team / repo_hash / mode / project alongside issues.
-      // Agents need repo_hash to make a subsequent cache_status call against
-      // the right per-repo cache directory; without it they'd be guessing.
-      // `mode` is always "cache" here — the MCP doesn't expose an export
-      // destination flag (that's a CLI-only filesystem-output affordance).
-      // `project` is always null for pull_issues (the MCP analog of the CLI's
-      // `pull --project` lives in a sibling tool; here we only pull issues).
-      // Field is included for shape parity so downstream readers can rely on
-      // its presence.
-      const issues: { identifier: string; comments: number; cache_path: string }[] = [];
-      const errors: { identifier: string; error: string }[] = [];
-
-      for (let i = 0; i < ids.length; i++) {
-        const id = ids[i];
-        if (!id) continue;
-        const node = response.data[`a${i}`];
-        if (!node) {
-          errors.push({ identifier: id, error: `not found: ${id}` });
-          continue;
-        }
-        const { metadata, description } = buildIssueMetadata(node);
-        await writeIssue(config.repoHash, metadata, description);
-        const cached = withComments ? buildComments(node) : [];
-        for (const c of cached) {
-          await writeComment(config.repoHash, node.identifier, c);
-        }
-        issues.push({
-          identifier: node.identifier,
-          comments: cached.length,
-          cache_path: issueDir(config.repoHash, node.identifier),
-        });
-      }
       return text(
-        envelope({
-          team: config.team,
-          repo_hash: config.repoHash,
-          mode: "cache" as const,
-          project: null,
-          issues,
-          errors,
-        }),
+        envelope(
+          await diffProjectCacheVsRemote(args.project_id as string, {
+            repoRoot: args.repo_root as string | undefined,
+            team: args.team as string | undefined,
+          }),
+        ),
       );
     }),
   );
+}
 
+function registerLegacyMcpToolsAfterPullBeforePublish(server: McpServerLike): void {
   server.registerTool(
     "push_changes",
     {
-      title: "Push locally-modified cache entries back to Linear (CAS-protected)",
+      title: "Push locally-modified cache entries back to Linear (stale-guarded)",
       description:
-        "Reads the local cache, computes per-issue field diffs, and applies updates as Linear mutations. CAS-protected via _server.updated_at; pass force=true to bypass. dry_run=true previews without writing.",
+        "Reads the local cache, computes per-issue/project field diffs, and applies updates as Linear mutations. Uses the cached _server.updated_at snapshot plus a just-in-time remote recheck as a stale guard; pass force=true to bypass. dry_run=true previews without writing.",
       inputSchema: {
         identifiers: z
           .array(z.string())
           .optional()
           .describe("Restrict to these identifiers; defaults to every modified cached issue."),
+        project_ids: z
+          .array(z.string())
+          .optional()
+          .describe(
+            "Restrict project cache pushes to these project UUIDs. Defaults to modified cached projects when identifiers is omitted.",
+          ),
         repo_root: z.string().optional(),
         team: z.string().optional(),
         dry_run: z.boolean().optional(),
-        force: z.boolean().optional().describe("Bypass the CAS check."),
+        force: z.boolean().optional().describe("Bypass the updatedAt stale guard."),
+        confirm: z
+          .boolean()
+          .optional()
+          .describe("Required true when force=true because stale protection is bypassed."),
+        strict: z.boolean().optional().describe("Block pushes with lint warnings."),
         workspace: z.string().optional().describe(WORKSPACE_PARAM_DESCRIPTION),
       },
       annotations: {
-        title: "Push locally-modified cache entries back to Linear (CAS-protected)",
+        title: "Push locally-modified cache entries back to Linear (stale-guarded)",
         readOnlyHint: false,
-        destructiveHint: false,
+        destructiveHint: true,
         idempotentHint: true,
         openWorldHint: true,
       },
     },
     safe(async (args) => {
       const requested = args.identifiers as string[] | undefined;
-      // Item #5: derive team from the requested identifiers when not given
-      // explicitly. When identifiers is omitted (push everything modified),
-      // fall back to the resolveConfig default chain.
+      const requestedProjects = args.project_ids as string[] | undefined;
       const teamOverride =
         (args.team as string | undefined) ??
         (requested && requested.length > 0
@@ -2338,158 +2304,46 @@ function registerTools(server: McpServer): void {
       const config = await resolveConfig({
         cwd: args.repo_root as string | undefined,
         teamOverride,
+        requireGitRoot: Boolean(args.repo_root),
       });
       const dryRun = args.dry_run === true;
       const force = args.force === true;
-
-      const cachedIds = await listCachedIssues(config.repoHash);
-      const candidates = requested ? cachedIds.filter((id) => requested.includes(id)) : cachedIds;
-
-      // Wave-3 parity (item #3): emit the richer {target, kind, status: "pushed"|...}
-      // shape the CLI uses. `target` carries the human-facing identifier or
-      // project name; `kind` will let us add project pushes later without
-      // re-versioning. The MCP previously emitted {identifier, status:"updated"};
-      // agents using the old shape can map `target` → `identifier` 1:1 for
-      // issues. `kind` is currently always "issue" — placeholder for parity
-      // with `lebop push` which already handles project rows.
-      const results: {
-        target: string;
-        kind: "issue" | "project";
-        status: "pushed" | "unchanged" | "stale" | "not-found" | "dry-run" | "error";
-        fields?: string[];
-        error?: string;
-      }[] = [];
-
-      // CAS check first: fetch remote updatedAt for the candidate set.
-      let remoteCas: Record<string, { id: string; updatedAt: string } | null> = {};
-      if (candidates.length > 0 && !force) {
-        const query = buildCasQuery(candidates);
-        const response = (await withClient((c) => c.client.rawRequest(query))) as {
-          data: Record<string, { id: string; identifier: string; updatedAt: string } | null>;
-        };
-        remoteCas = response.data;
-      }
-
-      for (let i = 0; i < candidates.length; i++) {
-        const id = candidates[i];
-        if (!id) continue;
-        const loaded = await readIssue(config.repoHash, id);
-        if (!loaded) {
-          results.push({ target: id, kind: "issue", status: "not-found" });
-          continue;
-        }
-        const changes = diffIssueMetadata(loaded.metadata, loaded.description);
-        if (changes.length === 0) {
-          results.push({ target: id, kind: "issue", status: "unchanged" });
-          continue;
-        }
-
-        if (!force) {
-          const remote = remoteCas[`a${i}`];
-          if (remote) {
-            const localT = Date.parse(loaded.metadata._server.updated_at);
-            const remoteT = Date.parse(remote.updatedAt);
-            if (remoteT > localT) {
-              results.push({
-                target: id,
-                kind: "issue",
-                status: "stale",
-                fields: changes.map((c) => c.field),
-              });
-              continue;
-            }
-          }
-        }
-
-        if (dryRun) {
-          results.push({
-            target: id,
-            kind: "issue",
-            status: "dry-run",
-            fields: changes.map((c) => c.field),
-          });
-          continue;
-        }
-
-        // Apply mutation. Use the shared lib helper so all field types
-        // (title/description/state/priority/estimate/labels/assignee/parent)
-        // resolve identically to the CLI `lebop push` path. team metadata is
-        // fetched lazily so a push containing only title/description still
-        // works without a configured team (the helper short-circuits on
-        // unused fields).
-        let linearInput: Record<string, unknown>;
-        try {
-          const teamMetadata = await getTeamMetadata(config.repoHash, config.team);
-          linearInput = (await buildIssueUpdateInput(
-            {
-              identifier: id,
-              metadata: loaded.metadata,
-              description: loaded.description,
-              changes,
-            },
-            teamMetadata,
-          )) as Record<string, unknown>;
-        } catch (err) {
-          results.push({
-            target: id,
-            kind: "issue",
-            status: "error",
-            fields: changes.map((c) => c.field),
-            error: (err as Error).message,
-          });
-          continue;
-        }
-        if (Object.keys(linearInput).length === 0) {
-          results.push({ target: id, kind: "issue", status: "unchanged" });
-          continue;
-        }
-        try {
-          const remote = remoteCas[`a${i}`] ?? null;
-          const issueUuid = remote?.id ?? loaded.metadata._server.id;
-          if (!issueUuid) {
-            results.push({ target: id, kind: "issue", status: "not-found" });
-            continue;
-          }
-          const response = (await withClient((c) =>
-            c.client.rawRequest(ISSUE_UPDATE_MUTATION, {
-              id: issueUuid,
-              input: linearInput,
-            }),
-          )) as { data: { issueUpdate: { success: boolean; issue: FetchedIssue } } };
-          // Persist server-normalized state so subsequent cache_status / diff
-          // shows clean. Linear may reflow markdown (blank lines around ---,
-          // etc.); without writing the server's version back, _server stays
-          // out of sync with the on-disk file and status reads "modified"
-          // forever.
-          const updated = response.data.issueUpdate.issue;
-          const rebuilt = buildIssueMetadata(updated);
-          await writeIssue(config.repoHash, rebuilt.metadata, updated.description ?? "");
-          results.push({
-            target: id,
-            kind: "issue",
-            status: "pushed",
-            fields: changes.map((c) => c.field),
-          });
-        } catch (err) {
-          results.push({
-            target: id,
-            kind: "issue",
-            status: "error",
-            fields: changes.map((c) => c.field),
-            error: (err as Error).message,
-          });
-        }
-      }
+      if (force && !dryRun) requireConfirm(args as { confirm?: boolean }, "push_changes force");
+      const strict = args.strict === true;
+      const lintCtx = {
+        repoConfig: config.repoConfig,
+        workspaceUrlPrefix: config.workspaceUrlPrefix,
+      };
+      const plans = await collectCachePushPlans(config.repoHash, {
+        identifiers: requested,
+        projectIds: requestedProjects,
+        includeUnchanged: Boolean(requested?.length || requestedProjects?.length),
+      });
+      const { results, summary } = await applyCachePushPlans({
+        repoHash: config.repoHash,
+        team: config.team,
+        plans,
+        lintCtx,
+        dryRun,
+        force,
+        strict,
+      });
 
       return text(
         envelope({
+          team: config.team,
+          repo_hash: config.repoHash,
+          mode: "cache" as const,
           results,
+          summary,
           notes: dryRun ? "dry-run: nothing was written" : undefined,
         }),
       );
     }),
   );
+}
 
+function registerLegacyMcpToolsAfterPublishBeforeBulk(server: McpServerLike): void {
   // ==========================================================================
   // Plan workflow (4 tools): validate / apply / diff / pull
   // ==========================================================================
@@ -2518,14 +2372,19 @@ function registerTools(server: McpServer): void {
     safe(async (args) => {
       const dir = args.dir as string;
       const plan = await parsePlan(dir);
-      // Skip semantic checks unless team provided — this mirrors `lebop plan validate`.
-      const result = validatePlan(plan, null);
-      // Wave-3 parity (item #8): adopt the CLI's richer plan-parse summary
-      // shape (project.name + project.linear_id, full issues[] with slug +
-      // title + linear_id) on top of the validation errors/warnings. The
-      // previous MCP shape (`issue_count`, no per-issue records) was a strict
-      // subset; the CLI shape lets agents enumerate slugs without a second
-      // parse round-trip.
+      const teamKey = (args.team as string | undefined) ?? plan.project.frontmatter.team;
+      const config = await resolveConfig({ teamOverride: teamKey });
+      const { validation: result } = await validatePlanWithFreshTeamMetadata(plan, {
+        repoHash: config.repoHash,
+        team: config.team,
+        lintCtx: {
+          repoConfig: config.repoConfig,
+          workspaceUrlPrefix: config.workspaceUrlPrefix,
+        },
+      });
+      // Match the CLI's richer plan-parse summary shape
+      // (project.name/project.linear_id plus per-issue slug/title/linear_id)
+      // so agents can enumerate slugs without a second parse round-trip.
       return text(
         envelope({
           dir,
@@ -2546,23 +2405,20 @@ function registerTools(server: McpServer): void {
   );
 
   server.registerTool(
-    "plan_apply",
+    "plan_lint",
     {
-      title: "Realize a plan as a Linear project + issues + relations",
+      title: "Lint every markdown body in a plan directory",
       description:
-        "Idempotent: re-running on an unchanged plan is a no-op. Writes back `linear_id:` to each file on first apply. Set dry_run=true to preview. strict=true blocks on lint warnings.",
+        "MCP parity with `lebop plan lint`: lints _project.md plus issue files, optionally applying safe fixes in-place. strict=true reports strict_failed when warnings remain.",
       inputSchema: {
         dir: z.string(),
-        dry_run: z.boolean().optional(),
+        fix: z.boolean().optional(),
         strict: z.boolean().optional(),
-        team: z
-          .string()
-          .optional()
-          .describe("Override the resolved team (defaults to project frontmatter team)."),
+        team: z.string().optional(),
         workspace: z.string().optional().describe(WORKSPACE_PARAM_DESCRIPTION),
       },
       annotations: {
-        title: "Realize a plan as a Linear project + issues + relations",
+        title: "Lint every markdown body in a plan directory",
         readOnlyHint: false,
         destructiveHint: false,
         idempotentHint: true,
@@ -2574,17 +2430,94 @@ function registerTools(server: McpServer): void {
       const plan = await parsePlan(dir);
       const teamKey = (args.team as string | undefined) ?? plan.project.frontmatter.team;
       const config = await resolveConfig({ teamOverride: teamKey });
-      const teamMetadata = await getTeamMetadata(config.repoHash, config.team);
+      const fix = args.fix === true;
+      const files = await lintPlanFiles(plan, {
+        fix,
+        lintCtx: {
+          repoConfig: config.repoConfig,
+          workspaceUrlPrefix: config.workspaceUrlPrefix,
+        },
+      });
+      const remaining = countRemainingPlanLintWarnings(files, fix);
+      return text(
+        envelope({
+          dir,
+          files,
+          remaining_warnings: remaining,
+          strict_failed: args.strict === true && remaining > 0,
+        }),
+      );
+    }),
+  );
+
+  server.registerTool(
+    "plan_apply",
+    {
+      title: "Realize a plan as a Linear project + issues + relations",
+      description:
+        "Writes back `linear_id:` to each file on first apply; re-running after successful writeback is a no-op. Do not auto-retry failed creates before writeback. Set dry_run=true to preview. strict=true blocks on lint warnings.",
+      inputSchema: {
+        dir: z.string(),
+        dry_run: z.boolean().optional(),
+        force: z
+          .boolean()
+          .optional()
+          .describe(
+            "Apply existing Linear updates even when plan updatedAt snapshots are missing/stale.",
+          ),
+        confirm: z
+          .boolean()
+          .optional()
+          .describe("Required true when force=true because plan stale protection is bypassed."),
+        strict: z.boolean().optional(),
+        team: z
+          .string()
+          .optional()
+          .describe("Override the resolved team (defaults to project frontmatter team)."),
+        workspace: z.string().optional().describe(WORKSPACE_PARAM_DESCRIPTION),
+      },
+      annotations: {
+        title: "Realize a plan as a Linear project + issues + relations",
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: false,
+        openWorldHint: true,
+      },
+    },
+    safe(async (args) => {
+      const dir = args.dir as string;
+      const plan = await parsePlan(dir);
+      const teamKey = (args.team as string | undefined) ?? plan.project.frontmatter.team;
+      const config = await resolveConfig({ teamOverride: teamKey });
       const dryRun = args.dry_run === true;
+      if (args.force === true && !dryRun) {
+        requireConfirm(args as { confirm?: boolean }, "plan_apply force");
+      }
+      const lintCtx = {
+        repoConfig: config.repoConfig,
+        workspaceUrlPrefix: config.workspaceUrlPrefix,
+      };
+      const { teamMetadata, validation } = await validatePlanWithFreshTeamMetadata(plan, {
+        repoHash: config.repoHash,
+        team: config.team,
+        lintCtx,
+      });
+      if (validation.errors.length > 0) {
+        return text(envelope({ dir, validation }));
+      }
+      const preflight = await preflightPlanApply(plan);
+      if (!preflight.ready) {
+        return text(envelope({ dir, dry_run: dryRun, preflight }));
+      }
       const result = await applyPlan(plan, teamMetadata, {
         dryRun,
+        force: args.force === true,
         strict: args.strict === true,
+        lintCtx,
       });
-      // Wave-3 parity (item #9): include `dry_run` in the output envelope to
-      // match `lebop plan apply --json` — agents inspecting the response can
-      // distinguish a real apply from a preview without re-checking the
-      // request args. Schema already documents `dry_run` as a knob; this just
-      // surfaces the resolved value.
+      // Include `dry_run` in the output envelope to match
+      // `lebop plan apply --json`; agents can distinguish a real apply from a
+      // preview without re-checking the request args.
       return text(envelope({ dir, dry_run: dryRun, ...result }));
     }),
   );
@@ -2627,6 +2560,10 @@ function registerTools(server: McpServer): void {
       inputSchema: {
         dir: z.string(),
         force: z.boolean().optional(),
+        confirm: z
+          .boolean()
+          .optional()
+          .describe("Required true when force=true because local plan files may be overwritten."),
         include_new: z
           .boolean()
           .optional()
@@ -2637,7 +2574,7 @@ function registerTools(server: McpServer): void {
       annotations: {
         title: "Overwrite plan files with current remote state",
         readOnlyHint: false,
-        destructiveHint: false,
+        destructiveHint: true,
         idempotentHint: true,
         openWorldHint: true,
       },
@@ -2647,9 +2584,21 @@ function registerTools(server: McpServer): void {
       const plan = await parsePlan(dir);
       const teamKey = (args.team as string | undefined) ?? plan.project.frontmatter.team;
       const config = await resolveConfig({ teamOverride: teamKey });
+      if (args.force === true) requireConfirm(args as { confirm?: boolean }, "plan_pull force");
       const teamMetadata = await getTeamMetadata(config.repoHash, config.team);
-      // PullOpts only supports includeNew today — force flag is CLI-only
-      // (it's a per-file overwrite gate that the CLI enforces around the lib).
+      if (args.force !== true) {
+        const preDiff = await diffPlan(plan, teamMetadata);
+        if (preDiff.has_drift || preDiff.has_blockers || preDiff.has_incomplete_scan) {
+          throw new ValidationError(
+            preDiff.has_incomplete_scan
+              ? "refusing to pull: plan diff scan incomplete"
+              : preDiff.has_blockers
+                ? "refusing to pull: plan diff has blockers"
+                : "refusing to pull: local plan has drift",
+            "call plan_diff to inspect, then retry with force=true and confirm=true after verifying local file overwrite is intended",
+          );
+        }
+      }
       const result = await pullPlan(plan, teamMetadata, {
         includeNew: args.include_new === true,
       });
@@ -2658,7 +2607,7 @@ function registerTools(server: McpServer): void {
   );
 
   // ==========================================================================
-  // Misc (5 tools): link / raw / list_workspaces / set_default_workspace / whoami
+  // Misc: link / raw / list_workspaces / set_default_workspace / whoami / refresh_whoami
   // ==========================================================================
 
   server.registerTool(
@@ -2683,50 +2632,11 @@ function registerTools(server: McpServer): void {
     },
     safe(async (args) => {
       const upperId = (args.identifier as string).toUpperCase();
-      const fetched = await withClient((c) => c.issue(upperId));
-      if (!fetched)
-        throw new NotFoundError(
-          `issue not found: ${upperId}`,
-          `verify ${upperId} exists and is visible to your token`,
-        );
       const title = (args.title as string | undefined) ?? (args.url as string);
-      let attachment: { id: string; title: string; url: string };
-      let status: "linked" | "already-linked" = "linked";
-      try {
-        const response = (await withClient((c) =>
-          c.client.rawRequest(
-            /* GraphQL */ `
-              mutation AttachURL($issueId: String!, $url: String!, $title: String!) {
-                attachmentLinkURL(issueId: $issueId, url: $url, title: $title) {
-                  success
-                  attachment { id title url }
-                }
-              }
-            `,
-            { issueId: fetched.id, url: args.url, title },
-          ),
-        )) as {
-          data: {
-            attachmentLinkURL: {
-              success: boolean;
-              attachment: { id: string; title: string; url: string };
-            };
-          };
-        };
-        attachment = response.data.attachmentLinkURL.attachment;
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        if (/already.*linked/i.test(msg)) {
-          const existing = await listAttachments(upperId);
-          const match = existing.find((a) => a.url === args.url);
-          if (!match) throw err;
-          attachment = { id: match.id, title: match.title, url: match.url };
-          status = "already-linked";
-        } else {
-          throw err;
-        }
-      }
-      return text(envelope({ identifier: upperId, attachment, status }));
+      const result = await linkUrlAttachment(upperId, args.url as string, title);
+      return text(
+        envelope({ identifier: upperId, attachment: result.attachment, status: result.status }),
+      );
     }),
   );
 
@@ -2735,7 +2645,7 @@ function registerTools(server: McpServer): void {
     {
       title: "GraphQL escape hatch — execute an arbitrary query/mutation",
       description:
-        "Executes any GraphQL query or mutation against Linear's API. Use only when no first-class tool covers the operation. Returns `{schema_version, data}` (the standard MCP envelope wrapping Linear's raw response.data). Pass paginate=true to walk a top-level connection. Caller intent varies per call — treat reads as idempotent, mutations as destructive on the agent's own discretion. The matching CLI tool `lebop raw` intentionally emits unwrapped `data` (no envelope) for jq-pipe ergonomics; see docs/spec.md §15.6.",
+        "Executes arbitrary Linear GraphQL. Use only when no first-class tool covers the operation. Queries run directly; mutations require allow_mutation=true and confirm=true and are never retry-wrapped. Returns `{schema_version, data}` (the standard MCP envelope wrapping Linear's raw response.data). Pass paginate=true to walk a top-level connection. The matching CLI tool `lebop raw` intentionally emits unwrapped `data` (no envelope) for jq-pipe ergonomics; see docs/spec.md §15.6.",
       inputSchema: {
         query: z.string().describe("GraphQL document (query or mutation)."),
         variables: z
@@ -2748,28 +2658,45 @@ function registerTools(server: McpServer): void {
           .describe(
             "If the query has a top-level connection, walks pageInfo.hasNextPage and merges nodes.",
           ),
+        allow_mutation: z
+          .boolean()
+          .optional()
+          .describe("Required true to execute GraphQL mutation operations."),
+        confirm: z
+          .boolean()
+          .optional()
+          .describe(
+            "Required true when executing a GraphQL mutation because raw mutations bypass first-class review/validation.",
+          ),
         workspace: z.string().optional().describe(WORKSPACE_PARAM_DESCRIPTION),
       },
       annotations: {
         title: "GraphQL escape hatch — execute an arbitrary query/mutation",
-        // raw_graphql is intentionally light on annotations — the caller is
-        // shaping the GraphQL document so we can't pre-judge readOnly /
-        // destructive / idempotent (a `query { viewer }` is harmless, an
-        // `issueDelete` mutation is destructive). The MCP host should rely on
-        // the caller's intent. We DO assert openWorldHint:true because every
-        // raw_graphql call touches an external system (Linear).
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: false,
         openWorldHint: true,
       },
     },
     safe(async (args) => {
       const query = args.query as string;
       const variables = (args.variables as Record<string, unknown> | undefined) ?? {};
-      // Round-6 / A18: map GraphQL syntax + validation errors to the
-      // structured taxonomy. Pre-fix these landed in `formatToolError`'s
-      // unknown-fallback (`code: "unknown"`) which made it impossible for
-      // clients to branch on the failure programmatically. Linear's
-      // GraphQL endpoint surfaces these as `Syntax Error:` / `Cannot query
-      // field` / `Argument Validation Error` messages — wrap them.
+      const workspace = args.workspace as string | undefined;
+      if (args.paginate) assertRawGraphQLPaginateAllowed(query);
+      const operationKind = assertRawGraphQLOperationAllowed(query, {
+        allowMutation: args.allow_mutation === true,
+        mutationMessage: "raw_graphql mutation requires allow_mutation=true",
+        mutationHint:
+          "prefer first-class lebop write tools; if raw mutation is intentional, re-send with allow_mutation:true",
+        surface: "raw_graphql",
+      });
+      if (operationKind === "mutation") {
+        requireConfirm(args as { confirm?: boolean }, "raw_graphql mutation");
+      }
+      // Map GraphQL syntax and validation errors to the structured taxonomy.
+      // Linear's GraphQL endpoint surfaces these as `Syntax Error:`,
+      // `Cannot query field`, or `Argument Validation Error` messages; wrap
+      // them so clients can branch on a stable error code.
       const wrapGqlErrors = async <T>(fn: () => Promise<T>): Promise<T> => {
         try {
           return await fn();
@@ -2792,55 +2719,29 @@ function registerTools(server: McpServer): void {
         }
       };
       if (!args.paginate) {
-        const response = await wrapGqlErrors(
-          async () =>
-            (await withClient((c) => c.client.rawRequest(query, variables))) as { data: unknown },
+        const response = await wrapGqlErrors(async () =>
+          operationKind === "mutation"
+            ? ((await (await linear(workspace)).client.rawRequest(query, variables)) as {
+                data: unknown;
+              })
+            : ((await withClient((c) => c.client.rawRequest(query, variables), workspace)) as {
+                data: unknown;
+              }),
         );
         // Intentional CLI/MCP asymmetry: MCP always wraps in the standard
         // {schema_version, data} envelope. The CLI's `lebop raw` emits raw
         // `data` for jq-pipe ergonomics (documented in docs/spec.md §15.6).
         return text(envelope({ data: response.data }));
       }
-      // Paginate mode: detect top-level connection by walking response.data.
-      type Page = {
-        data: Record<
-          string,
-          { nodes?: unknown[]; pageInfo?: { hasNextPage: boolean; endCursor: string | null } }
-        >;
-      };
-      const accumulated: unknown[] = [];
-      let connectionKey: string | null = null;
-      const nodes = await paginateRaw<unknown, Page>(
-        async ({ first, after }) => {
-          const merged = { ...variables, first, after };
-          return await wrapGqlErrors(
-            async () => (await withClient((c) => c.client.rawRequest(query, merged))) as Page,
-          );
-        },
-        (response) => {
-          if (!connectionKey) {
-            connectionKey =
-              Object.keys(response.data).find(
-                (k) =>
-                  Array.isArray(response.data[k]?.nodes) &&
-                  response.data[k]?.pageInfo !== undefined,
-              ) ?? null;
-          }
-          if (!connectionKey) return null;
-          const conn = response.data[connectionKey];
-          if (!conn?.nodes || !conn.pageInfo) return null;
-          return {
-            nodes: conn.nodes,
-            pageInfo: {
-              hasNextPage: conn.pageInfo.hasNextPage,
-              endCursor: conn.pageInfo.endCursor,
+      const accumulated = await paginateRawQuery(variables, async (vars) =>
+        wrapGqlErrors(
+          async () =>
+            (await withClient((c) => c.client.rawRequest(query, vars), workspace)) as {
+              data: Record<string, unknown>;
             },
-          };
-        },
-        { pageSize: 250 },
+        ),
       );
-      accumulated.push(...nodes);
-      return text(envelope({ connection: connectionKey, nodes: accumulated }));
+      return text(envelope({ data: accumulated }));
     }),
   );
 
@@ -2861,7 +2762,14 @@ function registerTools(server: McpServer): void {
     safe(async () => {
       const stored = await loadAuth();
       if (!stored) {
-        return text(envelope({ workspaces: [], default: null }));
+        return text(
+          envelope({
+            auth_file: AUTH_FILE_DISPLAY,
+            auth_storage: AUTH_STORAGE_KIND,
+            workspaces: [],
+            default: null,
+          }),
+        );
       }
       const slugs = Object.keys(stored.workspaces);
       const workspaces = slugs.map((s) => {
@@ -2879,8 +2787,43 @@ function registerTools(server: McpServer): void {
       });
       return text(
         envelope({
+          auth_file: AUTH_FILE_DISPLAY,
+          auth_storage: AUTH_STORAGE_KIND,
           default: stored.default ?? null,
           workspaces: workspaces.filter(Boolean),
+        }),
+      );
+    }),
+  );
+
+  server.registerTool(
+    "list_teams",
+    {
+      title: "List teams in the Linear workspace",
+      description:
+        "MCP parity with `lebop teams`: returns accessible teams with key, name, id, and description.",
+      inputSchema: {
+        workspace: z.string().optional().describe(WORKSPACE_PARAM_DESCRIPTION),
+      },
+      annotations: {
+        title: "List teams in the Linear workspace",
+        readOnlyHint: true,
+        idempotentHint: true,
+        openWorldHint: true,
+      },
+    },
+    safe(async () => {
+      const teams = await withClient((client) =>
+        paginateConnection(({ first, after }) => client.teams({ first, after })),
+      );
+      return text(
+        envelope({
+          teams: teams.map((team) => ({
+            key: team.key,
+            name: team.name,
+            id: team.id,
+            description: team.description ?? null,
+          })),
         }),
       );
     }),
@@ -2913,7 +2856,7 @@ function registerTools(server: McpServer): void {
     {
       title: "Current viewer for a workspace",
       description:
-        "Returns the cached viewer for `for_workspace` (which auth slug to read) or the current default. Pass `refresh=true` to re-validate against Linear. Two distinct args: `for_workspace` chooses *which auth slug to read*; `workspace` is the universal API-target selector that sets LEBOP_WORKSPACE for this call. Usually they match; the split lets you query one slug while authenticated against another.",
+        "Returns the cached viewer for `for_workspace` (which auth slug to read) or the current default without network I/O. Use refresh_whoami to re-validate and persist updated auth metadata. Two distinct args: `for_workspace` chooses *which auth slug to read*; `workspace` is the universal API-target selector that sets LEBOP_WORKSPACE for this call. Usually they match; the split lets you query one slug while authenticated against another.",
       inputSchema: {
         for_workspace: z
           .string()
@@ -2921,7 +2864,6 @@ function registerTools(server: McpServer): void {
           .describe(
             "Auth slug whose cached viewer to return. Defaults to the current default workspace. Renamed from `slug` for clarity vs. the standard `workspace` param.",
           ),
-        refresh: z.boolean().optional(),
         workspace: z.string().optional().describe(WORKSPACE_PARAM_DESCRIPTION),
       },
       annotations: {
@@ -2933,15 +2875,59 @@ function registerTools(server: McpServer): void {
     },
     safe(async (args) => {
       const ws = await loadAuthForWorkspace(args.for_workspace as string | undefined);
-      const refresh = args.refresh === true;
-      const viewer = refresh ? await validateToken(ws.token) : ws.viewer;
+      const fullAuth = await loadAuth();
+      const isDefault = fullAuth?.default === ws.slug;
       return text(
         envelope({
           workspace: ws.slug,
           workspace_name: ws.name,
-          viewer,
-          refreshed: refresh,
+          is_default: isDefault,
+          viewer: ws.viewer,
+          auth_file: AUTH_FILE_DISPLAY,
+          auth_storage: AUTH_STORAGE_KIND,
+          refreshed: false,
           created_at: ws.created_at,
+        }),
+      );
+    }),
+  );
+
+  server.registerTool(
+    "refresh_whoami",
+    {
+      title: "Refresh cached viewer for a workspace",
+      description:
+        "Re-validates the stored token for `for_workspace` against Linear, persists the refreshed viewer/workspace metadata to the auth file, and returns the updated viewer. Use whoami for a read-only cached lookup.",
+      inputSchema: {
+        for_workspace: z
+          .string()
+          .optional()
+          .describe("Auth slug to refresh. Defaults to the current default workspace."),
+        workspace: z.string().optional().describe(WORKSPACE_PARAM_DESCRIPTION),
+      },
+      annotations: {
+        title: "Refresh cached viewer for a workspace",
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: true,
+      },
+    },
+    safe(async (args) => {
+      const ws = await loadAuthForWorkspace(args.for_workspace as string | undefined);
+      const refreshed = await addWorkspace(ws.token);
+      const fullAuth = await loadAuth();
+      const isDefault = fullAuth?.default === refreshed.slug;
+      return text(
+        envelope({
+          workspace: refreshed.slug,
+          workspace_name: refreshed.name,
+          is_default: isDefault,
+          viewer: refreshed.viewer,
+          auth_file: AUTH_FILE_DISPLAY,
+          auth_storage: AUTH_STORAGE_KIND,
+          refreshed: true,
+          created_at: refreshed.created_at,
         }),
       );
     }),
@@ -2973,6 +2959,10 @@ function registerTools(server: McpServer): void {
           .boolean()
           .optional()
           .describe("Report candidates without removing. Defaults to true."),
+        confirm: z
+          .boolean()
+          .optional()
+          .describe("Required true when dry_run:false will remove local cache directories."),
         preserve_cwd_repo: z
           .boolean()
           .optional()
@@ -2992,20 +2982,22 @@ function registerTools(server: McpServer): void {
       },
     },
     safe(async (args) => {
+      const dryRun = args.dry_run === undefined ? true : (args.dry_run as boolean);
+      if (!dryRun) requireConfirm(args as { confirm?: boolean }, "cache_gc");
       const result = await gcCache({
         maxAgeDays: args.max_age_days as number | undefined,
         maxSizeMb: args.max_size_mb as number | undefined,
         hash: args.hash as string | undefined,
-        dryRun: args.dry_run === undefined ? true : (args.dry_run as boolean),
+        dryRun,
         preserveCwdRepo:
           args.preserve_cwd_repo === undefined ? true : (args.preserve_cwd_repo as boolean),
       });
-      return text(envelope({ ...result }));
+      return text(envelope({ dry_run: dryRun, ...result }));
     }),
   );
 
   // ==========================================================================
-  // Wave 4A — attachments, team get, lookups, bulk, workflow states
+  // Attachments, team get, lookups, bulk, workflow states
   // ==========================================================================
 
   // ---------- attachments ----------
@@ -3042,16 +3034,20 @@ function registerTools(server: McpServer): void {
   server.registerTool(
     "update_attachment",
     {
-      title: "Update an attachment's title or URL",
-      description: "Idempotent at the value level — safe to retry.",
+      title: "Update an attachment's title",
+      description:
+        "Update an attachment's title. Linear does not support URL edits on existing attachments; delete and relink to change the URL.",
       inputSchema: {
         id: z.string().describe("Attachment UUID."),
         title: z.string().optional(),
-        url: z.string().optional(),
+        url: z
+          .string()
+          .optional()
+          .describe("Unsupported by Linear; kept to return a structured validation error."),
         workspace: z.string().optional().describe(WORKSPACE_PARAM_DESCRIPTION),
       },
       annotations: {
-        title: "Update an attachment's title or URL",
+        title: "Update an attachment's title",
         readOnlyHint: false,
         destructiveHint: false,
         idempotentHint: true,
@@ -3078,9 +3074,10 @@ function registerTools(server: McpServer): void {
     {
       title: "Delete an attachment",
       description:
-        "Delete an attachment by UUID. Idempotent — re-deleting an already-absent attachment returns `{status: 'already-absent'}`. Round-7 / Q2.",
+        "Delete an attachment by UUID. Idempotent — re-deleting an already-absent attachment returns `{status: 'already-absent'}`.",
       inputSchema: {
         id: z.string().describe("Attachment UUID."),
+        confirm: z.boolean().optional().describe("Required true for deletion."),
         workspace: z.string().optional().describe(WORKSPACE_PARAM_DESCRIPTION),
       },
       annotations: {
@@ -3092,6 +3089,7 @@ function registerTools(server: McpServer): void {
       },
     },
     safe(async (args) => {
+      requireConfirm(args, "delete_attachment");
       const { status } = await tryIdempotentDelete(() => deleteAttachment(args.id as string));
       return text(envelope({ id: args.id, status, success: status === "deleted" }));
     }),
@@ -3103,7 +3101,7 @@ function registerTools(server: McpServer): void {
     {
       title: "Get one team by key or UUID",
       description:
-        "Returns one team (with default-state) or null. Wires the team-key → UUID gap that bites create_label and create_project. `id` accepts a team key (e.g. 'ENG') OR a UUID.",
+        "Returns one team (with default-state). Missing ids/keys surface as structured not_found errors, matching `lebop team get --json`. Wires the team-key → UUID gap that bites create_label and create_project. `id` accepts a team key (e.g. 'ENG') OR a UUID.",
       inputSchema: {
         id: z.string().describe("Team key (e.g. 'ENG') OR UUID."),
         workspace: z.string().optional().describe(WORKSPACE_PARAM_DESCRIPTION),
@@ -3116,7 +3114,12 @@ function registerTools(server: McpServer): void {
       },
     },
     safe(async (args) => {
-      const team = await getTeam(args.id as string);
+      const team = requireMcpEntity(
+        await getTeam(args.id as string),
+        "team",
+        args.id as string,
+        "verify the team key/UUID; run list_teams to discover teams",
+      );
       return text(envelope({ team }));
     }),
   );
@@ -3177,10 +3180,9 @@ function registerTools(server: McpServer): void {
         "Updates `workspace_team_defaults[<slug>]` in ~/.lebop/config.yaml. Pairs with set_default_workspace. Idempotent at the value level.",
       inputSchema: {
         workspace_slug: z.string().describe("Workspace slug to set the default team for."),
-        // Round-6 / C1: renamed from `team_key` → `team` for consistency
-        // with every other tool that takes a team identifier (`list_issues`,
-        // `list_projects`, `list_team_members`, etc.). Aligns with the
-        // round-5 `list_team_members` rename — same rationale.
+        // Use `team` for consistency with every other tool that takes a team
+        // identifier (`list_issues`, `list_projects`, `list_team_members`,
+        // etc.).
         team: z.string().describe("Team key (e.g. 'NOX')."),
       },
       annotations: {
@@ -3192,24 +3194,17 @@ function registerTools(server: McpServer): void {
       },
     },
     safe(async (args) => {
-      // Round-11 / M-2: validate that the team exists in the target
-      // workspace before writing to config. Pre-fix `set_workspace_default_team
-      // {workspace_slug: "X", team: "NOPE"}` silently wrote bogus team keys
-      // into `~/.lebop/config.yaml`, surfacing later as confusing
-      // "team not found" errors on every subsequent lookup. The check uses
-      // the workspace's own auth context (the workspace arg is `workspace_slug`
-      // here, NOT the typical `workspace` SDK selector).
-      const restore = withWorkspace(args.workspace_slug as string);
-      try {
-        const team = await getTeam(args.team as string);
-        if (!team) {
-          throw new NotFoundError(
-            `team not found: ${args.team}`,
-            `run \`lebop teams --workspace ${args.workspace_slug}\` to list valid keys`,
-          );
-        }
-      } finally {
-        restore();
+      // Validate that the team exists inside the target workspace before
+      // writing to config. This tool uses `workspace_slug`, not the standard
+      // per-tool `workspace` argument, so it sets request context explicitly.
+      const team = await runWithRequestContext({ workspace: args.workspace_slug as string }, () =>
+        getTeam(args.team as string),
+      );
+      if (!team) {
+        throw new NotFoundError(
+          `team not found: ${args.team}`,
+          `run \`lebop teams --workspace ${args.workspace_slug}\` to list valid keys`,
+        );
       }
       await setWorkspaceDefaultTeam(args.workspace_slug as string, args.team as string);
       return text(
@@ -3223,54 +3218,9 @@ function registerTools(server: McpServer): void {
       );
     }),
   );
+}
 
-  // ---------- bulk_update_issues ----------
-  server.registerTool(
-    "bulk_update_issues",
-    {
-      title: "Apply one patch uniformly to N issues",
-      description:
-        "Wraps Linear's issueBatchUpdate. Resolves all extras (state/labels/assignee/project/milestone/cycle names → UUIDs) ONCE up front, then fires a single batch mutation. Returns partial-success per-row results matching push_changes' shape: each input identifier maps to either {status:'updated', fields} or {status:'failed', error:{code, message, hint}}. Idempotent at the value level.",
-      inputSchema: {
-        identifiers: z.array(z.string()).describe("Issue identifiers (TEAM-NN) to update."),
-        patch: z
-          .object({
-            state: z.string().optional(),
-            priority: z.union([z.string(), z.number()]).optional(),
-            labels: z.array(z.string()).optional(),
-            assignee: z.union([z.string(), z.null()]).optional(),
-            estimate: z.union([z.number(), z.null()]).optional(),
-            project: z.union([z.string(), z.null()]).optional(),
-            milestone: z.union([z.string(), z.null()]).optional(),
-            cycle: z.union([z.string(), z.null()]).optional(),
-          })
-          .describe("Patch to apply uniformly to each issue."),
-        team: z
-          .string()
-          .optional()
-          .describe(
-            "Override team for state/labels resolution; otherwise derived from identifier prefix.",
-          ),
-        workspace: z.string().optional().describe(WORKSPACE_PARAM_DESCRIPTION),
-      },
-      annotations: {
-        title: "Apply one patch uniformly to N issues",
-        readOnlyHint: false,
-        destructiveHint: false,
-        idempotentHint: true,
-        openWorldHint: true,
-      },
-    },
-    safe(async (args) => {
-      const result = await bulkUpdateIssues({
-        identifiers: args.identifiers as string[],
-        patch: args.patch as Parameters<typeof bulkUpdateIssues>[0]["patch"],
-        team: args.team as string | undefined,
-      });
-      return text(envelope({ results: result.results, summary: result.summary }));
-    }),
-  );
-
+function registerLegacyMcpToolsAfterBulk(server: McpServerLike): void {
   // ---------- list_workflow_states ----------
   server.registerTool(
     "list_workflow_states",
@@ -3279,7 +3229,7 @@ function registerTools(server: McpServer): void {
       description:
         "Per-team workflow states (Backlog, Todo, In Progress, Done, Cancelled — varies per team setup). Thin wrapper over the team-metadata cache + a live states() fetch for color + default flag.",
       inputSchema: {
-        team: z.string().describe("Team key."),
+        team: z.string().optional().describe("Team key. Omit to use the configured default team."),
         workspace: z.string().optional().describe(WORKSPACE_PARAM_DESCRIPTION),
       },
       annotations: {
@@ -3290,310 +3240,17 @@ function registerTools(server: McpServer): void {
       },
     },
     safe(async (args) => {
-      const result = await listWorkflowStates(args.team as string);
+      const config = await resolveConfig({ teamOverride: args.team as string | undefined });
+      const result = await listWorkflowStates(config.team);
       if (!result) {
-        throw new NotFoundError(`team not found: ${args.team}`, "verify the team key (e.g. 'NOX')");
+        throw new NotFoundError(
+          `team not found: ${config.team}`,
+          "verify the team key (e.g. 'NOX')",
+        );
       }
       return text(
         envelope({ team: result.team, count: result.states.length, states: result.states }),
       );
     }),
-  );
-}
-
-/**
- * Set LEBOP_WORKSPACE for the duration of this tool call so the existing
- * `loadAuthForWorkspace` env-var path picks it up. The cached LinearClient
- * map is keyed by slug, so per-workspace selection works correctly.
- *
- * Returns a restore function; callers must invoke it in a `finally` to
- * avoid sticky state across tool calls (request A with workspace=foo
- * shouldn't leak `foo` into request B that doesn't pass `workspace`).
- *
- * The stdio MCP transport processes requests serially, so this isn't a
- * concurrency hazard within one connection — but the cross-call leak is
- * a real bug independent of concurrency.
- *
- * Round-6 / L3 comment-pin: when the MCP server gains an HTTP+SSE
- * transport (see file header), this env-mutation pattern WILL race
- * across concurrent tool calls. Replace with an async-local-storage /
- * AsyncContext-scoped workspace before flipping that switch.
- */
-function withWorkspace(workspace: string | undefined): () => void {
-  const prev = process.env.LEBOP_WORKSPACE;
-  if (workspace) process.env.LEBOP_WORKSPACE = workspace;
-  return () => {
-    if (prev === undefined) {
-      // env vars need real delete; setting to undefined would coerce
-      // to the string "undefined".
-      delete process.env.LEBOP_WORKSPACE;
-    } else {
-      process.env.LEBOP_WORKSPACE = prev;
-    }
-  };
-}
-
-/**
- * Wrap an MCP tool handler so any thrown error becomes a structured
- * `{content, isError: true}` response with `LebopError.code` + `hint`
- * preserved. The MCP SDK's default catch path serializes only
- * `error.message`, dropping the structured taxonomy this codebase took
- * pains to build (spec §13.3 promises the contract).
- *
- * Also handles per-call `workspace` selection: applies the override before
- * the handler runs and restores the prior `LEBOP_WORKSPACE` env in the
- * `finally` block. Prevents one tool call from leaking its workspace
- * into the next.
- */
-type ToolHandlerArgs = Record<string, unknown>;
-type ToolHandlerResult = {
-  content: { type: "text"; text: string }[];
-  isError?: boolean;
-};
-
-/**
- * Replace the MCP SDK's default `CallToolRequestSchema` handler with one
- * that emits the structured envelope on input-validation failure.
- *
- * Background (round-6 / H11): `@modelcontextprotocol/sdk@1.29` validates
- * tool input inside `McpServer.validateToolInput` BEFORE invoking the
- * user-provided handler. On failure it throws `McpError(InvalidParams)`,
- * which the SDK's outer try/catch routes through `createToolError(message)`
- * to produce a prose payload (`"MCP error -32602: Input validation error: ..."`).
- * That bypasses our envelope contract — clients that want to branch on
- * `error.code` can't, because the payload is a free-form string.
- *
- * The SDK exposes no validation-error hook, no middleware, and no
- * `onError` callback (verified in agent investigation). The only viable
- * intercept point is to overwrite the protocol-layer request handler via
- * `server.server.setRequestHandler(...)` AFTER `registerTools()` has run
- * (which is when the SDK lazily installs its default handler). We reuse
- * the SDK's own `normalizeObjectSchema` + `safeParseAsync` helpers so the
- * validation semantics match exactly — only the error-format step changes.
- *
- * Lebop doesn't use `outputSchema` or `taskSupport`; those SDK paths are
- * intentionally omitted here to keep the override surgical. If a future
- * tool needs them, mirror the SDK's `mcp.js:100-143` logic into this
- * handler.
- */
-function installEnvelopeValidator(server: McpServer): void {
-  // `_registeredTools` is declared `private` in the SDK types but is a
-  // plain JS field at runtime. Cast via `unknown` to silence TS without
-  // weakening the rest of `server`'s type. The shape matches the SDK's
-  // internal RegisteredTool interface (only the fields we read are typed).
-  type RegisteredTool = {
-    enabled?: boolean;
-    inputSchema?: unknown;
-    // Round-8 backlog / N3: only read for the fail-fast assert below.
-    // Our overridden CallToolRequestSchema handler intentionally skips the
-    // SDK's outputSchema-validation branch; if a future tool ever registers
-    // an outputSchema, that validation would silently NOT fire. The assert
-    // makes that scenario fail at boot instead of in production.
-    outputSchema?: unknown;
-    execution?: { taskSupport?: string };
-    handler: (args: unknown, extra: unknown) => Promise<ToolHandlerResult>;
-  };
-  const registry = (server as unknown as { _registeredTools: Record<string, RegisteredTool> })
-    ._registeredTools;
-
-  // Round-8 backlog / N3: fail-fast guard. The handler we register below
-  // intentionally doesn't replicate the SDK's `validateToolOutput` or
-  // task-aware branches (no lebop tool uses them today). If anyone adds
-  // a tool with `outputSchema` or active `taskSupport` later, we want a
-  // clear boot-time error pointing at this assert rather than silent
-  // skips. NOTE: `taskSupport === "forbidden"` is the SDK's default for
-  // tools that explicitly opt OUT of task augmentation — that's safe to
-  // skip; only "required" and "optional" indicate task-aware tools.
-  for (const [name, tool] of Object.entries(registry)) {
-    if (tool.outputSchema !== undefined) {
-      throw new Error(
-        `installEnvelopeValidator: tool "${name}" has an outputSchema, but the envelope validator does not replicate the SDK's output-validation branch. Mirror it from @modelcontextprotocol/sdk/server/mcp.js:185-207 before adding outputSchema-bearing tools.`,
-      );
-    }
-    const taskSupport = tool.execution?.taskSupport;
-    if (taskSupport === "required" || taskSupport === "optional") {
-      throw new Error(
-        `installEnvelopeValidator: tool "${name}" has taskSupport="${taskSupport}", but the envelope validator does not replicate the SDK's task-handler branches. Mirror them from @modelcontextprotocol/sdk/server/mcp.js:109-122 before adding task-aware tools.`,
-      );
-    }
-  }
-
-  server.server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
-    const name = request.params.name;
-    const args = request.params.arguments;
-
-    const tool = registry[name];
-    if (!tool) {
-      return envelopeError("not_found", `Tool ${name} not found`);
-    }
-    if (tool.enabled === false) {
-      return envelopeError("validation_error", `Tool ${name} is disabled`);
-    }
-
-    // Validate input ourselves — mirrors SDK validateToolInput logic so
-    // the tools/list-emitted JSON Schema (clients use it for autocomplete +
-    // type hints) stays the same. Only the failure-path payload changes.
-    // The zod-compat helpers accept a fuzzy `AnySchema | ZodRawShapeCompat`
-    // union; our `tool.inputSchema` is `unknown` from the registry cast.
-    // Trust the SDK's invariant (it ran these same helpers without issue
-    // before we overwrote the handler) and cast via `as never`.
-    let parsedArgs: unknown = args;
-    if (tool.inputSchema !== undefined) {
-      const inputObj = normalizeObjectSchema(tool.inputSchema as never);
-      const schemaToParse = inputObj ?? (tool.inputSchema as never);
-      const parseResult = await safeParseAsync(schemaToParse, args);
-      if (!parseResult.success) {
-        const errObj = (parseResult as { error?: { issues?: unknown } }).error;
-        const issues = Array.isArray(errObj?.issues) ? errObj.issues : [];
-        const err = new InvalidArgumentsError(
-          `Invalid arguments for tool ${name}`,
-          issues,
-          "see `issues` for per-field detail (path + zod issue code + expected vs received)",
-        );
-        return {
-          content: [{ type: "text", text: formatToolError(err) }],
-          isError: true,
-        };
-      }
-      parsedArgs = parseResult.data;
-
-      // Round-7 / Q3: enforce strict-mode globally via a post-validation
-      // key-set check. The MCP SDK's `normalizeObjectSchema` returns
-      // v4-mini object schemas for raw-shape inputs (which lebop uses
-      // everywhere), and v4-mini doesn't expose a chainable `.strict()`
-      // method. Post-validation key comparison is the simplest robust
-      // alternative: any key in `args` that didn't survive into
-      // `parseResult.data` was silently stripped by zod (typo, wrong
-      // singular/plural, forward-compat probe). Emit the same
-      // `invalid_arguments` envelope shape as native zod rejections so
-      // clients can branch uniformly. Closes MCP smoke H-MCP-1.
-      if (
-        typeof args === "object" &&
-        args !== null &&
-        !Array.isArray(args) &&
-        typeof parsedArgs === "object" &&
-        parsedArgs !== null
-      ) {
-        const inputKeys = Object.keys(args as Record<string, unknown>);
-        const parsedKeys = new Set(Object.keys(parsedArgs as Record<string, unknown>));
-        const unrecognized = inputKeys.filter((k) => !parsedKeys.has(k));
-        if (unrecognized.length > 0) {
-          const keysList = unrecognized.map((k) => `"${k}"`).join(", ");
-          const err = new InvalidArgumentsError(
-            `Invalid arguments for tool ${name}: unrecognized ${unrecognized.length > 1 ? "keys" : "key"} ${keysList}`,
-            [
-              {
-                code: "unrecognized_keys",
-                keys: unrecognized,
-                path: [],
-                message: `Unrecognized ${unrecognized.length > 1 ? "keys" : "key"}: ${keysList}`,
-              },
-            ],
-            "remove the listed keys (they're not in the tool's input schema). Check for typos / wrong singular-vs-plural.",
-          );
-          return {
-            content: [{ type: "text", text: formatToolError(err) }],
-            isError: true,
-          };
-        }
-      }
-    }
-
-    // Delegate to the registered handler. Every tool is wrapped via our
-    // `safe()` helper at registration time, so business-rule errors flow
-    // through `formatToolError` and emit the envelope. This defensive
-    // try/catch handles only the impossible-shouldn't-happen cases (an
-    // unwrapped handler, an SDK-task-handler shape we don't use today).
-    try {
-      return await tool.handler(parsedArgs, extra);
-    } catch (err) {
-      return {
-        content: [{ type: "text", text: formatToolError(err) }],
-        isError: true,
-      };
-    }
-  });
-}
-
-function envelopeError(code: string, message: string, hint?: string): ToolHandlerResult {
-  return {
-    content: [
-      {
-        type: "text",
-        text: JSON.stringify(
-          {
-            schema_version: SCHEMA_VERSION,
-            error: { code, message, ...(hint ? { hint } : {}) },
-          },
-          null,
-          2,
-        ),
-      },
-    ],
-    isError: true,
-  };
-}
-
-function safe<A extends ToolHandlerArgs>(
-  fn: (args: A) => Promise<ToolHandlerResult>,
-): (args: A) => Promise<ToolHandlerResult> {
-  return async (args) => {
-    const restore = withWorkspace(args.workspace as string | undefined);
-    try {
-      return await fn(args);
-    } catch (err) {
-      return {
-        content: [{ type: "text", text: formatToolError(err) }],
-        isError: true,
-      };
-    } finally {
-      restore();
-    }
-  };
-}
-
-/**
- * Wrap any JSON-serializable payload as an MCP tool-call response with a
- * single text content block. Keeps the registered tools terse.
- */
-function text(payload: unknown): { content: { type: "text"; text: string }[] } {
-  return {
-    content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
-  };
-}
-
-/**
- * Format a thrown error as an MCP tool-call response. LebopError surfaces
- * its code + hint; everything else falls through to the message.
- */
-export function formatToolError(err: unknown): string {
-  if (err instanceof LebopError) {
-    // InvalidArgumentsError carries a structured `issues` array (round-6 / H11)
-    // so clients can branch precisely on per-field failures from the JSON-RPC
-    // validation layer. Surface it on the envelope when present; omit for
-    // other LebopError subtypes that don't carry issues.
-    const issues =
-      err instanceof InvalidArgumentsError && err.issues.length > 0 ? err.issues : undefined;
-    return JSON.stringify(
-      {
-        schema_version: SCHEMA_VERSION,
-        error: {
-          code: err.code,
-          message: err.message,
-          hint: err.hint,
-          ...(issues ? { issues } : {}),
-        },
-      },
-      null,
-      2,
-    );
-  }
-  return JSON.stringify(
-    {
-      schema_version: SCHEMA_VERSION,
-      error: { code: "unknown", message: (err as Error).message ?? String(err) },
-    },
-    null,
-    2,
   );
 }

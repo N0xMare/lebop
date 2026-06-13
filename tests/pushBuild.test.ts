@@ -42,7 +42,7 @@ const teamMetadata: TeamMetadata = {
 };
 
 function makeMetadata(overrides: Partial<IssueMetadata>): IssueMetadata {
-  return {
+  const base: IssueMetadata = {
     identifier: "UE-1",
     title: overrides.title ?? "t",
     state: overrides.state ?? "Todo",
@@ -51,6 +51,8 @@ function makeMetadata(overrides: Partial<IssueMetadata>): IssueMetadata {
     labels: overrides.labels ?? [],
     assignee: overrides.assignee ?? null,
     project: overrides.project ?? null,
+    milestone: overrides.milestone ?? null,
+    cycle: overrides.cycle ?? null,
     parent: overrides.parent ?? null,
     _server: {
       id: "issue-uuid",
@@ -69,9 +71,21 @@ function makeMetadata(overrides: Partial<IssueMetadata>): IssueMetadata {
       description_hash: "h",
       project_id: null,
       project_name: null,
+      project_milestone_id: null,
+      project_milestone_name: null,
+      cycle_id: null,
+      cycle_name: null,
       parent_id: null,
       parent_identifier: null,
       updated_at: new Date().toISOString(),
+    },
+  };
+  return {
+    ...base,
+    ...overrides,
+    _server: {
+      ...base._server,
+      ...(overrides._server ?? {}),
     },
   };
 }
@@ -153,6 +167,68 @@ describe("buildIssueUpdateInput", () => {
       teamMetadata,
     );
     expect(input).toEqual({ priority: 2, estimate: 5 });
+  });
+
+  it("clears project, milestone, and cycle placement fields", async () => {
+    const input = await buildIssueUpdateInput(
+      planFor(
+        [
+          { field: "project", from: "Example", to: null },
+          { field: "milestone", from: "M1", to: null },
+          { field: "cycle", from: "Cycle 1", to: null },
+        ],
+        {
+          project: null,
+          milestone: null,
+          cycle: null,
+          _server: {
+            project_id: "proj-1",
+            project_name: "Example",
+            project_milestone_id: "milestone-1",
+            project_milestone_name: "M1",
+            cycle_id: "cycle-1",
+            cycle_name: "Cycle 1",
+          } as IssueMetadata["_server"],
+        },
+      ),
+      teamMetadata,
+    );
+    expect(input).toEqual({
+      projectId: null,
+      projectMilestoneId: null,
+      cycleId: null,
+    });
+  });
+
+  it("uses cached server ids for unchanged placement names selected by a diff", async () => {
+    const input = await buildIssueUpdateInput(
+      planFor(
+        [
+          { field: "project", from: "Old", to: "Example" },
+          { field: "milestone", from: "Old milestone", to: "M1" },
+          { field: "cycle", from: "Old cycle", to: "Cycle 1" },
+        ],
+        {
+          project: "Example",
+          milestone: "M1",
+          cycle: "Cycle 1",
+          _server: {
+            project_id: "proj-1",
+            project_name: "Example",
+            project_milestone_id: "milestone-1",
+            project_milestone_name: "M1",
+            cycle_id: "cycle-1",
+            cycle_name: "Cycle 1",
+          } as IssueMetadata["_server"],
+        },
+      ),
+      teamMetadata,
+    );
+    expect(input).toEqual({
+      projectId: "proj-1",
+      projectMilestoneId: "milestone-1",
+      cycleId: "cycle-1",
+    });
   });
 
   it("resolves parent identifier to UUID via SDK lookup", async () => {

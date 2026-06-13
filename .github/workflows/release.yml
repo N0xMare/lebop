@@ -6,7 +6,7 @@ on:
       - "v*"
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: release-${{ github.ref }}
@@ -21,14 +21,24 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v6
-      - uses: oven-sh/setup-bun@v2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
         with:
           bun-version: 1.3.13
       - name: install deps
         run: bun install --frozen-lockfile
+      - name: verify workflow action refs
+        run: node scripts/check-npm-pack.mjs --workflow-action-refs
+
+      - name: install actionlint
+        run: |
+          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: actionlint
+        run: actionlint .github/workflows/*.yml
       - name: assert package.json.version matches tag
-        # Tagging v0.0.3 with package.json still saying "0.0.2" would publish a
+        # Tagging v0.0.4 with package.json still saying "0.0.3" would publish a
         # binary that lies about its own --version. Fail fast.
         run: |
           tag="${{ github.ref_name }}"
@@ -44,6 +54,8 @@ jobs:
         run: bun run check
       - name: tests
         run: bun run test
+      - name: package dry-run
+        run: bun run check:package
 
   build:
     name: build ${{ matrix.target }}
@@ -67,9 +79,9 @@ jobs:
             target: bun-linux-arm64
             asset: lebop-linux-arm64
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
 
-      - uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
         with:
           bun-version: 1.3.13
 
@@ -91,30 +103,92 @@ jobs:
         # MCP stdio transport can handshake — both are pre-auth so they can
         # run in CI without credentials.
         run: |
-          ./${{ matrix.asset }} --version
+          expected_version=$(node -e 'process.stdout.write(require("./package.json").version)')
+          cli_version=$(./${{ matrix.asset }} --version | tr -d '\r\n')
+          if [ "$cli_version" != "$expected_version" ]; then
+            echo "::error::CLI --version reported $cli_version, expected $expected_version"
+            exit 1
+          fi
           ./${{ matrix.asset }} --help > /dev/null
           ./${{ matrix.asset }} list --help > /dev/null
           ./${{ matrix.asset }} plan --help > /dev/null
           ./${{ matrix.asset }} mcp --help > /dev/null
           ./${{ matrix.asset }} project --help > /dev/null
           ./${{ matrix.asset }} initiative --help > /dev/null
-          # MCP stdio handshake: pipe `initialize` in, expect a JSON-RPC reply
-          # whose first line contains `protocolVersion`. `head -n1` SIGPIPEs
-          # the server once it gets the response — no dependency on the
-          # `timeout(1)` coreutil (which is GNU-only and not guaranteed on
-          # macOS runners). `sleep 5` keeps stdin open long enough for the
-          # server to write before SIGPIPE.
-          {
-            printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"release-smoke","version":"1"}}}'
-            sleep 5
-          } | ./${{ matrix.asset }} mcp 2>/dev/null | head -n1 | grep -q '"protocolVersion"' \
-            || { echo "::error::MCP initialize handshake failed"; exit 1; }
+          ASSET="./${{ matrix.asset }}" EXPECTED_VERSION="$expected_version" node <<'NODE'
+          const { spawn } = require("node:child_process");
+
+          const child = spawn(process.env.ASSET, ["mcp"], { stdio: ["pipe", "pipe", "pipe"] });
+          let stdout = "";
+          let stderr = "";
+          let completed = false;
+
+          function fail(message) {
+            if (completed) return;
+            completed = true;
+            clearTimeout(timer);
+            child.kill("SIGTERM");
+            console.error(`::error::${message}`);
+            if (stdout.trim()) console.error(`stdout:\n${stdout}`);
+            if (stderr.trim()) console.error(`stderr:\n${stderr}`);
+            process.exit(1);
+          }
+
+          const timer = setTimeout(() => fail("MCP initialize handshake timed out"), 8000);
+
+          child.stderr.on("data", (chunk) => {
+            stderr += chunk.toString();
+          });
+
+          child.stdout.on("data", (chunk) => {
+            stdout += chunk.toString();
+            const nl = stdout.indexOf("\n");
+            if (nl === -1 || completed) return;
+            const line = stdout.slice(0, nl).trim();
+            let message;
+            try {
+              message = JSON.parse(line);
+            } catch (err) {
+              fail(`MCP initialize returned non-JSON stdout: ${err.message}`);
+              return;
+            }
+            const protocolVersion = message.result?.protocolVersion;
+            const serverVersion = message.result?.serverInfo?.version;
+            if (!protocolVersion) {
+              fail("MCP initialize response missing protocolVersion");
+              return;
+            }
+            if (serverVersion !== process.env.EXPECTED_VERSION) {
+              fail(`MCP serverInfo.version was ${serverVersion}, expected ${process.env.EXPECTED_VERSION}`);
+              return;
+            }
+            completed = true;
+            clearTimeout(timer);
+            child.kill("SIGTERM");
+            process.exit(0);
+          });
+
+          child.on("exit", (code, signal) => {
+            if (!completed) fail(`MCP exited before initialize response (code=${code}, signal=${signal})`);
+          });
+
+          child.stdin.write(`${JSON.stringify({
+            jsonrpc: "2.0",
+            id: 1,
+            method: "initialize",
+            params: {
+              protocolVersion: "2024-11-05",
+              capabilities: {},
+              clientInfo: { name: "release-smoke", version: "1" },
+            },
+          })}\n`);
+          NODE
 
       - name: sha256
         run: |
           shasum -a 256 ${{ matrix.asset }} > ${{ matrix.asset }}.sha256
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: ${{ matrix.asset }}
           path: |
@@ -123,42 +197,269 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+  compiled-linux-live-smoke:
+    name: compiled Linux x64 full live smoke
+    runs-on: ubuntu-latest
+    needs: build
+    timeout-minutes: 45
+    concurrency:
+      group: noxor-live-write
+      cancel-in-progress: false
+    env:
+      LEBOP_HOME: /tmp/lebop-release-compiled-noxor
+      LEBOP_NOXOR_TOKEN: ${{ secrets.LEBOP_NOXOR_TOKEN }}
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with:
+          bun-version: 1.3.13
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: lebop-linux-x64
+          path: compiled-live
+
+      - name: gate on token presence
+        run: |
+          if [ -z "$LEBOP_NOXOR_TOKEN" ]; then
+            echo "::error::LEBOP_NOXOR_TOKEN secret is required for compiled-binary live smoke."
+            exit 1
+          fi
+
+      - name: compiled full live harness
+        run: |
+          set -euo pipefail
+          chmod +x compiled-live/lebop-linux-x64
+          export LEBOP_LIVE_BIN="$PWD/compiled-live/lebop-linux-x64"
+
+          expected_version="$(node -e 'process.stdout.write(require("./package.json").version)')"
+          actual_version="$("$LEBOP_LIVE_BIN" --version | tr -d '\r\n')"
+          if [ "$actual_version" != "$expected_version" ]; then
+            echo "::error::compiled binary reported $actual_version, expected $expected_version"
+            exit 1
+          fi
+
+          export LEBOP_LIVE_STAMP="compiled-${{ github.run_id }}-${{ github.run_attempt }}"
+          bun scripts/live-nox-surface-smoke.mjs
+
+      - name: validate compiled full live harness report
+        env:
+          LEBOP_LIVE_STAMP: compiled-${{ github.run_id }}-${{ github.run_attempt }}
+          LEBOP_LIVE_EXPECT_WORKSPACE: noxor
+          LEBOP_LIVE_EXPECT_TEAM: NOX
+          LEBOP_LIVE_EXPECT_STAMP: compiled-${{ github.run_id }}-${{ github.run_attempt }}
+          LEBOP_LIVE_EXPECT_BIN_MODE: compiled-binary
+        run: |
+          set -euo pipefail
+          lebop_live_expect_bin_sha256="$(shasum -a 256 compiled-live/lebop-linux-x64 | awk '{print $1}')"
+          export LEBOP_LIVE_EXPECT_BIN_SHA256="$lebop_live_expect_bin_sha256"
+          report="docs/local/live-nox-surface-report-${LEBOP_LIVE_STAMP}.json"
+          bun scripts/live-nox-surface-smoke.mjs --validate-report "$report"
+
+      - name: upload compiled live harness report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: release-compiled-live-noxor-report
+          path: docs/local/live-nox-surface-report-*.json
+          if-no-files-found: error
+
+      - name: cleanup
+        if: always()
+        run: rm -rf "$LEBOP_HOME"
+
   release:
     name: publish release
     runs-on: ubuntu-latest
-    needs: build
+    needs: [build, compiled-linux-live-smoke]
     timeout-minutes: 10
+    permissions:
+      contents: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
 
-      - uses: actions/download-artifact@v8
+      - name: download release binary artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
+          pattern: lebop-*
           path: dist
           merge-multiple: true
 
-      - name: aggregate SHA256SUMS
+      - name: verify release asset allowlist and aggregate SHA256SUMS
         working-directory: dist
         run: |
-          cat ./*.sha256 > SHA256SUMS
-          rm ./*.sha256
+          set -euo pipefail
+          release_assets=(
+            lebop-darwin-arm64
+            lebop-darwin-x64
+            lebop-linux-x64
+            lebop-linux-arm64
+          )
+          allowed_files=()
+          for asset in "${release_assets[@]}"; do
+            test -f "$asset" || { echo "::error::missing release asset $asset"; exit 1; }
+            test -f "$asset.sha256" || { echo "::error::missing checksum $asset.sha256"; exit 1; }
+            shasum -a 256 -c "$asset.sha256"
+            allowed_files+=("$asset" "$asset.sha256")
+          done
+          unexpected=()
+          while IFS= read -r file; do
+            matched=false
+            for allowed in "${allowed_files[@]}"; do
+              if [ "$file" = "$allowed" ]; then
+                matched=true
+                break
+              fi
+            done
+            if [ "$matched" = false ]; then
+              unexpected+=("$file")
+            fi
+          done < <(find . -maxdepth 1 -type f -print | sed 's#^\./##')
+          if [ "${#unexpected[@]}" -gt 0 ]; then
+            echo "::error::unexpected release artifact(s) in dist:"
+            printf '%s\n' "${unexpected[@]}"
+            exit 1
+          fi
+          cat "${release_assets[@]/%/.sha256}" > SHA256SUMS
+          shasum -a 256 -c SHA256SUMS
+          rm "${release_assets[@]/%/.sha256}"
 
-      - name: publish (idempotent)
+      - name: publish prerelease for installer smoke (idempotent)
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           tag="${{ github.ref_name }}"
           notes_file=".github/release-notes/${tag}.md"
           if [ -f "$notes_file" ]; then
-            notes_args=(--notes-file "$notes_file")
+            create_notes_args=(--notes-file "$notes_file")
+            edit_notes_args=(--notes-file "$notes_file")
           else
-            notes_args=(--generate-notes)
+            create_notes_args=(--generate-notes)
+            edit_notes_args=()
           fi
-          if gh release view "$tag" >/dev/null 2>&1; then
-            echo "release $tag exists; uploading assets with --clobber"
-            gh release upload "$tag" --clobber ./dist/*
+          release_assets=(
+            ./dist/lebop-darwin-arm64
+            ./dist/lebop-darwin-x64
+            ./dist/lebop-linux-x64
+            ./dist/lebop-linux-arm64
+            ./dist/SHA256SUMS
+          )
+          if release_json="$(gh release view "$tag" --json isPrerelease,isLatest 2>/dev/null)"; then
+            is_prerelease="$(node -e 'const r = JSON.parse(process.argv[1]); process.stdout.write(String(r.isPrerelease));' "$release_json")"
+            is_latest="$(node -e 'const r = JSON.parse(process.argv[1]); process.stdout.write(String(r.isLatest));' "$release_json")"
+            if [ "$is_prerelease" = "true" ]; then
+              echo "release $tag exists as a prerelease; uploading assets with --clobber as non-latest prerelease"
+              gh release edit "$tag" \
+                --title "$tag" \
+                "${edit_notes_args[@]}" \
+                --prerelease \
+                --latest=false
+            else
+              echo "release $tag already exists as final (latest=$is_latest); preserving release state during rerun"
+              gh release edit "$tag" \
+                --title "$tag" \
+                "${edit_notes_args[@]}"
+            fi
+            gh release upload "$tag" --clobber "${release_assets[@]}"
           else
             gh release create "$tag" \
               --title "$tag" \
-              "${notes_args[@]}" \
-              ./dist/*
+              --prerelease \
+              --latest=false \
+              "${create_notes_args[@]}" \
+              "${release_assets[@]}"
           fi
+
+      - name: smoke published installer
+        env:
+          LEBOP_INSTALL_DIR: ${{ runner.temp }}/lebop-release-install
+        run: |
+          set -euo pipefail
+          tag="${{ github.ref_name }}"
+          expected="${tag#v}"
+          LEBOP_VERSION="$tag" bash scripts/install.sh
+          actual="$("$LEBOP_INSTALL_DIR/lebop" --version | tr -d '\r\n')"
+          if [ "$actual" != "$expected" ]; then
+            echo "::error::installed lebop reported $actual, expected $expected"
+            exit 1
+          fi
+          "$LEBOP_INSTALL_DIR/lebop" --help > /dev/null
+          "$LEBOP_INSTALL_DIR/lebop" list --help > /dev/null
+          "$LEBOP_INSTALL_DIR/lebop" plan --help > /dev/null
+          "$LEBOP_INSTALL_DIR/lebop" mcp --help > /dev/null
+          BIN="$LEBOP_INSTALL_DIR/lebop" EXPECTED_VERSION="$expected" node <<'NODE'
+          const { spawn } = require("node:child_process");
+
+          const child = spawn(process.env.BIN, ["mcp"], { stdio: ["pipe", "pipe", "pipe"] });
+          let stdout = "";
+          let stderr = "";
+          let completed = false;
+
+          function fail(message) {
+            if (completed) return;
+            completed = true;
+            clearTimeout(timer);
+            child.kill("SIGTERM");
+            console.error(`::error::${message}`);
+            if (stdout.trim()) console.error(`stdout:\n${stdout}`);
+            if (stderr.trim()) console.error(`stderr:\n${stderr}`);
+            process.exit(1);
+          }
+
+          const timer = setTimeout(() => fail("installed MCP initialize handshake timed out"), 8000);
+
+          child.stderr.on("data", (chunk) => {
+            stderr += chunk.toString();
+          });
+
+          child.stdout.on("data", (chunk) => {
+            stdout += chunk.toString();
+            const nl = stdout.indexOf("\n");
+            if (nl === -1 || completed) return;
+            const line = stdout.slice(0, nl).trim();
+            let message;
+            try {
+              message = JSON.parse(line);
+            } catch (err) {
+              fail(`installed MCP initialize returned non-JSON stdout: ${err.message}`);
+              return;
+            }
+            const protocolVersion = message.result?.protocolVersion;
+            const serverVersion = message.result?.serverInfo?.version;
+            if (!protocolVersion) {
+              fail("installed MCP initialize response missing protocolVersion");
+              return;
+            }
+            if (serverVersion !== process.env.EXPECTED_VERSION) {
+              fail(`installed MCP serverInfo.version was ${serverVersion}, expected ${process.env.EXPECTED_VERSION}`);
+              return;
+            }
+            completed = true;
+            clearTimeout(timer);
+            child.kill("SIGTERM");
+            process.exit(0);
+          });
+
+          child.on("exit", (code, signal) => {
+            if (!completed) fail(`installed MCP exited before initialize response (code=${code}, signal=${signal})`);
+          });
+
+          child.stdin.write(`${JSON.stringify({
+            jsonrpc: "2.0",
+            id: 1,
+            method: "initialize",
+            params: {
+              protocolVersion: "2024-11-05",
+              capabilities: {},
+              clientInfo: { name: "release-installed-smoke", version: "1" },
+            },
+          })}\n`);
+          NODE
+
+      - name: promote release to latest
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${{ github.ref_name }}"
+          gh release edit "$tag" --prerelease=false --latest

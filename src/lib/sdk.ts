@@ -1,6 +1,11 @@
 import type { LinearClient } from "@linear/sdk";
 import { linearClientFromToken, loadAuthForWorkspace } from "./auth.ts";
 import { mapSdkError } from "./errors.ts";
+import {
+  observeLinearRateLimitError,
+  observeLinearRateLimitHeaders,
+  recordLinearApiAttempt,
+} from "./rateLimit.ts";
 import { withRetry } from "./retry.ts";
 
 // Per-workspace client cache. Calls to `linear()` resolve to the same
@@ -9,29 +14,59 @@ import { withRetry } from "./retry.ts";
 const _clients = new Map<string, LinearClient>();
 
 /**
- * Wrap `client.client.rawRequest` so every error thrown by the GraphQL
- * transport is mapped through `mapSdkError` into a structured LebopError
- * subtype at the SDK boundary. Idempotent: re-wrapping is a no-op because
- * we tag the bound method on first install.
+ * Wrap `client.client.rawRequest` and `client.client.request` so every Linear
+ * response feeds rate-limit telemetry. Idempotent: re-wrapping is a no-op
+ * because we tag the bound methods on first install.
  *
- * This catches non-retry-wrapped callers (mutations like `issueCreate`,
- * `projectCreate`, archive/delete) too. Retry-wrapped callers also get
- * mapping in `withRetry`'s non-retryable branch, but mapping at the
- * transport layer ensures even unwrapped paths surface structured errors.
+ * `rawRequest` callers also get structured error mapping here. Generated SDK
+ * model methods go through `request`, and the SDK's `LinearClient` wraps that
+ * with its own `parseLinearError` catch; do not map those errors early or the
+ * SDK will re-wrap the mapped LebopError as an unknown Linear error.
  */
-const WRAPPED = Symbol.for("lebop.rawRequestWrapped");
-function installRawRequestMapping(client: LinearClient): void {
+const WRAPPED = Symbol.for("lebop.linearTransportWrapped");
+function installLinearTransportHooks(client: LinearClient, workspace: string): void {
   const inner = client.client as unknown as {
     rawRequest: (...args: unknown[]) => Promise<unknown>;
+    request: (...args: unknown[]) => Promise<unknown>;
     [WRAPPED]?: boolean;
   };
   if (inner[WRAPPED]) return;
-  const original = inner.rawRequest.bind(inner);
+  const originalRawRequest = inner.rawRequest.bind(inner);
+  const originalRequest = inner.request.bind(inner);
   inner.rawRequest = async (...args: unknown[]) => {
+    recordLinearApiAttempt(workspace);
     try {
-      return await original(...args);
+      const response = await originalRawRequest(...args);
+      observeLinearRateLimitHeaders(
+        workspace,
+        (response as { headers?: Headers | Record<string, unknown> } | undefined)?.headers,
+      );
+      return response;
     } catch (err) {
+      observeLinearRateLimitError(workspace, err);
       throw mapSdkError(err);
+    }
+  };
+  inner.request = async (...args: unknown[]) => {
+    const query = args[0];
+    if (typeof query !== "string") {
+      // Preserve SDK behavior for uncommon direct request(DocumentNode) usage.
+      recordLinearApiAttempt(workspace);
+      try {
+        return await originalRequest(...args);
+      } catch (err) {
+        observeLinearRateLimitError(workspace, err);
+        throw err;
+      }
+    }
+    recordLinearApiAttempt(workspace);
+    try {
+      const response = (await originalRawRequest(...args)) as { data?: unknown; headers?: Headers };
+      observeLinearRateLimitHeaders(workspace, response.headers);
+      return response.data;
+    } catch (err) {
+      observeLinearRateLimitError(workspace, err);
+      throw err;
     }
   };
   inner[WRAPPED] = true;
@@ -52,7 +87,7 @@ export async function linear(workspace?: string): Promise<LinearClient> {
   let client = _clients.get(auth.slug);
   if (!client) {
     client = linearClientFromToken(auth.token);
-    installRawRequestMapping(client);
+    installLinearTransportHooks(client, auth.slug);
     _clients.set(auth.slug, client);
   }
   return client;

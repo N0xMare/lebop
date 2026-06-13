@@ -34,6 +34,7 @@ vi.mock("node:fs", async () => {
 
 let dir: string;
 let prevBun: unknown;
+let writePaths: string[];
 
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), "lebop-writeatomic-"));
@@ -42,8 +43,10 @@ beforeEach(() => {
   // Bun.write shim — forwards to fs.writeFileSync so the lib can run
   // under vitest (Bun.write is Bun-specific).
   prevBun = (globalThis as { Bun?: unknown }).Bun;
+  writePaths = [];
   (globalThis as { Bun?: unknown }).Bun = {
     write: async (path: string, content: string) => {
+      writePaths.push(path);
       writeFileSync(path, content);
     },
   };
@@ -80,5 +83,15 @@ describe("writeAtomic — rename-failure cleanup", () => {
     // Tmp file was cleaned up — no stragglers in the dir.
     const stragglers = readdirSync(dir).filter((n) => n.includes(".tmp-"));
     expect(stragglers).toEqual([]);
+  });
+
+  it("uses unique tmp paths for same-process same-path writes", async () => {
+    const { writeAtomic } = await import("../src/lib/cache.ts");
+    const path = join(dir, "same.txt");
+
+    await Promise.all([writeAtomic(path, "first\n"), writeAtomic(path, "second\n")]);
+
+    expect(writePaths).toHaveLength(2);
+    expect(new Set(writePaths).size).toBe(2);
   });
 });

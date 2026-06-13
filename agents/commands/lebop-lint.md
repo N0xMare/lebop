@@ -9,6 +9,7 @@ If no paths are provided, lebop scans `description.md` and `content.md` across t
 
 After it completes:
 - If warnings were emitted and `--fix` was NOT passed, summarise which rules fired (e.g. "L001×2, L006×1") and offer to re-run with `--fix`. Don't auto-fix without asking — some fixes (like L006 inserting a blank line) shift line numbers and may not match the user's intent.
+- If `--fix` was passed, treat JSON `warnings` / `warning_count` as remaining post-fix diagnostics. Fixed warnings are not still outstanding unless they appear again in the result.
 - If `--strict` was passed and exit was 1, that's the expected pre-commit gate — surface the count clearly.
 - L003 / L005 are info-only with no autofix; flag those without offering `--fix`.
 

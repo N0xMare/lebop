@@ -8,28 +8,12 @@
  */
 
 import { LebopError, mapSdkError, NotFoundError, tryMapToNull, ValidationError } from "./errors.ts";
-import { paginateRaw } from "./paginate.ts";
+import { assertIconNotEmoji } from "./icons.ts";
+import { requireMutationEntity, requireMutationSuccess } from "./mutationResult.ts";
+import { type ConnectionPage, paginateRaw, paginateRawPage } from "./paginate.ts";
+import { withRetry } from "./retry.ts";
 import { linear, withClient } from "./sdk.ts";
 import { isUuid } from "./uuid.ts";
-
-/**
- * Linear's `icon` field is an internal name (PascalCase, e.g. "BarChart" or
- * "Rocket"). Passing a Unicode emoji silently round-trips as a non-functional
- * string; reject those up-front with a structured ValidationError so callers
- * get an actionable message instead of an opaque server-side rejection.
- *
- * Uses `\p{Extended_Pictographic}` (Unicode 9+) which covers emoji, dingbats,
- * symbols, and the bulk of icon-shaped pictographic codepoints.
- */
-function assertIconNotEmoji(icon: string | undefined, field = "icon"): void {
-  if (icon === undefined) return;
-  if (/^\p{Extended_Pictographic}/u.test(icon)) {
-    throw new ValidationError(
-      `${field} "${icon}" looks like an emoji — Linear expects an internal icon name (PascalCase)`,
-      "use a name like 'BarChart', 'Rocket', 'Target'. Omit if unsure.",
-    );
-  }
-}
 
 export type InitiativeHealth = "onTrack" | "atRisk" | "offTrack";
 
@@ -106,6 +90,7 @@ function shapeInitiative(n: InitiativeNode): ListedInitiative {
 export interface ListInitiativesOpts {
   status?: string;
   ownerId?: string;
+  search?: string;
   includeArchived?: boolean;
   max?: number;
 }
@@ -114,6 +99,12 @@ export async function listInitiatives(opts: ListInitiativesOpts = {}): Promise<L
   const filter: Record<string, unknown> = {};
   if (opts.status) filter.status = { eq: opts.status };
   if (opts.ownerId) filter.owner = { id: { eq: opts.ownerId } };
+  if (opts.search) {
+    filter.or = [
+      { name: { containsIgnoreCase: opts.search } },
+      { status: { containsIgnoreCase: opts.search } },
+    ];
+  }
 
   const client = await linear();
   const raw = await paginateRaw<InitiativeNode, InitiativesPage>(
@@ -128,6 +119,34 @@ export async function listInitiatives(opts: ListInitiativesOpts = {}): Promise<L
     { pageSize: 250, max: opts.max },
   );
   return raw.map(shapeInitiative);
+}
+
+export async function listInitiativesPage(
+  opts: ListInitiativesOpts & { after?: string; limit: number },
+): Promise<ConnectionPage<ListedInitiative>> {
+  const filter: Record<string, unknown> = {};
+  if (opts.status) filter.status = { eq: opts.status };
+  if (opts.ownerId) filter.owner = { id: { eq: opts.ownerId } };
+  if (opts.search) {
+    filter.or = [
+      { name: { containsIgnoreCase: opts.search } },
+      { status: { containsIgnoreCase: opts.search } },
+    ];
+  }
+
+  const client = await linear();
+  const page = await paginateRawPage<InitiativeNode, InitiativesPage>(
+    ({ first, after }) =>
+      client.client.rawRequest(LIST_INITIATIVES_QUERY, {
+        filter: Object.keys(filter).length > 0 ? filter : undefined,
+        first,
+        after,
+        includeArchived: opts.includeArchived ?? false,
+      }) as Promise<InitiativesPage>,
+    (response) => response.data.initiatives,
+    { limit: opts.limit, after: opts.after, pageSize: 250 },
+  );
+  return { nodes: page.nodes.map(shapeInitiative), pageInfo: page.pageInfo };
 }
 
 // Uses the list-shape query (with includeArchived: true) rather than the
@@ -153,14 +172,62 @@ const GET_INITIATIVE_QUERY = /* GraphQL */ `
         owner { id name email }
         projects(first: 250) {
           nodes { id name state }
+          pageInfo { hasNextPage endCursor }
         }
       }
     }
   }
 `;
 
+const GET_INITIATIVE_PROJECTS_QUERY = /* GraphQL */ `
+  query GetInitiativeProjects($id: ID!, $first: Int!, $after: String) {
+    initiatives(filter: { id: { eq: $id } }, includeArchived: true, first: 1) {
+      nodes {
+        projects(first: $first, after: $after) {
+          nodes { id name state }
+          pageInfo { hasNextPage endCursor }
+        }
+      }
+    }
+  }
+`;
+
+const GET_INITIATIVE_WITH_PROJECTS_PAGE_QUERY = /* GraphQL */ `
+  query GetInitiativeWithProjectsPage($id: ID!, $first: Int!, $after: String) {
+    initiatives(filter: { id: { eq: $id } }, includeArchived: true, first: 1) {
+      nodes {
+        id
+        name
+        description
+        status
+        color
+        icon
+        url
+        targetDate
+        archivedAt
+        owner { id name email }
+        projects(first: $first, after: $after) {
+          nodes { id name state }
+          pageInfo { hasNextPage endCursor }
+        }
+      }
+    }
+  }
+`;
+
+export interface InitiativeProject {
+  id: string;
+  name: string;
+  state: string;
+}
+
 export interface FullInitiative extends ListedInitiative {
-  projects: { id: string; name: string; state: string }[];
+  projects: InitiativeProject[];
+}
+
+export interface InitiativeProjectsPage {
+  initiative: ListedInitiative;
+  projects: ConnectionPage<InitiativeProject>;
 }
 
 export async function getInitiative(id: string): Promise<FullInitiative | null> {
@@ -172,7 +239,10 @@ export async function getInitiative(id: string): Promise<FullInitiative | null> 
       initiatives: {
         nodes: Array<
           InitiativeNode & {
-            projects: { nodes: { id: string; name: string; state: string }[] };
+            projects: {
+              nodes: InitiativeProject[];
+              pageInfo: { hasNextPage: boolean; endCursor: string | null };
+            };
           }
         >;
       };
@@ -184,7 +254,86 @@ export async function getInitiative(id: string): Promise<FullInitiative | null> 
   if (!response) return null;
   const i = response.data.initiatives.nodes[0];
   if (!i) return null;
-  return { ...shapeInitiative(i), projects: i.projects.nodes };
+  let projects = i.projects.nodes;
+  if (i.projects.pageInfo?.hasNextPage) {
+    if (!i.projects.pageInfo.endCursor) {
+      throw new ValidationError(
+        "initiative projects cannot continue because Linear returned hasNextPage without endCursor",
+        "retry later; this indicates a malformed Linear pagination response",
+      );
+    }
+    projects = [
+      ...projects,
+      ...(await listInitiativeProjects(id, { after: i.projects.pageInfo.endCursor })),
+    ];
+  }
+  return { ...shapeInitiative(i), projects };
+}
+
+export async function listInitiativeProjects(
+  id: string,
+  opts: { after?: string; max?: number } = {},
+): Promise<InitiativeProject[]> {
+  type Resp = {
+    data: {
+      initiatives: {
+        nodes: Array<{
+          projects: {
+            nodes: InitiativeProject[];
+            pageInfo: { hasNextPage: boolean; endCursor: string | null };
+          };
+        }>;
+      };
+    };
+  };
+  return paginateRaw<InitiativeProject, Resp>(
+    ({ first, after }) =>
+      withClient((c) =>
+        c.client.rawRequest(GET_INITIATIVE_PROJECTS_QUERY, { id, first, after }),
+      ) as Promise<Resp>,
+    (response) => response.data.initiatives.nodes[0]?.projects ?? null,
+    { initialAfter: opts.after, max: opts.max, pageSize: 250 },
+  );
+}
+
+export async function getInitiativeProjectsPage(
+  id: string,
+  opts: { after?: string; limit: number },
+): Promise<InitiativeProjectsPage | null> {
+  type Resp = {
+    data: {
+      initiatives: {
+        nodes: Array<
+          InitiativeNode & {
+            projects: {
+              nodes: InitiativeProject[];
+              pageInfo: { hasNextPage: boolean; endCursor: string | null };
+            };
+          }
+        >;
+      };
+    };
+  };
+  const response = await tryMapToNull<Resp>(
+    () =>
+      withClient((c) =>
+        c.client.rawRequest(GET_INITIATIVE_WITH_PROJECTS_PAGE_QUERY, {
+          id,
+          first: Math.max(1, Math.min(Math.floor(opts.limit), 250)),
+          after: opts.after,
+        }),
+      ) as Promise<Resp>,
+  );
+  if (!response) return null;
+  const initiative = response.data.initiatives.nodes[0];
+  if (!initiative) return null;
+  return {
+    initiative: shapeInitiative(initiative),
+    projects: {
+      nodes: initiative.projects.nodes,
+      pageInfo: initiative.projects.pageInfo,
+    },
+  };
 }
 
 export interface CreateInitiativeInput {
@@ -216,7 +365,12 @@ export async function createInitiative(input: CreateInitiativeInput): Promise<Li
   const response = (await client.client.rawRequest(CREATE_INITIATIVE_MUTATION, { input })) as {
     data: { initiativeCreate: { success: boolean; initiative: InitiativeNode } };
   };
-  return shapeInitiative(response.data.initiativeCreate.initiative);
+  const initiative = requireMutationEntity<InitiativeNode>(
+    "initiativeCreate",
+    response.data.initiativeCreate,
+    "initiative",
+  );
+  return shapeInitiative(initiative);
 }
 
 export interface UpdateInitiativeInput {
@@ -252,7 +406,12 @@ export async function updateInitiative(
   )) as {
     data: { initiativeUpdate: { success: boolean; initiative: InitiativeNode } };
   };
-  return shapeInitiative(response.data.initiativeUpdate.initiative);
+  const initiative = requireMutationEntity<InitiativeNode>(
+    "initiativeUpdate",
+    response.data.initiativeUpdate,
+    "initiative",
+  );
+  return shapeInitiative(initiative);
 }
 
 const ARCHIVE_INITIATIVE_MUTATION = /* GraphQL */ `
@@ -267,7 +426,8 @@ export async function archiveInitiative(id: string): Promise<boolean> {
   const response = (await client.client.rawRequest(ARCHIVE_INITIATIVE_MUTATION, { id })) as {
     data: { initiativeArchive: { success: boolean } };
   };
-  return response.data.initiativeArchive.success;
+  requireMutationSuccess("initiativeArchive", response.data.initiativeArchive);
+  return true;
 }
 
 const UNARCHIVE_INITIATIVE_MUTATION = /* GraphQL */ `
@@ -281,7 +441,8 @@ export async function unarchiveInitiative(id: string): Promise<boolean> {
   const response = (await client.client.rawRequest(UNARCHIVE_INITIATIVE_MUTATION, { id })) as {
     data: { initiativeUnarchive: { success: boolean } };
   };
-  return response.data.initiativeUnarchive.success;
+  requireMutationSuccess("initiativeUnarchive", response.data.initiativeUnarchive);
+  return true;
 }
 
 const DELETE_INITIATIVE_MUTATION = /* GraphQL */ `
@@ -307,7 +468,8 @@ export async function deleteInitiative(id: string): Promise<boolean> {
   const response = (await client.client.rawRequest(DELETE_INITIATIVE_MUTATION, { id })) as {
     data: { initiativeDelete: { success: boolean } };
   };
-  return response.data.initiativeDelete.success;
+  requireMutationSuccess("initiativeDelete", response.data.initiativeDelete);
+  return true;
 }
 
 // ---------- initiative ↔ project edges ----------
@@ -334,7 +496,12 @@ export async function initiativeAddProject(input: {
       initiativeToProjectCreate: { success: boolean; initiativeToProject: { id: string } };
     };
   };
-  return { id: response.data.initiativeToProjectCreate.initiativeToProject.id };
+  const edge = requireMutationEntity<{ id: string }>(
+    "initiativeToProjectCreate",
+    response.data.initiativeToProjectCreate,
+    "initiativeToProject",
+  );
+  return { id: edge.id };
 }
 
 // Linear removed the `filter` arg on `Query.initiativeToProjects` in 2026,
@@ -485,12 +652,15 @@ export async function initiativeRemoveProject(input: {
   const client = await linear();
   let after: string | null = null;
   let edgeId: string | null = null;
+  const seenCursors = new Set<string>();
   while (true) {
-    const response = (await client.client.rawRequest(FIND_PROJECT_INITIATIVE_LINKS_QUERY, {
-      projectId: input.projectId,
-      first: 250,
-      after,
-    })) as ProjectInitiativeLinksPage;
+    const response = (await withRetry(() =>
+      client.client.rawRequest(FIND_PROJECT_INITIATIVE_LINKS_QUERY, {
+        projectId: input.projectId,
+        first: 250,
+        after,
+      }),
+    )) as ProjectInitiativeLinksPage;
     const conn = response.data.project?.initiativeToProjects;
     if (!conn) {
       // Project itself wasn't found — disambiguate: was the initiative
@@ -507,7 +677,21 @@ export async function initiativeRemoveProject(input: {
       break;
     }
     if (!conn.pageInfo.hasNextPage) break;
-    after = conn.pageInfo.endCursor;
+    const nextCursor = conn.pageInfo.endCursor;
+    if (!nextCursor) {
+      throw new ValidationError(
+        `initiative project link walk for project ${input.projectId} cannot continue`,
+        "Linear returned hasNextPage without endCursor",
+      );
+    }
+    if (seenCursors.has(nextCursor)) {
+      throw new ValidationError(
+        `initiative project link walk for project ${input.projectId} cursor did not advance`,
+        "Linear returned the same endCursor on consecutive pages",
+      );
+    }
+    seenCursors.add(nextCursor);
+    after = nextCursor;
   }
   if (!edgeId) {
     // Walk finished without finding the edge. Three cases collapsed into
@@ -613,6 +797,7 @@ interface InitiativeUpdatesPage {
 
 export async function listInitiativeUpdates(
   initiativeId: string,
+  opts: { max?: number } = {},
 ): Promise<ListedInitiativeUpdate[]> {
   const client = await linear();
   const raw = await paginateRaw<InitiativeUpdateNode, InitiativeUpdatesPage>(
@@ -622,22 +807,71 @@ export async function listInitiativeUpdates(
         first,
         after,
       }) as Promise<InitiativeUpdatesPage>,
-    (response) => response.data.initiatives.nodes[0]?.initiativeUpdates ?? null,
-    { pageSize: 250 },
+    (response) => {
+      const initiative = response.data.initiatives.nodes[0];
+      if (!initiative) {
+        throw new NotFoundError(
+          `initiative not found: ${initiativeId}`,
+          "verify the initiative UUID or resolve the initiative name again before listing updates",
+        );
+      }
+      return initiative.initiativeUpdates;
+    },
+    { pageSize: 250, max: opts.max },
   );
-  return raw.map((u) => ({
+  return raw.map(shapeInitiativeUpdate);
+}
+
+export async function listInitiativeUpdatesPage(
+  initiativeId: string,
+  opts: { limit: number; after?: string },
+): Promise<ConnectionPage<ListedInitiativeUpdate>> {
+  const client = await linear();
+  const page = await paginateRawPage<InitiativeUpdateNode, InitiativeUpdatesPage>(
+    ({ first, after }) =>
+      client.client.rawRequest(LIST_INITIATIVE_UPDATES_QUERY, {
+        initiativeId,
+        first,
+        after,
+      }) as Promise<InitiativeUpdatesPage>,
+    (response) => {
+      const initiative = response.data.initiatives.nodes[0];
+      if (!initiative) {
+        throw new NotFoundError(
+          `initiative not found: ${initiativeId}`,
+          "verify the initiative UUID or resolve the initiative name again before listing updates",
+        );
+      }
+      return initiative.initiativeUpdates;
+    },
+    { limit: opts.limit, after: opts.after, pageSize: 250 },
+  );
+  return { nodes: page.nodes.map(shapeInitiativeUpdate), pageInfo: page.pageInfo };
+}
+
+function shapeInitiativeUpdate(u: InitiativeUpdateNode): ListedInitiativeUpdate {
+  return {
     id: u.id,
     body: u.body,
     health: u.health,
     created_at: u.createdAt,
     user: u.user,
-  }));
+  };
 }
 
 export interface CreateInitiativeUpdateInput {
   initiativeId: string;
   body: string;
   health?: InitiativeHealth;
+}
+
+export function assertInitiativeUpdateBody(body: string): void {
+  if (body.trim().length === 0) {
+    throw new ValidationError(
+      "empty initiative update body",
+      "pass a non-empty body via --body, --body-file, stdin, or MCP body",
+    );
+  }
 }
 
 const CREATE_INITIATIVE_UPDATE_MUTATION = /* GraphQL */ `
@@ -655,6 +889,8 @@ const CREATE_INITIATIVE_UPDATE_MUTATION = /* GraphQL */ `
 export async function createInitiativeUpdate(
   input: CreateInitiativeUpdateInput,
 ): Promise<ListedInitiativeUpdate> {
+  assertInitiativeUpdateBody(input.body);
+
   // NOT retry-wrapped — would post a duplicate.
   const client = await linear();
   const response = (await client.client.rawRequest(CREATE_INITIATIVE_UPDATE_MUTATION, {
@@ -667,7 +903,11 @@ export async function createInitiativeUpdate(
       };
     };
   };
-  const u = response.data.initiativeUpdateCreate.initiativeUpdate;
+  const u = requireMutationEntity<InitiativeUpdateNode>(
+    "initiativeUpdateCreate",
+    response.data.initiativeUpdateCreate,
+    "initiativeUpdate",
+  );
   return {
     id: u.id,
     body: u.body,
@@ -689,13 +929,41 @@ export async function resolveInitiativeId(nameOrId: string): Promise<string | nu
   // `unarchive_initiative {id: "<name>"}` cannot find its target.
   const RESOLVE = /* GraphQL */ `
     query ResolveInitiative($name: String!) {
-      initiatives(filter: { name: { eq: $name } }, first: 1, includeArchived: true) {
-        nodes { id name }
+      initiatives(filter: { name: { eq: $name } }, first: 2, includeArchived: true) {
+        nodes { id name archivedAt }
+        pageInfo { hasNextPage }
       }
     }
   `;
   const response = (await withClient((c) => c.client.rawRequest(RESOLVE, { name: nameOrId }))) as {
-    data: { initiatives: { nodes: { id: string }[] } };
+    data: {
+      initiatives: {
+        nodes: { id: string; name: string; archivedAt: string | null }[];
+        pageInfo?: { hasNextPage: boolean };
+      };
+    };
   };
-  return response.data.initiatives.nodes[0]?.id ?? null;
+  const { nodes, pageInfo } = response.data.initiatives;
+  if (nodes.length === 0) return null;
+  if (nodes.length > 1 || pageInfo?.hasNextPage) {
+    const matches = nodes
+      .map(
+        (initiative) =>
+          `${initiative.name} (${initiative.id}${initiative.archivedAt ? ", archived" : ""})`,
+      )
+      .join(", ");
+    throw new ValidationError(
+      `ambiguous initiative name "${nameOrId}" matches multiple initiatives`,
+      `pass the initiative UUID instead. matches: ${matches}`,
+    );
+  }
+  return nodes[0]?.id ?? null;
+}
+
+export async function resolveExistingInitiativeId(nameOrId: string): Promise<string | null> {
+  const id = await resolveInitiativeId(nameOrId);
+  if (!id) return null;
+  if (!isUuid(nameOrId)) return id;
+  const initiative = await getInitiative(id);
+  return initiative ? id : null;
 }

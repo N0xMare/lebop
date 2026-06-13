@@ -1,18 +1,27 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ValidationError } from "../src/lib/errors.ts";
-import { buildIssueFilter } from "../src/lib/listIssues.ts";
+import { buildIssueFilter, listIssuesWithMetadata } from "../src/lib/listIssues.ts";
+
+const sdkMocks = vi.hoisted(() => ({
+  linear: vi.fn(),
+}));
 
 // `me`/`@me` resolution does a viewer lookup via withClient. Mock it so
 // the filter-building tests don't need a real Linear client.
 vi.mock("../src/lib/sdk.ts", () => ({
   withClient: async <T>(fn: (c: { viewer: Promise<{ id: string }> }) => Promise<T>): Promise<T> =>
     fn({ viewer: Promise.resolve({ id: "viewer-id-mock" }) }),
-  linear: async () => {
-    throw new Error("linear() should not be called in buildIssueFilter tests");
-  },
+  linear: sdkMocks.linear,
 }));
 
 describe("buildIssueFilter", () => {
+  beforeEach(() => {
+    sdkMocks.linear.mockReset();
+    sdkMocks.linear.mockImplementation(async () => {
+      throw new Error("linear() should not be called in buildIssueFilter tests");
+    });
+  });
+
   it("returns empty filter object when no opts + no team", async () => {
     const f = await buildIssueFilter({}, undefined);
     expect(f).toEqual({});
@@ -154,7 +163,7 @@ describe("buildIssueFilter", () => {
       const f = await buildIssueFilter({ updatedSince: "7d" }, undefined);
       const updatedAt = (f.updatedAt as { gte: Date }).gte;
       expect(updatedAt).toBeInstanceOf(Date);
-      // Should be ~7 days ago, ±1s for test runtime
+      // Should be ~7 days ago, +/-1s for test runtime.
       const diff = Date.now() - updatedAt.getTime();
       expect(diff).toBeGreaterThan(7 * 86400_000 - 1000);
       expect(diff).toBeLessThan(7 * 86400_000 + 1000);
@@ -193,3 +202,71 @@ describe("buildIssueFilter", () => {
     expect(f.searchableContent).toEqual({ contains: "rate limit" });
   });
 });
+
+describe("listIssuesWithMetadata", () => {
+  beforeEach(() => {
+    sdkMocks.linear.mockReset();
+  });
+
+  it("returns page completeness metadata for finite issue lists", async () => {
+    const issues = vi.fn().mockResolvedValueOnce({
+      nodes: [issue("NOX-1")],
+      pageInfo: { hasNextPage: true, endCursor: "cursor-1" },
+    });
+    sdkMocks.linear.mockResolvedValue({ issues });
+
+    const result = await listIssuesWithMetadata({ resolvedTeam: "NOX", max: 1 });
+
+    expect(result).toMatchObject({
+      count: 1,
+      limit: 1,
+      has_more: true,
+      truncated: true,
+      next_cursor: "cursor-1",
+    });
+    expect(result.issues[0]).toMatchObject({ identifier: "NOX-1", state_type: "unstarted" });
+    expect(issues).toHaveBeenCalledWith(
+      expect.objectContaining({
+        first: 1,
+        filter: { team: { key: { eq: "NOX" } } },
+      }),
+    );
+  });
+
+  it("forwards a continuation cursor to Linear", async () => {
+    const issues = vi.fn().mockResolvedValueOnce({
+      nodes: [],
+      pageInfo: { hasNextPage: false, endCursor: null },
+    });
+    sdkMocks.linear.mockResolvedValue({ issues });
+
+    const result = await listIssuesWithMetadata({
+      resolvedTeam: undefined,
+      allTeams: true,
+      max: 10,
+      after: "cursor-1",
+    });
+
+    expect(result).toMatchObject({ count: 0, has_more: false, next_cursor: null });
+    expect(issues).toHaveBeenCalledWith(
+      expect.objectContaining({
+        first: 10,
+        after: "cursor-1",
+      }),
+    );
+    expect(issues.mock.calls[0]?.[0].filter.team).toBeUndefined();
+  });
+});
+
+function issue(identifier: string) {
+  return {
+    identifier,
+    title: identifier,
+    priority: 0,
+    updatedAt: new Date("2026-06-06T00:00:00.000Z"),
+    url: `https://linear.app/test/issue/${identifier}`,
+    state: Promise.resolve({ name: "Todo", type: "unstarted" }),
+    assignee: Promise.resolve(undefined),
+    labels: async () => ({ nodes: [{ name: "alpha" }] }),
+  };
+}

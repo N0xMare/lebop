@@ -16,4 +16,4 @@ Validate the implementation meets the design's success criteria. Capture
 numbers; add regression coverage.
 
 `blocked_by` is the inverse of `blocks`. Either side of the relation can
-declare it; lebop normalizes on push.
+declare it; lebop normalizes when the plan is applied.

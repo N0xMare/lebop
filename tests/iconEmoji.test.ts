@@ -8,7 +8,7 @@
  * Coverage: createDocument, updateDocument, createInitiative, updateInitiative.
  */
 
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ValidationError } from "../src/lib/errors.ts";
 
 // Stub the SDK so we never make a real network call — the lib should throw
@@ -26,8 +26,13 @@ vi.mock("../src/lib/sdk.ts", () => ({
 
 import { createDocument, updateDocument } from "../src/lib/documents.ts";
 import { createInitiative, updateInitiative } from "../src/lib/initiatives.ts";
+import { createProject, updateProject } from "../src/lib/projects.ts";
 
 const EMOJI_SAMPLES = ["🚀", "📊", "🎯", "✨"];
+
+beforeEach(() => {
+  rawRequestSpy.mockClear();
+});
 
 describe("createDocument icon validation", () => {
   for (const sample of EMOJI_SAMPLES) {
@@ -93,5 +98,23 @@ describe("createInitiative icon validation", () => {
 describe("updateInitiative icon validation", () => {
   it("rejects emoji icon", async () => {
     await expect(updateInitiative("init-1", { icon: "📊" })).rejects.toThrow(ValidationError);
+  });
+});
+
+describe("createProject icon validation", () => {
+  for (const sample of EMOJI_SAMPLES) {
+    it(`rejects emoji icon ${sample}`, async () => {
+      await expect(createProject({ name: "x", teamIds: ["team-1"], icon: sample })).rejects.toThrow(
+        ValidationError,
+      );
+      expect(rawRequestSpy).not.toHaveBeenCalled();
+    });
+  }
+});
+
+describe("updateProject icon validation", () => {
+  it("rejects emoji icon", async () => {
+    await expect(updateProject("proj-1", { icon: "🎯" })).rejects.toThrow(ValidationError);
+    expect(rawRequestSpy).not.toHaveBeenCalled();
   });
 });

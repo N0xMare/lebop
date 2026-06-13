@@ -1,8 +1,12 @@
 import type { Command } from "commander";
 import { resolveConfig } from "../lib/config.ts";
 import { envelope } from "../lib/envelope.ts";
-import { ValidationError } from "../lib/errors.ts";
-import { listIssues } from "../lib/listIssues.ts";
+import { getTeam } from "../lib/teams.ts";
+import {
+  buildIssueMineInputFromCli,
+  executeIssueList,
+  issueListPayload,
+} from "../surface/issues.ts";
 import { printHuman } from "./list.ts";
 
 /**
@@ -26,69 +30,25 @@ export function registerMine(program: Command): void {
     .option("--cycle <name-or-id>")
     .option("--milestone <name-or-id>")
     .option("--limit <n>", "default 50; pass 0 for no limit", "50")
+    .option("--cursor <token>", "continue from a previous JSON result's next_cursor")
     .option("--json", "emit structured issue records")
     .action(async (opts: MineOpts) => {
-      const config = await resolveConfig({ teamOverride: opts.team });
-      const requested = Number.parseInt(opts.limit ?? "50", 10);
-      const max = requested === 0 ? Number.POSITIVE_INFINITY : Math.max(1, requested);
-
-      // Default state filter: active states only (everything but completed +
-      // canceled). Pushed server-side via `state.type.in` so `--limit 50`
-      // actually returns up to 50 active issues, not 50 raw issues then a
-      // client-side filter. Explicit `--state-type` narrows further;
-      // `--all-states` drops the filter entirely.
-      const stateTypeIn =
-        opts.stateType || opts.allStates
-          ? undefined
-          : ["triage", "backlog", "unstarted", "started"];
-
-      // Round-9 / M-5: validate `--priority` at the boundary, parity with
-      // `lebop list` (round-6 / H9, round-8 / R6-LOW-2). Pre-fix `mine
-      // --priority 99` silently returned an empty result; now it fails
-      // loud with `code:"validation_error"` like the sibling command.
-      let priority: number | undefined;
-      if (opts.priority !== undefined) {
-        const n = Number(opts.priority);
-        if (!Number.isInteger(n) || n < 0 || n > 4) {
-          throw new ValidationError(
-            `invalid --priority value "${opts.priority}"`,
-            "priority must be an integer 0..4 (none|urgent|high|normal|low)",
-          );
-        }
-        priority = n;
-      }
-
-      const records = await listIssues({
-        resolvedTeam: opts.allTeams ? undefined : config.team,
-        team: opts.team,
-        allTeams: opts.allTeams,
-        assignee: "me",
-        stateType: opts.stateType,
-        stateTypeIn,
-        label: opts.label,
-        priority,
-        cycle: opts.cycle,
-        milestone: opts.milestone,
-        includeArchived: opts.includeArchived,
-        max,
+      const result = await executeIssueList(buildIssueMineInputFromCli({ opts }), {
+        resolveTeam: async (team) => (await resolveConfig({ teamOverride: team })).team,
+        getTeam: async (team) => getTeam(team),
       });
 
       if (opts.json) {
-        process.stdout.write(
-          `${JSON.stringify(
-            envelope({
-              team: opts.allTeams ? "*" : config.team,
-              count: records.length,
-              issues: records,
-            }),
-            null,
-            2,
-          )}\n`,
-        );
+        process.stdout.write(`${JSON.stringify(envelope(issueListPayload(result)), null, 2)}\n`);
         return;
       }
 
-      printHuman(records);
+      printHuman(result.issues);
+      if (result.truncated) {
+        process.stdout.write(
+          `\nmore results available; use --cursor ${result.next_cursor} with the same filters\n`,
+        );
+      }
     });
 }
 
@@ -103,6 +63,7 @@ interface MineOpts {
   cycle?: string;
   milestone?: string;
   limit?: string;
+  cursor?: string;
   json?: boolean;
 }
 

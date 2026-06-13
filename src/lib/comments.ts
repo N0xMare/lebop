@@ -5,7 +5,8 @@
  */
 
 import { NotFoundError, ValidationError } from "./errors.ts";
-import { paginateRaw } from "./paginate.ts";
+import { requireMutationEntity, requireMutationSuccess } from "./mutationResult.ts";
+import { paginateRaw, paginateRawPage } from "./paginate.ts";
 import { linear, withClient } from "./sdk.ts";
 
 export interface ListedComment {
@@ -87,9 +88,13 @@ function shape(c: CommentNode): ListedComment {
   };
 }
 
-export async function listComments(identifier: string): Promise<ListedComment[]> {
+export async function listComments(
+  identifier: string,
+  opts: { max?: number } = {},
+): Promise<ListedComment[]> {
   const client = await linear();
   const upperId = identifier.toUpperCase();
+  let missingIssue = false;
   const nodes = await paginateRaw<CommentNode, CommentsPage>(
     ({ first, after }) =>
       client.client.rawRequest(LIST_COMMENTS_QUERY, {
@@ -97,10 +102,54 @@ export async function listComments(identifier: string): Promise<ListedComment[]>
         first,
         after,
       }) as Promise<CommentsPage>,
-    (response) => response.data.issue?.comments ?? null,
-    { pageSize: 250 },
+    (response) => {
+      if (!response.data.issue) {
+        missingIssue = true;
+        return null;
+      }
+      return response.data.issue.comments;
+    },
+    { pageSize: 250, max: opts.max },
   );
+  if (missingIssue) {
+    throw new NotFoundError(`issue not found: ${upperId}`, "verify the identifier exists");
+  }
   return nodes.map(shape);
+}
+
+export async function listCommentsPage(
+  identifier: string,
+  opts: { first: number; after?: string } = { first: 250 },
+): Promise<{
+  comments: ListedComment[];
+  pageInfo: { hasNextPage: boolean; endCursor: string | null };
+}> {
+  const client = await linear();
+  const upperId = identifier.toUpperCase();
+  let missingIssue = false;
+  const page = await paginateRawPage<CommentNode, CommentsPage>(
+    ({ first, after }) =>
+      client.client.rawRequest(LIST_COMMENTS_QUERY, {
+        id: upperId,
+        first,
+        after,
+      }) as Promise<CommentsPage>,
+    (response) => {
+      if (!response.data.issue) {
+        missingIssue = true;
+        return null;
+      }
+      return response.data.issue.comments;
+    },
+    { limit: opts.first, after: opts.after, pageSize: 250 },
+  );
+  if (missingIssue) {
+    throw new NotFoundError(`issue not found: ${upperId}`, "verify the identifier exists");
+  }
+  return {
+    comments: page.nodes.map(shape),
+    pageInfo: page.pageInfo,
+  };
 }
 
 export interface AddCommentInput {
@@ -111,7 +160,7 @@ export interface AddCommentInput {
 }
 
 export interface AddCommentResult {
-  id: string | null;
+  id: string;
   created_at: string | null;
   // Round-6 / A26: thicker response shape — pre-fix callers needed a
   // follow-up `list_comments` to discover the URL / echo the body / find
@@ -123,6 +172,12 @@ export interface AddCommentResult {
 }
 
 export async function addComment(input: AddCommentInput): Promise<AddCommentResult> {
+  if (!input.body.trim()) {
+    throw new ValidationError(
+      "empty comment body",
+      "pass a non-empty body via --body, --body-file, stdin, or MCP body",
+    );
+  }
   // Resolution wrapped (idempotent); createComment NOT wrapped — retry-after-
   // success would post a duplicate.
   const issue = await withClient((c) => c.issue(input.identifier));
@@ -152,10 +207,16 @@ export async function addComment(input: AddCommentInput): Promise<AddCommentResu
     );
   }
   const created = await payload.comment;
+  if (!created?.id) {
+    throw new ValidationError(
+      "commentCreate did not return comment",
+      "Linear returned success:true without a comment id; retry after checking Linear state",
+    );
+  }
   const createdAt = created?.createdAt;
   const user = created ? await created.user : null;
   return {
-    id: created?.id ?? null,
+    id: created.id,
     created_at:
       createdAt instanceof Date
         ? createdAt.toISOString()
@@ -185,6 +246,12 @@ export interface UpdateCommentResult {
 }
 
 export async function updateComment(commentId: string, body: string): Promise<UpdateCommentResult> {
+  if (!body.trim()) {
+    throw new ValidationError(
+      "empty comment body",
+      "pass a non-empty body via --body, --body-file, stdin, or MCP body",
+    );
+  }
   // Idempotent at the value level — retry-wrapped.
   const response = (await withClient((c) =>
     c.client.rawRequest(UPDATE_COMMENT_MUTATION, { id: commentId, input: { body } }),
@@ -202,7 +269,11 @@ export async function updateComment(commentId: string, body: string): Promise<Up
       };
     };
   };
-  const updated = response.data.commentUpdate.comment;
+  const updated = requireMutationEntity<(typeof response.data.commentUpdate)["comment"]>(
+    "commentUpdate",
+    response.data.commentUpdate,
+    "comment",
+  );
   return {
     id: updated.id,
     updated_at: updated.updatedAt,
@@ -218,5 +289,6 @@ export async function deleteComment(commentId: string): Promise<boolean> {
   const response = (await client.client.rawRequest(DELETE_COMMENT_MUTATION, {
     id: commentId,
   })) as { data: { commentDelete: { success: boolean } } };
-  return response.data.commentDelete.success;
+  requireMutationSuccess("commentDelete", response.data.commentDelete);
+  return true;
 }

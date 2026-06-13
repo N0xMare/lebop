@@ -53,6 +53,11 @@ describe("classifyError", () => {
       });
       expect(classifyError(err)).toBe("rate-limit");
     });
+
+    it("classifies Linear SDK v84 type=Ratelimited", () => {
+      const err = Object.assign(new Error("Linear SDK error"), { type: "Ratelimited" });
+      expect(classifyError(err)).toBe("rate-limit");
+    });
   });
 
   describe("transient errors", () => {
@@ -93,6 +98,15 @@ describe("classifyError", () => {
         });
         expect(classifyError(err)).toBe("transient");
       }
+    });
+
+    it("classifies Linear SDK v84 network/internal types", () => {
+      expect(classifyError(Object.assign(new Error("x"), { type: "NetworkError" }))).toBe(
+        "transient",
+      );
+      expect(classifyError(Object.assign(new Error("x"), { type: "InternalError" }))).toBe(
+        "transient",
+      );
     });
   });
 
@@ -205,5 +219,80 @@ describe("withRetry", () => {
         { maxAttempts: 2, initialDelayMs: 1, maxDelayMs: 5 },
       ),
     ).rejects.toBeInstanceOf(NetworkError);
+  });
+
+  it("honors retry-after details on retryable rate-limit failures", async () => {
+    let attempts = 0;
+    const result = await withRetry(
+      async () => {
+        attempts++;
+        if (attempts === 1) {
+          throw Object.assign(new Error("Too many requests"), {
+            status: 429,
+            response: {
+              headers: {
+                "retry-after": "0",
+                "x-ratelimit-requests-limit": "2500",
+                "x-ratelimit-requests-remaining": "0",
+              },
+            },
+          });
+        }
+        return "ok";
+      },
+      { maxAttempts: 2, initialDelayMs: 1000, maxDelayMs: 1000 },
+    );
+
+    expect(result).toBe("ok");
+    expect(attempts).toBe(2);
+  });
+
+  it("allows server-directed rate-limit delays to exceed the jitter cap", async () => {
+    let attempts = 0;
+    const result = await withRetry(
+      async () => {
+        attempts++;
+        if (attempts === 1) {
+          throw Object.assign(new Error("Too many requests"), {
+            status: 429,
+            response: { headers: { "retry-after": "0.001" } },
+          });
+        }
+        return "ok";
+      },
+      { maxAttempts: 2, initialDelayMs: 1, maxDelayMs: 0, maxRateLimitDelayMs: 10 },
+    );
+
+    expect(result).toBe("ok");
+    expect(attempts).toBe(2);
+  });
+
+  it("fails fast when Linear asks to wait beyond the rate-limit delay cap", async () => {
+    let attempts = 0;
+    const reset = Date.now() + 10_000;
+    const err = await withRetry(
+      async () => {
+        attempts++;
+        throw Object.assign(new Error("Too many requests"), {
+          status: 429,
+          response: {
+            headers: {
+              "x-ratelimit-requests-remaining": "0",
+              "x-ratelimit-requests-reset": String(reset),
+            },
+          },
+        });
+      },
+      { maxAttempts: 2, initialDelayMs: 1, maxDelayMs: 1, maxRateLimitDelayMs: 5 },
+    ).catch((error) => error);
+
+    expect(err).toBeInstanceOf(RateLimitError);
+    expect(attempts).toBe(1);
+    expect(err.details).toMatchObject({
+      request_budget: {
+        remaining: 0,
+        reset_epoch_ms: reset,
+      },
+    });
   });
 });

@@ -1,4 +1,10 @@
 import { mapSdkError, NetworkError, RateLimitError } from "./errors.ts";
+import {
+  type LinearRateLimitDetails,
+  linearRateLimitDetailsFromError,
+  rateLimitHint,
+  rateLimitRetryDelayMs,
+} from "./rateLimit.ts";
 
 /**
  * Retry-with-backoff for Linear API calls. Wraps any async operation that
@@ -17,6 +23,7 @@ import { mapSdkError, NetworkError, RateLimitError } from "./errors.ts";
 const DEFAULT_MAX_ATTEMPTS = 5;
 const DEFAULT_INITIAL_DELAY_MS = 200;
 const DEFAULT_MAX_DELAY_MS = 5_000;
+const DEFAULT_MAX_RATE_LIMIT_DELAY_MS = 60_000;
 
 export interface RetryOpts {
   /** How many attempts total (including the first try). Default 5. */
@@ -25,6 +32,11 @@ export interface RetryOpts {
   initialDelayMs?: number;
   /** Cap on delay between retries, in ms. Default 5000. */
   maxDelayMs?: number;
+  /**
+   * Cap on server-directed Linear rate-limit waits, in ms. Defaults to 60s.
+   * Longer `Retry-After` / reset waits fail fast with structured details.
+   */
+  maxRateLimitDelayMs?: number;
 }
 
 export type ErrorClass = "rate-limit" | "transient" | "non-retryable";
@@ -33,6 +45,7 @@ export async function withRetry<T>(fn: () => Promise<T>, opts: RetryOpts = {}): 
   const max = opts.maxAttempts ?? DEFAULT_MAX_ATTEMPTS;
   const initialDelay = opts.initialDelayMs ?? DEFAULT_INITIAL_DELAY_MS;
   const maxDelay = opts.maxDelayMs ?? DEFAULT_MAX_DELAY_MS;
+  const maxRateLimitDelay = opts.maxRateLimitDelayMs ?? DEFAULT_MAX_RATE_LIMIT_DELAY_MS;
 
   let lastError: unknown;
   for (let attempt = 0; attempt < max; attempt++) {
@@ -42,6 +55,12 @@ export async function withRetry<T>(fn: () => Promise<T>, opts: RetryOpts = {}): 
       lastError = err;
       const klass = classifyError(err);
       if (klass === "non-retryable") throw mapSdkError(err);
+      const rateLimitDetails =
+        klass === "rate-limit"
+          ? err instanceof RateLimitError
+            ? ((err.details as LinearRateLimitDetails | undefined) ?? undefined)
+            : (linearRateLimitDetailsFromError(err) ?? undefined)
+          : undefined;
 
       if (attempt === max - 1) {
         // Final attempt failed; surface as a structured error.
@@ -49,7 +68,8 @@ export async function withRetry<T>(fn: () => Promise<T>, opts: RetryOpts = {}): 
         if (klass === "rate-limit") {
           throw new RateLimitError(
             `rate limited by Linear after ${max} attempts: ${msg}`,
-            "wait a few seconds and retry, or reduce concurrency",
+            rateLimitHint(rateLimitDetails),
+            rateLimitDetails,
           );
         }
         throw new NetworkError(
@@ -61,7 +81,17 @@ export async function withRetry<T>(fn: () => Promise<T>, opts: RetryOpts = {}): 
       // Exponential backoff with ±20% jitter.
       const base = Math.min(initialDelay * 2 ** attempt, maxDelay);
       const jitter = base * (0.8 + Math.random() * 0.4);
-      await new Promise((r) => setTimeout(r, jitter));
+      const rateLimitDelay =
+        klass === "rate-limit" ? rateLimitRetryDelayMs(rateLimitDetails) : undefined;
+      if (rateLimitDelay !== undefined && rateLimitDelay > maxRateLimitDelay) {
+        const msg = (err as Error).message ?? String(err);
+        throw new RateLimitError(
+          `rate limited by Linear: ${msg}`,
+          rateLimitHint(rateLimitDetails),
+          rateLimitDetails,
+        );
+      }
+      await new Promise((r) => setTimeout(r, rateLimitDelay ?? jitter));
     }
   }
 
@@ -90,6 +120,13 @@ export function classifyError(err: unknown): ErrorClass {
   // top-level fields per spec §12.1. The `errors` array carries
   // `{message, extensions: {code, ...}}` per GraphQL convention.
   if (typeof err === "object" && err !== null) {
+    const type = (err as { type?: unknown }).type;
+    if (typeof type === "string" && type.toLowerCase().includes("ratelimit")) {
+      return "rate-limit";
+    }
+    if (type === "NetworkError" || type === "InternalError") {
+      return "transient";
+    }
     const errors = (err as { errors?: { extensions?: { code?: unknown } }[] }).errors;
     if (Array.isArray(errors)) {
       for (const e of errors) {
@@ -102,6 +139,9 @@ export function classifyError(err: unknown): ErrorClass {
             upper === "TOO_MANY_REQUESTS"
           ) {
             return "rate-limit";
+          }
+          if (upper === "NETWORKERROR" || upper === "INTERNALERROR") {
+            return "transient";
           }
           if (
             upper === "INTERNAL_SERVER_ERROR" ||

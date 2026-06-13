@@ -6,6 +6,7 @@ import {
 } from "./cache.ts";
 import { loadUserConfig } from "./config.ts";
 import { LebopError, ValidationError } from "./errors.ts";
+import { parseIssueIdentifier } from "./issueIdentifiers.ts";
 import { paginateConnection } from "./paginate.ts";
 import { withClient } from "./sdk.ts";
 import { isUuid } from "./uuid.ts";
@@ -168,8 +169,15 @@ export async function resolveAssigneeId(
   const byEmail = metadata.members.find((m) => m.email.toLowerCase() === needle);
   if (byEmail) return byEmail.id;
 
-  const byName = metadata.members.find((m) => m.name.toLowerCase() === needle);
-  if (byName) return byName.id;
+  const byName = metadata.members.filter((m) => m.name.toLowerCase() === needle);
+  if (byName.length === 1 && byName[0]) return byName[0].id;
+  if (byName.length > 1) {
+    const candidates = byName.map((m) => `${m.name} <${m.email}>`).join(", ");
+    throw new ResolveError(
+      `ambiguous assignee "${who}" matches multiple members with exact name: ${candidates}`,
+      "pass the assignee email address instead of the display name",
+    );
+  }
 
   const byPrefix = metadata.members.filter(
     (m) => m.email.toLowerCase().startsWith(needle) || m.name.toLowerCase().startsWith(needle),
@@ -213,8 +221,7 @@ export function resolvePriority(value: string | number): number {
     }
     return value;
   }
-  const asNum = Number.parseInt(value, 10);
-  if (!Number.isNaN(asNum) && asNum >= 0 && asNum <= 4) return asNum;
+  if (/^[0-4]$/.test(value)) return Number(value);
   const idx = PRIORITY_NAMES.indexOf(value.toLowerCase() as (typeof PRIORITY_NAMES)[number]);
   if (idx === -1) {
     throw new ResolveError(
@@ -247,14 +254,7 @@ export function deriveTeamFromIdentifiers(identifiers: string[]): string | null 
   if (identifiers.length === 0) return null;
   const prefixes = new Set<string>();
   for (const id of identifiers) {
-    const match = /^([A-Z][A-Z0-9_]*)-\d+$/.exec(id.toUpperCase());
-    if (!match) {
-      throw new ValidationError(
-        `invalid identifier: ${id}`,
-        "expected TEAM-NN form (e.g. 'NOX-34')",
-      );
-    }
-    prefixes.add(match[1] as string);
+    prefixes.add(parseIssueIdentifier(id).teamKey);
   }
   if (prefixes.size > 1) {
     throw new ValidationError(
@@ -267,34 +267,154 @@ export function deriveTeamFromIdentifiers(identifiers: string[]): string | null 
 
 // ---------- milestone / cycle name → UUID resolvers ----------
 
+interface ResolvedProjectNode {
+  id: string;
+  name: string;
+  teams?: { nodes: { key: string }[] };
+}
+
+const RESOLVE_PROJECT_BY_NAME_QUERY = /* GraphQL */ `
+  query ResolveProjectByName($name: String!) {
+    projects(filter: { name: { eq: $name } }, first: 2) {
+      nodes {
+        id
+        name
+        teams { nodes { key } }
+      }
+    }
+  }
+`;
+
+const RESOLVE_PROJECT_BY_NAME_AND_TEAM_QUERY = /* GraphQL */ `
+  query ResolveProjectByNameAndTeam($name: String!, $teamKey: String!) {
+    projects(
+      filter: {
+        name: { eq: $name }
+        accessibleTeams: { some: { key: { eq: $teamKey } } }
+      }
+      first: 2
+    ) {
+      nodes {
+        id
+        name
+        teams { nodes { key } }
+      }
+    }
+  }
+`;
+
+function describeProjectMatches(nodes: ResolvedProjectNode[]): string {
+  return nodes
+    .map((node) => {
+      const teams = node.teams?.nodes.map((team) => team.key).filter(Boolean) ?? [];
+      return teams.length > 0 ? `${node.name} (${teams.join(", ")})` : node.name;
+    })
+    .join(", ");
+}
+
+/**
+ * Resolve a project name OR UUID to a UUID. UUIDs pass through unchanged.
+ *
+ * Name lookup is strict:
+ *   - With an explicit team key, only projects accessible to that team match.
+ *   - Without a team key, workspace-wide duplicate names are rejected instead
+ *     of silently taking the first GraphQL row.
+ */
+export async function resolveProjectIdByName(
+  nameOrId: string,
+  opts: { teamKey?: string } = {},
+): Promise<string> {
+  if (isUuid(nameOrId)) return nameOrId;
+  const teamKey = opts.teamKey?.toUpperCase();
+  const query = teamKey ? RESOLVE_PROJECT_BY_NAME_AND_TEAM_QUERY : RESOLVE_PROJECT_BY_NAME_QUERY;
+  const variables = teamKey ? { name: nameOrId, teamKey } : { name: nameOrId };
+  const response = (await withClient((c) => c.client.rawRequest(query, variables))) as {
+    data: { projects: { nodes: ResolvedProjectNode[] } };
+  };
+  const nodes = response.data.projects.nodes;
+  if (nodes.length === 0) {
+    const scope = teamKey ? ` (team ${teamKey})` : "";
+    throw new ResolveError(
+      `project not found: ${nameOrId}${scope}`,
+      teamKey
+        ? "verify the project name belongs to that team, or use the project UUID"
+        : "pass the project UUID, or pass team to scope a non-unique project name",
+    );
+  }
+  if (nodes.length > 1) {
+    throw new ResolveError(
+      `ambiguous project name "${nameOrId}" matches: ${describeProjectMatches(nodes)}`,
+      "pass an explicit team scope or the project UUID",
+    );
+  }
+  const node = nodes[0];
+  if (!node) {
+    throw new ResolveError(`project not found: ${nameOrId}`);
+  }
+  return node.id;
+}
+
 /**
  * Resolve a milestone name OR UUID to a UUID. UUIDs pass through unchanged;
- * names hit Linear's `projectMilestones` connection with `name eq`. Returns
- * the UUID or throws `ResolveError` if no match.
+ * names hit Linear's `projectMilestones` connection with `name eq`.
  *
- * Names aren't strictly unique across projects, but Linear's filter
- * returns at most one match per (project, name) tuple — and milestones
- * are project-scoped, not workspace-scoped, so collisions are rare. For
- * the cross-project ambiguity edge case, pass the UUID.
+ * Milestones are project-scoped in Linear, so callers should pass the target
+ * or current project id whenever they have it. Unscoped name lookup is allowed
+ * only when the name is unique workspace-wide; duplicate names are rejected
+ * instead of silently taking the first row.
  *
  * Moved to lib/resolve.ts in wave 3 (was MCP-server-local) so both the
  * CLI's `updateIssue` lib call and the MCP `update_issue` tool can share
  * the resolver.
  */
-export async function resolveMilestoneIdByName(nameOrId: string): Promise<string> {
+export async function resolveMilestoneIdByName(
+  nameOrId: string,
+  opts: { projectId?: string | null } = {},
+): Promise<string> {
   if (isUuid(nameOrId)) return nameOrId;
-  const QUERY = /* GraphQL */ `
-    query ResolveMilestone($name: String!) {
-      projectMilestones(filter: { name: { eq: $name } }, first: 1) {
-        nodes { id name }
+  const QUERY = opts.projectId
+    ? /* GraphQL */ `
+      query ResolveMilestone($name: String!, $projectId: ID!) {
+        projectMilestones(
+          filter: { name: { eq: $name }, project: { id: { eq: $projectId } } }
+          first: 2
+        ) {
+          nodes { id name project { id name } }
+        }
       }
-    }
-  `;
-  const response = (await withClient((c) => c.client.rawRequest(QUERY, { name: nameOrId }))) as {
-    data: { projectMilestones: { nodes: { id: string; name: string }[] } };
+    `
+    : /* GraphQL */ `
+      query ResolveMilestone($name: String!) {
+        projectMilestones(filter: { name: { eq: $name } }, first: 2) {
+          nodes { id name project { id name } }
+        }
+      }
+    `;
+  const variables = opts.projectId
+    ? { name: nameOrId, projectId: opts.projectId }
+    : { name: nameOrId };
+  const response = (await withClient((c) => c.client.rawRequest(QUERY, variables))) as {
+    data: {
+      projectMilestones: {
+        nodes: { id: string; name: string; project?: { id: string; name: string } }[];
+      };
+    };
   };
-  const node = response.data.projectMilestones.nodes[0];
-  if (!node) throw new ResolveError(`milestone not found: ${nameOrId}`);
+  const nodes = response.data.projectMilestones.nodes;
+  const node = nodes[0];
+  if (!node) {
+    const scope = opts.projectId ? ` (project ${opts.projectId})` : "";
+    throw new ResolveError(`milestone not found: ${nameOrId}${scope}`);
+  }
+  if (nodes.length > 1) {
+    const matches = nodes
+      .map((m) => (m.project ? `${m.name} (${m.project.name})` : m.name))
+      .join(", ");
+    throw new ResolveError(
+      `ambiguous milestone name "${nameOrId}" matches: ${matches}`,
+      "pass the milestone UUID, or scope the write by project",
+    );
+  }
   return node.id;
 }
 

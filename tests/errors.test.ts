@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   AuthError,
+  mapSdkError,
   NotFoundError,
+  PermissionError,
   RateLimitError,
   rewriteNotFound,
   tryIdempotentDelete,
@@ -280,5 +282,46 @@ describe("tryIdempotentDelete (round-8 / N2 discriminated-union return)", () => 
       caught = err;
     }
     expect(caught).toBe(original);
+  });
+});
+
+describe("mapSdkError permission taxonomy", () => {
+  it("maps HTTP 403 failures to PermissionError", () => {
+    const mapped = mapSdkError(Object.assign(new Error("Forbidden"), { status: 403 }));
+
+    expect(mapped).toBeInstanceOf(PermissionError);
+    expect((mapped as PermissionError).code).toBe("permission_error");
+    expect((mapped as PermissionError).hint).toContain("Linear token has access");
+  });
+
+  it("maps Linear GraphQL permission extension codes to PermissionError", () => {
+    for (const code of [
+      "FORBIDDEN",
+      "PERMISSION_DENIED",
+      "INSUFFICIENT_PERMISSIONS",
+      "ACCESS_DENIED",
+    ]) {
+      const mapped = mapSdkError({
+        errors: [{ message: `${code} message`, extensions: { code } }],
+      });
+
+      expect(mapped, code).toBeInstanceOf(PermissionError);
+      expect((mapped as PermissionError).code, code).toBe("permission_error");
+    }
+  });
+
+  it("maps common permission message fallbacks to PermissionError", () => {
+    for (const message of [
+      "Forbidden",
+      "403 Forbidden",
+      "permission denied",
+      "insufficient permissions",
+      "access denied",
+    ]) {
+      const mapped = mapSdkError(new Error(message));
+
+      expect(mapped, message).toBeInstanceOf(PermissionError);
+      expect((mapped as PermissionError).code, message).toBe("permission_error");
+    }
   });
 });

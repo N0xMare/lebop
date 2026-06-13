@@ -1,6 +1,7 @@
 import chalk from "chalk";
 import type { Command } from "commander";
 import { getAgentSession, listAgentSessions } from "../lib/agentSessions.ts";
+import { parseCliLimit } from "../lib/cliOptions.ts";
 import { envelope } from "../lib/envelope.ts";
 import { NotFoundError } from "../lib/errors.ts";
 
@@ -17,8 +18,7 @@ export function registerAgentSession(program: Command): void {
     .option("--limit <n>", "default 50; pass 0 for no limit", "50")
     .option("--json", "emit structured records")
     .action(async (opts: { status?: string; issueId?: string; limit?: string; json?: boolean }) => {
-      const requested = Number.parseInt(opts.limit ?? "50", 10);
-      const max = requested === 0 ? Number.POSITIVE_INFINITY : Math.max(1, requested);
+      const max = parseCliLimit(opts.limit, { defaultValue: 50, zeroMeansInfinity: true });
       const sessions = await listAgentSessions({
         status: opts.status,
         issueId: opts.issueId,

@@ -4,14 +4,23 @@
  * `lebop project-update ...`, and the MCP equivalents.
  */
 
-import { NotFoundError, tryMapToNull } from "./errors.ts";
-import { paginateConnection, paginateRaw } from "./paginate.ts";
+import { NotFoundError, tryMapToNull, ValidationError } from "./errors.ts";
+import { assertIconNotEmoji } from "./icons.ts";
+import { requireMutationEntity, requireMutationSuccess } from "./mutationResult.ts";
+import {
+  type ConnectionPage,
+  paginateConnection,
+  paginateConnectionPage,
+  paginateRaw,
+  paginateRawPage,
+} from "./paginate.ts";
 import { linear, withClient } from "./sdk.ts";
 
 export interface ListedProject {
   id: string;
   name: string;
   description: string | null;
+  icon: string | null;
   state: string;
   url: string;
   updated_at: string;
@@ -25,14 +34,14 @@ export interface ListedProject {
 export async function listProjects(opts: {
   team?: string;
   state?: string;
+  search?: string;
+  includeArchived?: boolean;
   max?: number;
 }): Promise<ListedProject[]> {
   const client = await linear();
   // Push state filter to GraphQL so `max` counts post-filter results.
   // (`projects.state` is a String filter on the project's state name.)
-  const filter: Record<string, unknown> | undefined = opts.state
-    ? { state: { eq: opts.state } }
-    : undefined;
+  const filter = buildProjectFilter(opts);
 
   if (opts.team) {
     // Team-scoped: walk team.projects
@@ -44,7 +53,10 @@ export async function listProjects(opts: {
         "verify the team key (e.g. `UE`) and that your token has access to it",
       );
     const projects = await paginateConnection(
-      ({ first, after }) => team.projects({ first, after, filter }),
+      ({ first, after }) =>
+        team.projects({ first, after, filter, includeArchived: opts.includeArchived } as Parameters<
+          typeof team.projects
+        >[0]),
       { max: opts.max },
     );
     return projects.map(shapeProject);
@@ -52,16 +64,69 @@ export async function listProjects(opts: {
 
   // Workspace-wide listing
   const projects = await paginateConnection(
-    ({ first, after }) => client.projects({ first, after, filter }),
+    ({ first, after }) =>
+      client.projects({ first, after, filter, includeArchived: opts.includeArchived } as Parameters<
+        typeof client.projects
+      >[0]),
     { max: opts.max },
   );
   return projects.map(shapeProject);
+}
+
+export async function listProjectsPage(opts: {
+  team?: string;
+  state?: string;
+  search?: string;
+  includeArchived?: boolean;
+  after?: string;
+  limit: number;
+}): Promise<ConnectionPage<ListedProject>> {
+  const client = await linear();
+  const filter = buildProjectFilter(opts);
+
+  if (opts.team) {
+    const teams = await withClient((c) => c.teams({ filter: { key: { eq: opts.team } } }));
+    const team = teams.nodes[0];
+    if (!team)
+      throw new NotFoundError(
+        `team not found: ${opts.team}`,
+        "verify the team key (e.g. `UE`) and that your token has access to it",
+      );
+    const page = await paginateConnectionPage(
+      ({ first, after }) =>
+        team.projects({ first, after, filter, includeArchived: opts.includeArchived } as Parameters<
+          typeof team.projects
+        >[0]),
+      { limit: opts.limit, after: opts.after },
+    );
+    return { nodes: page.nodes.map(shapeProject), pageInfo: page.pageInfo };
+  }
+
+  const page = await paginateConnectionPage(
+    ({ first, after }) =>
+      client.projects({ first, after, filter, includeArchived: opts.includeArchived } as Parameters<
+        typeof client.projects
+      >[0]),
+    { limit: opts.limit, after: opts.after },
+  );
+  return { nodes: page.nodes.map(shapeProject), pageInfo: page.pageInfo };
+}
+
+function buildProjectFilter(opts: {
+  state?: string;
+  search?: string;
+}): Record<string, unknown> | undefined {
+  const filter: Record<string, unknown> = {};
+  if (opts.state) filter.state = { eq: opts.state };
+  if (opts.search) filter.searchableContent = { contains: opts.search };
+  return Object.keys(filter).length > 0 ? filter : undefined;
 }
 
 function shapeProject(p: {
   id: string;
   name: string;
   description: string | null;
+  icon?: string | null;
   state: string;
   url: string;
   updatedAt: Date;
@@ -71,6 +136,7 @@ function shapeProject(p: {
     id: p.id,
     name: p.name,
     description: p.description ?? null,
+    icon: p.icon ?? null,
     state: p.state,
     url: p.url,
     updated_at: p.updatedAt.toISOString(),
@@ -85,6 +151,7 @@ export interface FullProject {
   name: string;
   description: string | null;
   content: string | null;
+  icon: string | null;
   state: string;
   url: string;
   updated_at: string;
@@ -106,6 +173,7 @@ const GET_PROJECT_QUERY = /* GraphQL */ `
       name
       description
       content
+      icon
       state
       url
       updatedAt
@@ -130,6 +198,7 @@ export async function getProject(id: string): Promise<FullProject | null> {
         name: string;
         description: string | null;
         content: string | null;
+        icon: string | null;
         state: string;
         url: string;
         updatedAt: string;
@@ -152,6 +221,7 @@ export async function getProject(id: string): Promise<FullProject | null> {
     name: p.name,
     description: p.description,
     content: p.content,
+    icon: p.icon,
     state: p.state,
     url: p.url,
     updated_at: p.updatedAt,
@@ -167,6 +237,7 @@ export interface CreateProjectInput {
   name: string;
   description?: string;
   content?: string;
+  icon?: string;
   state?: string;
   /** Linear requires at least one team UUID. */
   teamIds: string[];
@@ -179,7 +250,7 @@ const CREATE_PROJECT_MUTATION = /* GraphQL */ `
     projectCreate(input: $input) {
       success
       project {
-        id name description content state url updatedAt startDate targetDate archivedAt
+        id name description content icon state url updatedAt startDate targetDate archivedAt
         teams { nodes { id key name } }
         lead { id name email }
       }
@@ -188,6 +259,7 @@ const CREATE_PROJECT_MUTATION = /* GraphQL */ `
 `;
 
 export async function createProject(input: CreateProjectInput): Promise<FullProject> {
+  assertIconNotEmoji(input.icon);
   // NOT retry-wrapped — non-idempotent.
   const client = await linear();
   const response = (await client.client.rawRequest(CREATE_PROJECT_MUTATION, { input })) as {
@@ -199,6 +271,7 @@ export async function createProject(input: CreateProjectInput): Promise<FullProj
           name: string;
           description: string | null;
           content: string | null;
+          icon: string | null;
           state: string;
           url: string;
           updatedAt: string;
@@ -211,12 +284,17 @@ export async function createProject(input: CreateProjectInput): Promise<FullProj
       };
     };
   };
-  const p = response.data.projectCreate.project;
+  const p = requireMutationEntity<(typeof response.data.projectCreate)["project"]>(
+    "projectCreate",
+    response.data.projectCreate,
+    "project",
+  );
   return {
     id: p.id,
     name: p.name,
     description: p.description,
     content: p.content,
+    icon: p.icon,
     state: p.state,
     url: p.url,
     updated_at: p.updatedAt,
@@ -232,6 +310,7 @@ export interface UpdateProjectInput {
   name?: string;
   description?: string;
   content?: string;
+  icon?: string | null;
   state?: string;
   startDate?: string | null;
   targetDate?: string | null;
@@ -242,7 +321,7 @@ const UPDATE_PROJECT_MUTATION = /* GraphQL */ `
     projectUpdate(id: $id, input: $input) {
       success
       project {
-        id name description content state url updatedAt startDate targetDate archivedAt
+        id name description content icon state url updatedAt startDate targetDate archivedAt
         teams { nodes { id key name } }
         lead { id name email }
       }
@@ -251,6 +330,7 @@ const UPDATE_PROJECT_MUTATION = /* GraphQL */ `
 `;
 
 export async function updateProject(id: string, input: UpdateProjectInput): Promise<FullProject> {
+  assertIconNotEmoji(input.icon ?? undefined);
   // Idempotent at the value level — retry-wrapped.
   const response = (await withClient((c) =>
     c.client.rawRequest(UPDATE_PROJECT_MUTATION, { id, input }),
@@ -263,6 +343,7 @@ export async function updateProject(id: string, input: UpdateProjectInput): Prom
           name: string;
           description: string | null;
           content: string | null;
+          icon: string | null;
           state: string;
           url: string;
           updatedAt: string;
@@ -275,12 +356,17 @@ export async function updateProject(id: string, input: UpdateProjectInput): Prom
       };
     };
   };
-  const p = response.data.projectUpdate.project;
+  const p = requireMutationEntity<(typeof response.data.projectUpdate)["project"]>(
+    "projectUpdate",
+    response.data.projectUpdate,
+    "project",
+  );
   return {
     id: p.id,
     name: p.name,
     description: p.description,
     content: p.content,
+    icon: p.icon,
     state: p.state,
     url: p.url,
     updated_at: p.updatedAt,
@@ -316,7 +402,8 @@ export async function deleteProject(id: string): Promise<boolean> {
   const response = (await client.client.rawRequest(DELETE_PROJECT_MUTATION, { id })) as {
     data: { projectDelete: { success: boolean } };
   };
-  return response.data.projectDelete.success;
+  requireMutationSuccess("projectDelete", response.data.projectDelete);
+  return true;
 }
 
 // ---------- project updates (status posts with --health) ----------
@@ -375,7 +462,10 @@ interface ProjectUpdateNode {
   user: { id: string; name: string; email: string } | null;
 }
 
-export async function listProjectUpdates(projectId: string): Promise<ListedProjectUpdate[]> {
+export async function listProjectUpdates(
+  projectId: string,
+  opts: { max?: number } = {},
+): Promise<ListedProjectUpdate[]> {
   const client = await linear();
   const raw = await paginateRaw<ProjectUpdateNode, ProjectUpdatesPage>(
     ({ first, after }) =>
@@ -384,22 +474,71 @@ export async function listProjectUpdates(projectId: string): Promise<ListedProje
         first,
         after,
       }) as Promise<ProjectUpdatesPage>,
-    (response) => response.data.project?.projectUpdates ?? null,
-    { pageSize: 250 },
+    (response) => {
+      const project = response.data.project;
+      if (!project) {
+        throw new NotFoundError(
+          `project not found: ${projectId}`,
+          "verify the project UUID or resolve the project name again before listing updates",
+        );
+      }
+      return project.projectUpdates;
+    },
+    { pageSize: 250, max: opts.max },
   );
-  return raw.map((u) => ({
+  return raw.map(shapeProjectUpdate);
+}
+
+export async function listProjectUpdatesPage(
+  projectId: string,
+  opts: { limit: number; after?: string },
+): Promise<ConnectionPage<ListedProjectUpdate>> {
+  const client = await linear();
+  const page = await paginateRawPage<ProjectUpdateNode, ProjectUpdatesPage>(
+    ({ first, after }) =>
+      client.client.rawRequest(LIST_PROJECT_UPDATES_QUERY, {
+        projectId,
+        first,
+        after,
+      }) as Promise<ProjectUpdatesPage>,
+    (response) => {
+      const project = response.data.project;
+      if (!project) {
+        throw new NotFoundError(
+          `project not found: ${projectId}`,
+          "verify the project UUID or resolve the project name again before listing updates",
+        );
+      }
+      return project.projectUpdates;
+    },
+    { limit: opts.limit, after: opts.after, pageSize: 250 },
+  );
+  return { nodes: page.nodes.map(shapeProjectUpdate), pageInfo: page.pageInfo };
+}
+
+function shapeProjectUpdate(u: ProjectUpdateNode): ListedProjectUpdate {
+  return {
     id: u.id,
     body: u.body,
     health: u.health,
     created_at: u.createdAt,
     user: u.user,
-  }));
+  };
 }
 
 export interface CreateProjectUpdateInput {
   projectId: string;
   body: string;
   health?: ProjectHealth;
+}
+
+export function assertProjectUpdateBody(body: string): void {
+  if (body.trim().length === 0) {
+    throw new ValidationError(
+      "empty project update body",
+      "pass a non-empty body via --body, --body-file, stdin, or MCP body",
+    );
+  }
 }
 
 const CREATE_PROJECT_UPDATE_MUTATION = /* GraphQL */ `
@@ -417,6 +556,8 @@ const CREATE_PROJECT_UPDATE_MUTATION = /* GraphQL */ `
 export async function createProjectUpdate(
   input: CreateProjectUpdateInput,
 ): Promise<ListedProjectUpdate> {
+  assertProjectUpdateBody(input.body);
+
   // NOT retry-wrapped — would post a duplicate update entry.
   const client = await linear();
   const response = (await client.client.rawRequest(CREATE_PROJECT_UPDATE_MUTATION, {
@@ -435,7 +576,11 @@ export async function createProjectUpdate(
       };
     };
   };
-  const u = response.data.projectUpdateCreate.projectUpdate;
+  const u = requireMutationEntity<(typeof response.data.projectUpdateCreate)["projectUpdate"]>(
+    "projectUpdateCreate",
+    response.data.projectUpdateCreate,
+    "projectUpdate",
+  );
   return {
     id: u.id,
     body: u.body,

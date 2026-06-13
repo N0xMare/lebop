@@ -14,14 +14,22 @@
  * hard cap). Don't add more.
  */
 
+import {
+  type LinearRateLimitDetails,
+  linearRateLimitDetailsFromError,
+  rateLimitHint,
+} from "./rateLimit.ts";
+
 export class LebopError extends Error {
   readonly code: string;
   readonly hint?: string;
+  readonly details?: Record<string, unknown>;
 
-  constructor(message: string, code: string, hint?: string) {
+  constructor(message: string, code: string, hint?: string, details?: Record<string, unknown>) {
     super(message);
     this.code = code;
     this.hint = hint;
+    this.details = details;
     this.name = this.constructor.name;
   }
 }
@@ -80,8 +88,14 @@ export class NetworkError extends LebopError {
 }
 
 export class RateLimitError extends LebopError {
+  constructor(message: string, hint?: string, details?: LinearRateLimitDetails) {
+    super(message, "rate_limit_error", hint, details as Record<string, unknown> | undefined);
+  }
+}
+
+export class PermissionError extends LebopError {
   constructor(message: string, hint?: string) {
-    super(message, "rate_limit_error", hint);
+    super(message, "permission_error", hint);
   }
 }
 
@@ -91,13 +105,11 @@ export class RateLimitError extends LebopError {
  * so callers (and the MCP server) can distinguish missing entities from other
  * failures without grepping message strings.
  *
- * Round-8 / H1 update: `getIssue` previously carved out a ValidationError
- * throw for "established CLI affordance". That exception is GONE — `getIssue`
- * now uses `tryMapToNull` like every other `get_*` lib function, returning
- * `null` on miss. The CLI commands (`show.ts`, `pull.ts`) continue to use
- * `buildPullIssuesQuery` + their own try/catch with `rewriteNotFound`, which
- * preserves the user-facing error text. The MCP surface now has a uniform
- * "missing → null" contract across all 8 `get_*` tools.
+ * Round-22 update: lib-level `get_*` helpers still use `tryMapToNull` so raw
+ * SDK not-found noise is normalized at the boundary, but mapped CLI/MCP
+ * command surfaces convert that `null` into structured `not_found` errors.
+ * Lookup-style tools can still expose nullable payloads where that is the
+ * explicit operation contract.
  *
  * `rewriteNotFound` is still used by:
  *   - `updateIssue` catch block (mutation; throwing is correct)
@@ -244,7 +256,7 @@ export function rewriteNotFound(err: unknown, identifier: string): Error {
  * Lookup order mirrors `classifyError` (see `retry.ts`):
  *   1. Already a LebopError? pass through unchanged.
  *   2. Structured GraphQL `errors[].extensions.code` — most reliable.
- *   3. `status` numeric (401, 429) — covers fetch-level failures.
+ *   3. `status` numeric (401, 403, 429) — covers fetch-level failures.
  *   4. Message regex on Linear's current wording — fragile fallback.
  *
  * If nothing matches, returns the original error unchanged. Callers should
@@ -274,10 +286,12 @@ export function mapSdkError(err: unknown): unknown {
           if (
             upper === "RATELIMITED" ||
             upper === "RATE_LIMITED" ||
-            upper === "TOO_MANY_REQUESTS"
+            upper === "TOO_MANY_REQUESTS" ||
+            upper === "RATELIMITEDLINEARERROR"
           ) {
             const msg = typeof e.message === "string" ? e.message : "rate limited by Linear";
-            return new RateLimitError(msg, "wait a few seconds and retry, or reduce concurrency");
+            const details = linearRateLimitDetailsFromError(err) ?? undefined;
+            return new RateLimitError(msg, rateLimitHint(details), details);
           }
           if (
             upper === "UNAUTHENTICATED" ||
@@ -289,6 +303,15 @@ export function mapSdkError(err: unknown): unknown {
               msg,
               "check your Linear token — run `lebop auth login` to re-authenticate",
             );
+          }
+          if (
+            upper === "FORBIDDEN" ||
+            upper === "PERMISSION_DENIED" ||
+            upper === "INSUFFICIENT_PERMISSIONS" ||
+            upper === "ACCESS_DENIED"
+          ) {
+            const msg = typeof e.message === "string" ? e.message : "permission denied by Linear";
+            return new PermissionError(msg, hintForPermission());
           }
           if (upper === "INVALID_INPUT" || upper === "ARGUMENT_VALIDATION_ERROR") {
             const msg = typeof e.message === "string" ? e.message : "validation error";
@@ -305,10 +328,15 @@ export function mapSdkError(err: unknown): unknown {
         "check your Linear token — run `lebop auth login` to re-authenticate",
       );
     }
+    if (errObj.status === 403) {
+      return new PermissionError(toMessage(err) || "403 Forbidden", hintForPermission());
+    }
     if (errObj.status === 429) {
+      const details = linearRateLimitDetailsFromError(err) ?? undefined;
       return new RateLimitError(
         toMessage(err) || "429 Too Many Requests",
-        "wait a few seconds and retry, or reduce concurrency",
+        rateLimitHint(details),
+        details,
       );
     }
   }
@@ -323,6 +351,16 @@ export function mapSdkError(err: unknown): unknown {
   }
   if (/argument validation error/i.test(msg)) {
     return new ValidationError(msg, hintForValidation(msg));
+  }
+  if (
+    lower.includes("permission denied") ||
+    lower.includes("insufficient permission") ||
+    lower.includes("insufficient_permissions") ||
+    lower.includes("access denied") ||
+    lower.includes("forbidden") ||
+    /\b403\b/.test(lower)
+  ) {
+    return new PermissionError(msg, hintForPermission());
   }
   if (
     lower.includes("authentication") ||
@@ -342,7 +380,8 @@ export function mapSdkError(err: unknown): unknown {
     lower.includes("too many requests") ||
     /\b429\b/.test(lower)
   ) {
-    return new RateLimitError(msg, "wait a few seconds and retry, or reduce concurrency");
+    const details = linearRateLimitDetailsFromError(err) ?? undefined;
+    return new RateLimitError(msg, rateLimitHint(details), details);
   }
 
   return err;
@@ -360,6 +399,10 @@ function hintForValidation(msg: string): string {
   const m = /Argument Validation Error\s*[-:]?\s*(.+)/i.exec(msg);
   if (m?.[1]) return `Linear reported: ${m[1].trim()}`;
   return "double-check the input shape against Linear's schema";
+}
+
+function hintForPermission(): string {
+  return "verify the Linear token has access to this workspace and resource";
 }
 
 function toMessage(err: unknown): string {

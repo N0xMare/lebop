@@ -45,18 +45,44 @@ describe("envelope()", () => {
   });
 
   it("payload fields can shadow nothing — schema_version cannot collide", () => {
-    // Belt-and-braces: even if a payload accidentally includes a different
-    // schema_version (e.g. from a passthrough), the envelope helper's value
-    // wins because of object-spread order — `schema_version` is set first
-    // and spread fields overwrite it only if explicitly present in payload.
-    // We DO allow that override path because some adapters need it; this
-    // test just locks the documented behavior.
-    const out = envelope({ schema_version: 99 as unknown as 1, count: 0 } as unknown as Record<
+    const payload = { schema_version: 99 as unknown as 1, count: 0 } as unknown as Record<
+      string,
+      unknown
+    >;
+    const out = envelope(payload);
+    expect(out.schema_version).toBe(1);
+    expect(out).toEqual({ schema_version: 1, count: 0 });
+    expect(payload.schema_version).toBe(99);
+  });
+
+  it("adds optional _meta sidecar data without changing the payload contract", () => {
+    const out = envelope(
+      { count: 1 },
+      {
+        linear_api: {
+          request_count: 2,
+          rate_limit: { requests: { remaining: 2498 } },
+        },
+      },
+    );
+    expect(out).toEqual({
+      schema_version: 1,
+      count: 1,
+      _meta: {
+        linear_api: {
+          request_count: 2,
+          rate_limit: { requests: { remaining: 2498 } },
+        },
+      },
+    });
+  });
+
+  it("ignores payload-owned _meta so sidecars remain helper-owned", () => {
+    const out = envelope({ _meta: { bogus: true }, count: 1 } as unknown as Record<
       string,
       unknown
     >);
-    // Spread wins — caller-supplied schema_version overrides the default.
-    expect(out.schema_version).toBe(99);
+    expect(out).toEqual({ schema_version: 1, count: 1 });
   });
 
   it("works with a heterogeneous payload (string + boolean + null + object)", () => {

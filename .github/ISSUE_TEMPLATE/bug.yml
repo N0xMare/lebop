@@ -18,18 +18,18 @@ body:
     attributes:
       label: lebop version
       description: Output of `lebop --version`
-      placeholder: e.g. 0.0.2
+      placeholder: e.g. 0.0.3
     validations:
       required: true
 
   - type: input
     id: bun-version
     attributes:
-      label: Bun version
-      description: Output of `bun --version`
-      placeholder: e.g. 1.1.42
+      label: Bun version (source installs only)
+      description: Output of `bun --version` if you installed from source. Leave blank for standalone binary installs.
+      placeholder: e.g. 1.3.13, or blank for binary install
     validations:
-      required: true
+      required: false
 
   - type: dropdown
     id: surface

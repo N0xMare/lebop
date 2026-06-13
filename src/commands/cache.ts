@@ -1,7 +1,9 @@
 import chalk from "chalk";
 import type { Command } from "commander";
 import { type GcCandidate, type GcResult, gcCache } from "../lib/cache.ts";
+import { parseCliNumber } from "../lib/cliOptions.ts";
 import { envelope } from "../lib/envelope.ts";
+import { ValidationError } from "../lib/errors.ts";
 import { statusAction } from "./status.ts";
 
 interface CacheGcOpts {
@@ -10,16 +12,13 @@ interface CacheGcOpts {
   hash?: string;
   dryRun?: boolean; // commander auto-fills `dryRun` from `--no-dry-run`
   preserveCwd?: boolean; // commander auto-fills `preserveCwd` from `--no-preserve-cwd`
+  yes?: boolean;
   json?: boolean;
 }
 
 function parsePositiveNumber(label: string, raw: string | undefined): number | undefined {
   if (raw === undefined) return undefined;
-  const n = Number(raw);
-  if (!Number.isFinite(n) || n < 0) {
-    throw new Error(`${label} must be a non-negative number (got '${raw}')`);
-  }
-  return n;
+  return parseCliNumber(raw, { optionName: label });
 }
 
 function reasonStyle(reason: GcCandidate["reason"]): string {
@@ -114,12 +113,19 @@ export function registerCache(program: Command): void {
       "--no-preserve-cwd",
       "allow eviction of the current repo's cache (default preserves it)",
     )
+    .option("--yes", "confirm deletion when --no-dry-run is set")
     .option("--json", "emit structured result")
     .action(async (opts: CacheGcOpts) => {
       const maxAgeDays = parsePositiveNumber("--max-age", opts.maxAge);
       const maxSizeMb = parsePositiveNumber("--max-size", opts.maxSize);
       const dryRun = opts.dryRun !== false; // default true; --no-dry-run flips to false
       const preserveCwdRepo = opts.preserveCwd !== false; // default true
+      if (!dryRun && opts.yes !== true) {
+        throw new ValidationError(
+          "cache gc deletion requires --yes",
+          "run without --no-dry-run to preview, or pass --no-dry-run --yes to confirm deletion",
+        );
+      }
 
       const result = await gcCache({
         maxAgeDays,

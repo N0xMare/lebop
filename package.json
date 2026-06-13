@@ -1,7 +1,7 @@
 {
   "name": "lebop",
-  "version": "0.0.2",
-  "description": "Agentic Linear CLI + MCP server — ad-hoc ops (list/show/set/comment/pull/push) and declarative planning (plan apply) as a directory of markdown files.",
+  "version": "0.0.3",
+  "description": "Agentic Linear CLI + MCP server for workspace explore/fetch, reviewed publish, guarded cache edits, and markdown plan workflows.",
   "type": "module",
   "license": "MIT",
   "author": "n0x",
@@ -30,8 +30,11 @@
     "bin",
     "src",
     "agents",
+    "scripts/check-npm-pack.mjs",
+    "scripts/install.sh",
     "docs/spec.md",
     "docs/examples",
+    "CONTRIBUTING.md",
     "LICENSE",
     "README.md"
   ],
@@ -40,6 +43,7 @@
   },
   "scripts": {
     "check": "biome check .",
+    "check:package": "node scripts/check-npm-pack.mjs",
     "format": "biome format --write .",
     "lint": "biome lint .",
     "test": "vitest run",
@@ -61,6 +65,7 @@
     "chalk": "^5.4.0",
     "commander": "^14.0.3",
     "diff": "^9.0.0",
-    "yaml": "^2.6.0"
+    "yaml": "^2.6.0",
+    "zod": "^4.4.3"
   }
 }

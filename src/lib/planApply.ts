@@ -1,8 +1,11 @@
 import { readFile } from "node:fs/promises";
 import { stringify as stringifyYaml } from "yaml";
 import { buildIssueMetadata, buildProjectMetadata } from "./build.ts";
-import type { TeamMetadata } from "./cache.ts";
+import { type TeamMetadata, writeAtomic } from "./cache.ts";
+import { mapLimit } from "./concurrency.ts";
+import { assertIconNotEmoji } from "./icons.ts";
 import { lintContent } from "./lint.ts";
+import { requireMutationEntity } from "./mutationResult.ts";
 import { splitFrontmatter } from "./planParse.ts";
 import type { IssueFile, LinkKey, ParsedPlan, ProjectFile } from "./planTypes.ts";
 import { LINK_KEY_TO_SET_LINKS_KIND, LINK_KEYS } from "./planTypes.ts";
@@ -14,7 +17,7 @@ import {
   type ProjectUpdateInput,
 } from "./pushMutations.ts";
 import type { LintContext } from "./quirks.ts";
-import { createLink, listRelations } from "./relations.ts";
+import { analyzeRelationCreatePreflight, createLink, listRelations } from "./relations.ts";
 import { resolveAssigneeId, resolveLabelIds, resolvePriority, resolveStateId } from "./resolve.ts";
 import { linear, withClient } from "./sdk.ts";
 
@@ -24,7 +27,15 @@ export interface ApplyIssueResult {
   slug: string;
   path: string;
   linearId?: string;
-  status: "created" | "updated" | "unchanged" | "lint-blocked" | "error" | "dry-run";
+  status:
+    | "created"
+    | "created-writeback-failed"
+    | "updated"
+    | "updated-writeback-failed"
+    | "unchanged"
+    | "lint-blocked"
+    | "error"
+    | "dry-run";
   fields?: string[];
   error?: string;
 }
@@ -41,7 +52,14 @@ export interface ApplyResult {
   project: {
     name: string;
     linearId?: string;
-    status: "created" | "updated" | "unchanged" | "error" | "dry-run";
+    status:
+      | "created"
+      | "created-writeback-failed"
+      | "updated"
+      | "updated-writeback-failed"
+      | "unchanged"
+      | "error"
+      | "dry-run";
     error?: string;
   };
   issues: ApplyIssueResult[];
@@ -50,8 +68,28 @@ export interface ApplyResult {
 
 export interface ApplyOpts {
   dryRun?: boolean;
+  force?: boolean;
   strict?: boolean;
   lintCtx?: LintContext;
+}
+
+export interface PlanApplyPreflightResult {
+  ready: boolean;
+  blockers: string[];
+}
+
+function issueWritebackFailed(result: ApplyIssueResult): boolean {
+  return (
+    result.status === "created-writeback-failed" || result.status === "updated-writeback-failed"
+  );
+}
+
+function projectApplyFailed(result: ApplyResult["project"]): boolean {
+  return (
+    result.status === "error" ||
+    result.status === "created-writeback-failed" ||
+    result.status === "updated-writeback-failed"
+  );
 }
 
 // ---------- project upsert ----------
@@ -63,7 +101,10 @@ const PROJECT_READ_QUERY = /* GraphQL */ `
       name
       description
       content
+      icon
       state
+      startDate
+      targetDate
       url
       updatedAt
     }
@@ -78,11 +119,14 @@ const PROJECT_CREATE_MUTATION = /* GraphQL */ `
         id
         name
         description
-        content
-        state
-        url
-        updatedAt
-      }
+            content
+            icon
+            state
+            startDate
+            targetDate
+            url
+            updatedAt
+          }
     }
   }
 `;
@@ -93,6 +137,7 @@ async function upsertProject(
   opts: ApplyOpts,
 ): Promise<ApplyResult["project"]> {
   const fm = project.frontmatter;
+  assertIconNotEmoji(fm.icon ?? undefined);
 
   // Create path.
   if (!fm.linear_id) {
@@ -104,20 +149,39 @@ async function upsertProject(
       name: fm.name,
     };
     if (fm.description) input.description = fm.description;
+    if (fm.icon !== undefined && fm.icon !== null) input.icon = fm.icon;
+    if (fm.start_date !== undefined && fm.start_date !== null) input.startDate = fm.start_date;
+    if (fm.target_date !== undefined && fm.target_date !== null) input.targetDate = fm.target_date;
     if (project.body.trim() !== "") input.content = project.body;
+    let created: FetchedProject;
     try {
       // projectCreate is NOT wrapped with retry — duplicate creation could
       // result if the first attempt succeeded but the response was lost.
       const client = await linear();
       const response = (await client.client.rawRequest(PROJECT_CREATE_MUTATION, { input })) as {
-        data: { projectCreate: { project: FetchedProject } };
+        data: { projectCreate: { success: boolean; project: FetchedProject } };
       };
-      const created = response.data.projectCreate.project;
-      fm.linear_id = created.id;
+      created = requireMutationEntity<FetchedProject>(
+        "projectCreate",
+        response.data.projectCreate as unknown as { success?: boolean } & Record<string, unknown>,
+        "project",
+      );
+    } catch (err) {
+      return { name: fm.name, status: "error", error: (err as Error).message };
+    }
+    fm.linear_id = created.id;
+    rememberPlanRemoteSnapshot(fm, created.updatedAt);
+    normalizeAppliedProjectFrontmatter(fm, created);
+    try {
       await writeFrontmatterBack(project.path, fm, created.content ?? project.body);
       return { name: fm.name, linearId: created.id, status: "created" };
     } catch (err) {
-      return { name: fm.name, status: "error", error: (err as Error).message };
+      return {
+        name: fm.name,
+        linearId: created.id,
+        status: "created-writeback-failed",
+        error: `created in Linear but local writeback failed: ${(err as Error).message}`,
+      };
     }
   }
 
@@ -136,11 +200,24 @@ async function upsertProject(
     if ((remote.description ?? "") !== (fm.description ?? "")) {
       input.description = fm.description ?? "";
     }
+    if (fm.icon !== undefined && (remote.icon ?? null) !== (fm.icon ?? null)) {
+      input.icon = fm.icon;
+    }
+    if (fm.start_date !== undefined && (remote.startDate ?? null) !== (fm.start_date ?? null)) {
+      input.startDate = fm.start_date ?? null;
+    }
+    if (fm.target_date !== undefined && (remote.targetDate ?? null) !== (fm.target_date ?? null)) {
+      input.targetDate = fm.target_date ?? null;
+    }
     if (fm.state && remote.state !== fm.state) input.state = fm.state;
     if ((remote.content ?? "") !== project.body) input.content = project.body;
 
     if (Object.keys(input).length === 0) {
       return { name: fm.name, linearId: fm.linear_id, status: "unchanged" };
+    }
+    const casBlocker = directApplyCasBlocker("project", fm.name, fm, remote.updatedAt, opts);
+    if (casBlocker) {
+      return { name: fm.name, linearId: fm.linear_id, status: "error", error: casBlocker };
     }
     if (opts.dryRun) {
       return { name: fm.name, linearId: fm.linear_id, status: "dry-run" };
@@ -148,11 +225,26 @@ async function upsertProject(
 
     const response = (await withClient((c) =>
       c.client.rawRequest(PROJECT_UPDATE_MUTATION, { id: fm.linear_id, input }),
-    )) as { data: { projectUpdate: { project: FetchedProject } } };
-    const updated = response.data.projectUpdate.project;
+    )) as { data: { projectUpdate: { success: boolean; project: FetchedProject } } };
+    const updated = requireMutationEntity<FetchedProject>(
+      "projectUpdate",
+      response.data.projectUpdate as unknown as { success?: boolean } & Record<string, unknown>,
+      "project",
+    );
     const { metadata } = buildProjectMetadata(updated);
+    rememberPlanRemoteSnapshot(fm, updated.updatedAt);
+    normalizeAppliedProjectFrontmatter(fm, updated);
     // Write back server-normalized body to the plan file.
-    await writeFrontmatterBack(project.path, fm, updated.content ?? project.body);
+    try {
+      await writeFrontmatterBack(project.path, fm, updated.content ?? project.body);
+    } catch (err) {
+      return {
+        name: metadata.name,
+        linearId: fm.linear_id,
+        status: "updated-writeback-failed",
+        error: `updated in Linear but local writeback failed: ${(err as Error).message}`,
+      };
+    }
     return { name: metadata.name, linearId: fm.linear_id, status: "updated" };
   } catch (err) {
     return {
@@ -182,12 +274,19 @@ const ISSUE_CREATE_MUTATION = /* GraphQL */ `
   }
 `;
 
+const ISSUE_UPDATED_AT_QUERY = /* GraphQL */ `
+  query PlanApplyIssueUpdatedAt($id: String!) {
+    issue(id: $id) { identifier updatedAt }
+  }
+`;
+
 async function upsertIssue(
   issue: IssueFile,
   teamMetadata: TeamMetadata,
   projectLinearId: string | undefined,
   opts: ApplyOpts,
   slugToId: Map<string, string>,
+  localIssueSlugs: Set<string>,
 ): Promise<ApplyIssueResult> {
   const fm = issue.frontmatter;
 
@@ -218,10 +317,21 @@ async function upsertIssue(
       if (fm.labels?.length) input.labelIds = resolveLabelIds(teamMetadata, fm.labels);
       if (fm.assignee) input.assigneeId = await resolveAssigneeId(teamMetadata, fm.assignee);
       if (fm.parent) {
-        const parentUuid = await resolveParentUuid(fm.parent, slugToId);
-        if (parentUuid) input.parentId = parentUuid;
+        const parentIsPendingLocal =
+          opts.dryRun && localIssueSlugs.has(fm.parent) && !slugToId.has(fm.parent);
+        const parentUuid = parentIsPendingLocal
+          ? "pending-local-parent"
+          : await resolveParentUuid(fm.parent, slugToId);
+        if (!parentUuid) {
+          return {
+            slug: issue.slug,
+            path: issue.path,
+            status: "error",
+            error: `parent not found: ${fm.parent}`,
+          };
+        }
+        if (!opts.dryRun) input.parentId = parentUuid;
       }
-
       if (opts.dryRun) {
         return { slug: issue.slug, path: issue.path, status: "dry-run" };
       }
@@ -230,13 +340,29 @@ async function upsertIssue(
       // result if the first attempt succeeded but the response was lost.
       const client = await linear();
       const response = (await client.client.rawRequest(ISSUE_CREATE_MUTATION, { input })) as {
-        data: { issueCreate: { issue: FetchedIssue } };
+        data: { issueCreate: { success: boolean; issue: FetchedIssue } };
       };
-      const created = response.data.issueCreate.issue;
+      const created = requireMutationEntity<FetchedIssue>(
+        "issueCreate",
+        response.data.issueCreate as unknown as { success?: boolean } & Record<string, unknown>,
+        "issue",
+      );
       fm.linear_id = created.identifier;
+      rememberPlanRemoteSnapshot(fm, created.updatedAt);
+      normalizeAppliedIssueFrontmatter(fm, created);
       // Write the server-normalized description so re-apply doesn't see spurious
       // drift (Linear may reflow markdown during create; mirrors the UPDATE path).
-      await writeFrontmatterBack(issue.path, fm, created.description ?? issue.body);
+      try {
+        await writeFrontmatterBack(issue.path, fm, created.description ?? issue.body);
+      } catch (err) {
+        return {
+          slug: issue.slug,
+          path: issue.path,
+          linearId: created.identifier,
+          status: "created-writeback-failed",
+          error: `created in Linear but local writeback failed: ${(err as Error).message}`,
+        };
+      }
       return {
         slug: issue.slug,
         path: issue.path,
@@ -300,12 +426,24 @@ async function upsertIssue(
       }
     }
     if (fm.parent !== undefined) {
-      const targetUuid = fm.parent === null ? null : await resolveParentUuid(fm.parent, slugToId);
       const remoteParentIdentifier = remote.parent?.identifier ?? null;
       const wantParentIdentifier = typeof fm.parent === "string" ? fm.parent : null;
       // Compare by identifier where possible (avoids an extra UUID fetch for unchanged case).
       if (remoteParentIdentifier !== wantParentIdentifier) {
-        input.parentId = targetUuid;
+        if (!opts.dryRun) {
+          const targetUuid =
+            fm.parent === null ? null : await resolveParentUuid(fm.parent, slugToId);
+          if (fm.parent !== null && !targetUuid) {
+            return {
+              slug: issue.slug,
+              path: issue.path,
+              linearId: fm.linear_id,
+              status: "error",
+              error: `parent not found: ${fm.parent}`,
+            };
+          }
+          input.parentId = targetUuid;
+        }
         changed.push("parent");
       }
     }
@@ -328,6 +466,17 @@ async function upsertIssue(
     if (changed.length === 0) {
       return { slug: issue.slug, path: issue.path, linearId: fm.linear_id, status: "unchanged" };
     }
+    const casBlocker = directApplyCasBlocker("issue", fm.linear_id, fm, remote.updatedAt, opts);
+    if (casBlocker) {
+      return {
+        slug: issue.slug,
+        path: issue.path,
+        linearId: fm.linear_id,
+        status: "error",
+        fields: changed,
+        error: casBlocker,
+      };
+    }
     if (opts.dryRun) {
       return {
         slug: issue.slug,
@@ -340,11 +489,28 @@ async function upsertIssue(
 
     const response = (await withClient((c) =>
       c.client.rawRequest(ISSUE_UPDATE_MUTATION, { id: remote.id, input }),
-    )) as { data: { issueUpdate: { issue: FetchedIssue } } };
-    const updated = response.data.issueUpdate.issue;
+    )) as { data: { issueUpdate: { success: boolean; issue: FetchedIssue } } };
+    const updated = requireMutationEntity<FetchedIssue>(
+      "issueUpdate",
+      response.data.issueUpdate as unknown as { success?: boolean } & Record<string, unknown>,
+      "issue",
+    );
     // Write back server-normalized body so subsequent applies don't see spurious diffs.
     const { metadata } = buildIssueMetadata(updated);
-    await writeFrontmatterBack(issue.path, fm, updated.description ?? issue.body);
+    rememberPlanRemoteSnapshot(fm, updated.updatedAt);
+    normalizeAppliedIssueFrontmatter(fm, updated);
+    try {
+      await writeFrontmatterBack(issue.path, fm, updated.description ?? issue.body);
+    } catch (err) {
+      return {
+        slug: issue.slug,
+        path: issue.path,
+        linearId: metadata.identifier,
+        status: "updated-writeback-failed",
+        fields: changed,
+        error: `updated in Linear but local writeback failed: ${(err as Error).message}`,
+      };
+    }
     return {
       slug: issue.slug,
       path: issue.path,
@@ -385,7 +551,108 @@ async function resolveParentUuid(
   }
 }
 
+export async function preflightPlanApply(plan: ParsedPlan): Promise<PlanApplyPreflightResult> {
+  const blockers: string[] = [];
+  const issuesBySlug = new Map(plan.issues.map((issue) => [issue.slug, issue]));
+  const externalTargets = new Map<string, string[]>();
+
+  const addExternal = (target: string, reason: string) => {
+    const key = target.trim();
+    if (!key || issuesBySlug.has(key)) return;
+    const existing = externalTargets.get(key) ?? [];
+    existing.push(reason);
+    externalTargets.set(key, existing);
+  };
+
+  for (const issue of plan.issues) {
+    const parent = issue.frontmatter.parent;
+    if (typeof parent === "string") {
+      addExternal(parent, `${issue.path}: parent not found: ${parent}`);
+    }
+    for (const key of LINK_KEYS) {
+      const targets = issue.frontmatter[key] as string[] | undefined;
+      if (!targets) continue;
+      for (const target of targets) {
+        addExternal(target, `${issue.path}: ${key} target not found: ${target}`);
+      }
+    }
+  }
+
+  await mapLimit(Array.from(externalTargets.entries()), 8, async ([target, reasons]) => {
+    try {
+      const issue = await withClient((c) => c.issue(target));
+      if (!issue) blockers.push(...reasons);
+    } catch {
+      blockers.push(...reasons);
+    }
+  });
+
+  return { ready: blockers.length === 0, blockers };
+}
+
 // ---------- file writeback ----------
+
+function rememberPlanRemoteSnapshot(frontmatter: Record<string, unknown>, updatedAt: string): void {
+  const current =
+    frontmatter._server &&
+    typeof frontmatter._server === "object" &&
+    !Array.isArray(frontmatter._server)
+      ? (frontmatter._server as Record<string, unknown>)
+      : {};
+  frontmatter._server = { ...current, updated_at: updatedAt };
+}
+
+function normalizeAppliedProjectFrontmatter(
+  fm: ProjectFile["frontmatter"],
+  project: Pick<FetchedProject, "startDate" | "targetDate">,
+): void {
+  if (fm.start_date !== undefined || project.startDate !== undefined) {
+    fm.start_date = project.startDate ?? null;
+  }
+  if (fm.target_date !== undefined || project.targetDate !== undefined) {
+    fm.target_date = project.targetDate ?? null;
+  }
+}
+
+function normalizeAppliedIssueFrontmatter(
+  frontmatter: Record<string, unknown>,
+  issue: FetchedIssue,
+): void {
+  if (Object.hasOwn(frontmatter, "assignee")) {
+    frontmatter.assignee = issue.assignee?.email ?? null;
+  }
+}
+
+function directApplyCasBlocker(
+  kind: "issue" | "project",
+  target: string,
+  frontmatter: Record<string, unknown>,
+  remoteUpdatedAt: string,
+  opts: ApplyOpts,
+): string | null {
+  if (opts.force === true) return null;
+  const server =
+    frontmatter._server &&
+    typeof frontmatter._server === "object" &&
+    !Array.isArray(frontmatter._server)
+      ? (frontmatter._server as Record<string, unknown>)
+      : null;
+  const localUpdatedAt = server?.updated_at;
+  if (typeof localUpdatedAt !== "string" || localUpdatedAt.trim() === "") {
+    return `${kind}/${target} missing plan _server.updated_at; run plan pull or publish review/apply before direct apply, or pass force:true with confirm:true / --force --yes after verifying remote state`;
+  }
+  const localTime = Date.parse(localUpdatedAt);
+  const remoteTime = Date.parse(remoteUpdatedAt);
+  if (!Number.isFinite(localTime) || !Number.isFinite(remoteTime)) {
+    return `${kind}/${target} has invalid updatedAt stale-guard timestamp: local=${JSON.stringify(
+      localUpdatedAt,
+    )}, remote=${JSON.stringify(remoteUpdatedAt)}`;
+  }
+  if (remoteUpdatedAt !== localUpdatedAt) {
+    return `${kind}/${target} changed on Linear after plan snapshot; run plan pull/review before direct apply, or pass force:true with confirm:true / --force --yes after verifying remote state`;
+  }
+  return null;
+}
 
 async function writeFrontmatterBack(
   path: string,
@@ -400,10 +667,36 @@ async function writeFrontmatterBack(
   const yaml = stringifyYaml(clean, { lineWidth: 0 });
   const bodySep = body.startsWith("\n") ? "" : "\n";
   const serialized = `---\n${yaml}---\n${bodySep}${body}`;
-  await Bun.write(path, serialized);
+  await writeAtomic(path, serialized);
 }
 
 // ---------- slug → LinearID rewriting ----------
+
+class LinkSlugRewriteError extends Error {
+  readonly issue: IssueFile;
+
+  constructor(issue: IssueFile, cause: unknown) {
+    super(`local link slug rewrite failed for ${issue.path}: ${(cause as Error).message}`);
+    this.name = "LinkSlugRewriteError";
+    this.issue = issue;
+  }
+}
+
+function markSlugRewriteFailure(result: ApplyIssueResult, error: string): ApplyIssueResult {
+  if (result.status === "created") {
+    return { ...result, status: "created-writeback-failed", error };
+  }
+  if (result.status === "updated") {
+    return { ...result, status: "updated-writeback-failed", error };
+  }
+  if (
+    result.status === "created-writeback-failed" ||
+    result.status === "updated-writeback-failed"
+  ) {
+    return { ...result, error: `${result.error}; ${error}` };
+  }
+  return { ...result, status: "error", error };
+}
 
 async function rewriteLinkSlugs(plan: ParsedPlan): Promise<void> {
   const slugToId = new Map<string, string>();
@@ -432,14 +725,18 @@ async function rewriteLinkSlugs(plan: ParsedPlan): Promise<void> {
       }
     }
     if (mutated) {
-      // Re-read the current body from disk — upsertIssue may have written a
-      // server-normalized version that differs from the in-memory `issue.body` we
-      // parsed at the start. Using the stale one would overwrite Linear's normalized
-      // form and cause spurious drift on the next apply.
-      const raw = await readFile(issue.path, "utf8");
-      const { body } = splitFrontmatter(raw);
-      const currentBody = body.replace(/^\r?\n/, "");
-      await writeFrontmatterBack(issue.path, issue.frontmatter, currentBody);
+      try {
+        // Re-read the current body from disk — upsertIssue may have written a
+        // server-normalized version that differs from the in-memory `issue.body` we
+        // parsed at the start. Using the stale one would overwrite Linear's normalized
+        // form and cause spurious drift on the next apply.
+        const raw = await readFile(issue.path, "utf8");
+        const { body } = splitFrontmatter(raw);
+        const currentBody = body.replace(/^\r?\n/, "");
+        await writeFrontmatterBack(issue.path, issue.frontmatter, currentBody);
+      } catch (err) {
+        throw new LinkSlugRewriteError(issue, err);
+      }
     }
   }
 }
@@ -488,27 +785,188 @@ function relationExists(
   }
 }
 
+function hasPlanRemoteSnapshot(issue: IssueFile): boolean {
+  const server = issue.frontmatter._server;
+  return (
+    server !== undefined &&
+    typeof server === "object" &&
+    !Array.isArray(server) &&
+    typeof server.updated_at === "string" &&
+    server.updated_at.trim() !== ""
+  );
+}
+
+function relationEndpointError(
+  sourceError: string | undefined,
+  targetError: string | undefined,
+): string | undefined {
+  if (sourceError && targetError) return `${sourceError}; ${targetError}`;
+  return sourceError ?? targetError;
+}
+
 async function applyRelations(plan: ParsedPlan, opts: ApplyOpts): Promise<ApplyRelationResult[]> {
   const results: ApplyRelationResult[] = [];
   const slugToId = new Map<string, string>();
+  const issueById = new Map<string, IssueFile>();
   for (const issue of plan.issues) {
-    if (issue.frontmatter.linear_id) slugToId.set(issue.slug, issue.frontmatter.linear_id);
+    if (issue.frontmatter.linear_id) {
+      slugToId.set(issue.slug, issue.frontmatter.linear_id);
+      issueById.set(issue.frontmatter.linear_id, issue);
+    }
   }
 
-  // Dry-run: show the planned graph using slugs/identifiers as-is; no lookups, no mutations.
+  // CAS-check and pre-fetch existing relations per source issue that has any
+  // declared link. This lets us distinguish a real `created` from a server-
+  // deduped no-op and prevents relation-only direct apply from bypassing the
+  // same stale-plan protection used by scalar/body updates.
+  const remoteEdgesByFromId = new Map<string, ListRelationsResult>();
+  const sourceErrors = new Map<string, string>();
+  const sourcesWithLinks = plan.issues.filter((i) => {
+    if (!i.frontmatter.linear_id) return false;
+    return LINK_KEYS.some((k) => {
+      const v = i.frontmatter[k] as string[] | undefined;
+      return Array.isArray(v) && v.length > 0;
+    });
+  });
+  await mapLimit(sourcesWithLinks, 8, async (issue) => {
+    const fromId = issue.frontmatter.linear_id;
+    if (!fromId) return;
+    try {
+      const fetched = (await withClient((c) =>
+        c.client.rawRequest(ISSUE_UPDATED_AT_QUERY, { id: fromId }),
+      )) as { data: { issue: { identifier: string; updatedAt: string } | null } };
+      const remote = fetched.data.issue;
+      if (!remote) {
+        sourceErrors.set(fromId, `source issue not found: ${fromId}`);
+        return;
+      }
+      const casBlocker = directApplyCasBlocker(
+        "issue",
+        fromId,
+        issue.frontmatter,
+        remote.updatedAt,
+        opts,
+      );
+      if (casBlocker) {
+        sourceErrors.set(fromId, casBlocker);
+        return;
+      }
+      const remoteEdges = await listRelations(fromId);
+      if (remoteEdges.issueMissing) {
+        sourceErrors.set(fromId, `source issue not found: ${fromId}`);
+        return;
+      }
+      remoteEdgesByFromId.set(fromId, remoteEdges);
+    } catch (err) {
+      sourceErrors.set(fromId, `relation preflight failed: ${(err as Error).message}`);
+    }
+  });
+
+  const targetErrors = new Map<string, string>();
+  const localTargetsWithSnapshots = new Map<string, IssueFile>();
+  for (const issue of sourcesWithLinks) {
+    for (const key of LINK_KEYS) {
+      const targets = issue.frontmatter[key] as string[] | undefined;
+      if (!targets) continue;
+      for (const raw of targets) {
+        const resolvedTarget = slugToId.get(raw) ?? raw;
+        const targetIssue = issueById.get(resolvedTarget);
+        if (targetIssue && hasPlanRemoteSnapshot(targetIssue)) {
+          localTargetsWithSnapshots.set(resolvedTarget, targetIssue);
+        }
+      }
+    }
+  }
+  await mapLimit(Array.from(localTargetsWithSnapshots.entries()), 8, async ([targetId, issue]) => {
+    try {
+      const fetched = (await withClient((c) =>
+        c.client.rawRequest(ISSUE_UPDATED_AT_QUERY, { id: targetId }),
+      )) as { data: { issue: { identifier: string; updatedAt: string } | null } };
+      const remote = fetched.data.issue;
+      if (!remote) {
+        targetErrors.set(targetId, `target issue not found: ${targetId}`);
+        return;
+      }
+      const casBlocker = directApplyCasBlocker(
+        "issue",
+        targetId,
+        issue.frontmatter,
+        remote.updatedAt,
+        opts,
+      );
+      if (casBlocker) targetErrors.set(targetId, casBlocker);
+    } catch (err) {
+      targetErrors.set(targetId, `target freshness check failed: ${(err as Error).message}`);
+    }
+  });
+
   if (opts.dryRun) {
     for (const issue of plan.issues) {
       const fromLabel = issue.frontmatter.linear_id ?? issue.slug;
+      const sourceError = issue.frontmatter.linear_id
+        ? sourceErrors.get(issue.frontmatter.linear_id)
+        : undefined;
       for (const key of LINK_KEYS) {
         const targets = issue.frontmatter[key] as string[] | undefined;
         if (!targets) continue;
+        const kind = LINK_KEY_TO_SET_LINKS_KIND[key];
+        const remoteEdges = issue.frontmatter.linear_id
+          ? remoteEdgesByFromId.get(issue.frontmatter.linear_id)
+          : undefined;
         for (const raw of targets) {
-          const resolved = slugToId.get(raw) ?? raw;
+          const resolvedTarget = slugToId.get(raw) ?? raw;
+          const endpointError = relationEndpointError(
+            sourceError,
+            targetErrors.get(resolvedTarget),
+          );
+          const relationPreflight =
+            remoteEdges && issue.frontmatter.linear_id
+              ? analyzeRelationCreatePreflight(
+                  remoteEdges,
+                  issue.frontmatter.linear_id,
+                  resolvedTarget,
+                  kind,
+                )
+              : null;
+          if (relationPreflight?.exact) {
+            results.push({
+              fromIdentifier: fromLabel,
+              toIdentifier: resolvedTarget,
+              kind: key,
+              status: "unchanged",
+              ...(endpointError ? { error: endpointError } : {}),
+            });
+            continue;
+          }
+          if (relationPreflight?.wouldReplace || relationPreflight?.duplicateSideEffect) {
+            const reasons: string[] = [];
+            if (relationPreflight.wouldReplace) {
+              reasons.push(
+                `relation would replace existing pair relation(s): ${relationPreflight.conflicts
+                  .map((r) => `${r.direction} ${r.type} ${r.otherIdentifier}`)
+                  .join(", ")}`,
+              );
+            }
+            if (relationPreflight.duplicateSideEffect) {
+              reasons.push(
+                "duplicate relations can move involved issues to Linear's Duplicate state",
+              );
+            }
+            results.push({
+              fromIdentifier: fromLabel,
+              toIdentifier: resolvedTarget,
+              kind: key,
+              status: "error",
+              error: reasons.join("; "),
+            });
+            continue;
+          }
           results.push({
             fromIdentifier: fromLabel,
-            toIdentifier: resolved,
+            toIdentifier: resolvedTarget,
             kind: key,
-            status: "dry-run",
+            status: endpointError ? "error" : "dry-run",
+            ...(endpointError ? { error: endpointError } : {}),
           });
         }
       }
@@ -530,47 +988,49 @@ async function applyRelations(plan: ParsedPlan, opts: ApplyOpts): Promise<ApplyR
     }
   }
   const uuidByIdentifier = new Map<string, string>();
-  await Promise.all(
-    Array.from(allIdentifiers).map(async (id) => {
-      try {
-        const iss = await withClient((c) => c.issue(id));
-        if (iss) uuidByIdentifier.set(id, iss.id);
-      } catch {
-        /* mark as unresolvable; relation call will error with clean message */
+  const identifierResolutionErrors = new Map<string, string>();
+  await mapLimit(Array.from(allIdentifiers), 8, async (id) => {
+    try {
+      const iss = await withClient((c) => c.issue(id));
+      if (iss) {
+        uuidByIdentifier.set(id, iss.id);
+      } else {
+        identifierResolutionErrors.set(id, `issue not resolved: ${id}`);
       }
-    }),
-  );
-
-  // Pre-fetch existing relations per source issue that has any declared link.
-  // This lets us distinguish a real `created` from a server-deduped no-op so
-  // re-apply reports `unchanged` (mirroring how `upsertIssue` reads remote
-  // state before deciding update/unchanged). One `listRelations` call per
-  // source issue — same shape as the per-issue read in `upsertIssue`.
-  const remoteEdgesByFromId = new Map<string, ListRelationsResult>();
-  const sourcesWithLinks = plan.issues.filter((i) => {
-    if (!i.frontmatter.linear_id) return false;
-    return LINK_KEYS.some((k) => {
-      const v = i.frontmatter[k] as string[] | undefined;
-      return Array.isArray(v) && v.length > 0;
-    });
+    } catch (err) {
+      identifierResolutionErrors.set(
+        id,
+        `issue resolution failed for ${id}: ${(err as Error).message}`,
+      );
+    }
   });
-  await Promise.all(
-    sourcesWithLinks.map(async (issue) => {
-      const fromId = issue.frontmatter.linear_id;
-      if (!fromId) return;
-      try {
-        remoteEdgesByFromId.set(fromId, await listRelations(fromId));
-      } catch {
-        /* fall through — uncached source treated as "no known edges" so we
-           preserve prior behaviour (report `created`) rather than mask errors */
-      }
-    }),
-  );
 
   for (const issue of plan.issues) {
     const fromId = issue.frontmatter.linear_id;
     if (!fromId) continue;
     const fromUuid = uuidByIdentifier.get(fromId);
+    const sourceError = sourceErrors.get(fromId);
+    const sourceResolutionError =
+      sourceError ??
+      (fromUuid
+        ? undefined
+        : `source ${identifierResolutionErrors.get(fromId) ?? `issue not resolved: ${fromId}`}`);
+    if (sourceResolutionError) {
+      for (const key of LINK_KEYS) {
+        const targets = issue.frontmatter[key] as string[] | undefined;
+        if (!targets) continue;
+        for (const raw of targets) {
+          results.push({
+            fromIdentifier: fromId,
+            toIdentifier: slugToId.get(raw) ?? raw,
+            kind: key,
+            status: "error",
+            error: sourceResolutionError,
+          });
+        }
+      }
+      continue;
+    }
     if (!fromUuid) continue;
     const remoteEdges = remoteEdgesByFromId.get(fromId);
     for (const key of LINK_KEYS) {
@@ -586,20 +1046,21 @@ async function applyRelations(plan: ParsedPlan, opts: ApplyOpts): Promise<ApplyR
             toIdentifier: resolvedTarget,
             kind: key,
             status: "error",
-            error: `target not found: ${resolvedTarget}`,
+            error:
+              identifierResolutionErrors.get(resolvedTarget) ??
+              `target not found: ${resolvedTarget}`,
           });
           continue;
         }
-        if (opts.dryRun) {
-          results.push({
-            fromIdentifier: fromId,
-            toIdentifier: resolvedTarget,
-            kind: key,
-            status: "dry-run",
-          });
-          continue;
-        }
-        if (remoteEdges && relationExists(remoteEdges, key, resolvedTarget)) {
+        const relationPreflight = remoteEdges
+          ? analyzeRelationCreatePreflight(remoteEdges, fromId, resolvedTarget, kind)
+          : null;
+        const relationAlreadyExists = relationPreflight
+          ? relationPreflight.exact !== undefined
+          : remoteEdges
+            ? relationExists(remoteEdges, key, resolvedTarget)
+            : false;
+        if (relationAlreadyExists) {
           // Server-side idempotent: a second `createLink` call would return
           // the same UUID without creating anything. Report the no-op.
           results.push({
@@ -607,6 +1068,39 @@ async function applyRelations(plan: ParsedPlan, opts: ApplyOpts): Promise<ApplyR
             toIdentifier: resolvedTarget,
             kind: key,
             status: "unchanged",
+          });
+          continue;
+        }
+        if (relationPreflight?.wouldReplace) {
+          results.push({
+            fromIdentifier: fromId,
+            toIdentifier: resolvedTarget,
+            kind: key,
+            status: "error",
+            error: `relation would replace existing pair relation(s): ${relationPreflight.conflicts
+              .map((r) => `${r.direction} ${r.type} ${r.otherIdentifier}`)
+              .join(", ")}`,
+          });
+          continue;
+        }
+        if (relationPreflight?.duplicateSideEffect) {
+          results.push({
+            fromIdentifier: fromId,
+            toIdentifier: resolvedTarget,
+            kind: key,
+            status: "error",
+            error: "duplicate relations can move involved issues to Linear's Duplicate state",
+          });
+          continue;
+        }
+        const targetError = targetErrors.get(resolvedTarget);
+        if (targetError) {
+          results.push({
+            fromIdentifier: fromId,
+            toIdentifier: resolvedTarget,
+            kind: key,
+            status: "error",
+            error: targetError,
           });
           continue;
         }
@@ -647,21 +1141,76 @@ export async function applyPlan(
 
   // Topological order: parents created before children so parentId resolution works.
   const ordered = topologicalSort(plan.issues);
+  if (projectApplyFailed(projectResult)) {
+    const reason = projectResult.error ?? "project apply failed";
+    return {
+      project: projectResult,
+      issues: ordered.map((issue) => ({
+        slug: issue.slug,
+        path: issue.path,
+        linearId: issue.frontmatter.linear_id,
+        status: "error",
+        error: `skipped because project apply failed: ${reason}`,
+      })),
+      relations: [],
+    };
+  }
   // Slug → linear_id map, populated as we go so children can set parentId.
   const slugToId = new Map<string, string>();
+  const localIssueSlugs = new Set(plan.issues.map((issue) => issue.slug));
   for (const i of plan.issues) {
     if (i.frontmatter.linear_id) slugToId.set(i.slug, i.frontmatter.linear_id);
   }
 
   const issues: ApplyIssueResult[] = [];
-  for (const issue of ordered) {
-    const result = await upsertIssue(issue, teamMetadata, effectiveProjectId, opts, slugToId);
+  for (const [index, issue] of ordered.entries()) {
+    const result = await upsertIssue(
+      issue,
+      teamMetadata,
+      effectiveProjectId,
+      opts,
+      slugToId,
+      localIssueSlugs,
+    );
     issues.push(result);
+    if (!opts.dryRun && issueWritebackFailed(result)) {
+      const reason = result.error ?? "local issue writeback failed";
+      return {
+        project: projectResult,
+        issues: [
+          ...issues,
+          ...ordered.slice(index + 1).map((remaining) => ({
+            slug: remaining.slug,
+            path: remaining.path,
+            linearId: remaining.frontmatter.linear_id,
+            status: "error" as const,
+            error: `skipped because issue writeback failed: ${reason}`,
+          })),
+        ],
+        relations: [],
+      };
+    }
     if (result.linearId) slugToId.set(issue.slug, result.linearId);
   }
 
   // Rewrite slug → LinearID references in every issue file.
-  if (!opts.dryRun) await rewriteLinkSlugs(plan);
+  if (!opts.dryRun) {
+    try {
+      await rewriteLinkSlugs(plan);
+    } catch (err) {
+      const error = (err as Error).message;
+      const failedSlug = err instanceof LinkSlugRewriteError ? err.issue.slug : null;
+      return {
+        project: projectResult,
+        issues: issues.map((issue) =>
+          failedSlug === null || issue.slug === failedSlug
+            ? markSlugRewriteFailure(issue, error)
+            : issue,
+        ),
+        relations: [],
+      };
+    }
+  }
 
   // Apply relations once every issue has an identifier (or would have, in dry-run).
   const relations = await applyRelations(plan, opts);

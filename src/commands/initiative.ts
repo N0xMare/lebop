@@ -1,7 +1,8 @@
 import chalk from "chalk";
 import type { Command } from "commander";
+import { parseCliLimit, parseCliNumber } from "../lib/cliOptions.ts";
 import { envelope } from "../lib/envelope.ts";
-import { NotFoundError, tryIdempotentDelete } from "../lib/errors.ts";
+import { NotFoundError, tryIdempotentDelete, ValidationError } from "../lib/errors.ts";
 import {
   archiveInitiative,
   createInitiative,
@@ -25,6 +26,7 @@ export function registerInitiative(program: Command): void {
     .command("list")
     .description("list initiatives")
     .option("--status <name>", "filter by status name")
+    .option("--owner-id <uuid>", "filter by owner user UUID")
     .option("--include-archived", "include archived initiatives (alias: --archived)")
     .option("--archived", "[deprecated] include archived initiatives — use --include-archived")
     .option("--limit <n>", "default 50; pass 0 for no limit", "50")
@@ -32,15 +34,16 @@ export function registerInitiative(program: Command): void {
     .action(
       async (opts: {
         status?: string;
+        ownerId?: string;
         archived?: boolean;
         includeArchived?: boolean;
         limit?: string;
         json?: boolean;
       }) => {
-        const requested = Number.parseInt(opts.limit ?? "50", 10);
-        const max = requested === 0 ? Number.POSITIVE_INFINITY : Math.max(1, requested);
+        const max = parseCliLimit(opts.limit, { defaultValue: 50, zeroMeansInfinity: true });
         const initiatives = await listInitiatives({
           status: opts.status,
+          ownerId: opts.ownerId,
           includeArchived: opts.includeArchived ?? opts.archived,
           max,
         });
@@ -146,7 +149,8 @@ export function registerInitiative(program: Command): void {
     .option("--name <text>")
     .option("--description <text>")
     .option("--status <name>")
-    .option("--owner-id <uuid>")
+    .option("--owner-id <uuid>", "or `null` to clear")
+    .option("--clear-owner", "clear the initiative owner")
     .option("--target-date <iso>", "or `null` to clear")
     .option("--color <hex>")
     .option("--icon <name>")
@@ -159,6 +163,7 @@ export function registerInitiative(program: Command): void {
           description?: string;
           status?: string;
           ownerId?: string;
+          clearOwner?: boolean;
           targetDate?: string;
           color?: string;
           icon?: string;
@@ -169,7 +174,15 @@ export function registerInitiative(program: Command): void {
         if (opts.name !== undefined) input.name = opts.name;
         if (opts.description !== undefined) input.description = opts.description;
         if (opts.status !== undefined) input.status = opts.status;
-        if (opts.ownerId !== undefined) input.ownerId = opts.ownerId;
+        if (opts.ownerId !== undefined && opts.clearOwner) {
+          throw new ValidationError(
+            "pass either --owner-id or --clear-owner, not both",
+            "use --clear-owner to remove ownership, or --owner-id <uuid> to assign an owner",
+          );
+        }
+        if (opts.clearOwner) input.ownerId = null;
+        if (opts.ownerId !== undefined)
+          input.ownerId = opts.ownerId === "null" ? null : opts.ownerId;
         if (opts.targetDate !== undefined) {
           input.targetDate = opts.targetDate === "null" ? null : opts.targetDate;
         }
@@ -177,11 +190,10 @@ export function registerInitiative(program: Command): void {
         if (opts.icon !== undefined) input.icon = opts.icon;
 
         if (Object.keys(input).length === 0) {
-          // Round-10 / M8 deferred: this surfaces as `code: "unknown"` in
-          // `--json` envelopes instead of `validation_error`. Deliberately
-          // not migrated this release — the broader CLI ValidationError
-          // sweep is a v1.0 polish item, not a v0.0.2 ship blocker.
-          throw new Error("nothing to update — pass at least one field");
+          throw new ValidationError(
+            "nothing to update — pass at least one field",
+            "pass --name, --description, --status, --owner-id, --target-date, --color, or --icon",
+          );
         }
 
         const resolvedId = await resolveInitiativeId(id);
@@ -199,9 +211,18 @@ export function registerInitiative(program: Command): void {
 
   cmd
     .command("archive <id-or-name>")
-    .description("archive an initiative (reversible). Accepts UUID or exact initiative name.")
+    .description(
+      "archive an initiative (reversible — requires --yes). Accepts UUID or exact initiative name.",
+    )
+    .option("--yes", "confirm destructive operation (required)")
     .option("--json", "emit structured result")
-    .action(async (id: string, opts: { json?: boolean }) => {
+    .action(async (id: string, opts: { json?: boolean; yes?: boolean }) => {
+      if (!opts.yes) {
+        throw new ValidationError(
+          "refusing to archive initiative without --yes",
+          "re-run with --yes to confirm this destructive state change",
+        );
+      }
       const resolvedId = await resolveInitiativeId(id);
       if (!resolvedId) throw new NotFoundError(`initiative not found: ${id}`);
       const success = await archiveInitiative(resolvedId);
@@ -236,12 +257,10 @@ export function registerInitiative(program: Command): void {
     .option("--json", "emit structured result")
     .action(async (id: string, opts: { yes?: boolean; json?: boolean }) => {
       if (!opts.yes) {
-        process.stderr.write(
-          `${chalk.red("error:")} refusing to delete initiative ${chalk.bold(id)} without --yes\n` +
-            `  ${chalk.cyan("hint:")} re-run with --yes to confirm. Use \`initiative archive\` for a reversible alternative.\n`,
+        throw new ValidationError(
+          `refusing to delete initiative ${id} without --yes`,
+          "re-run with --yes to confirm. Use `initiative archive` for a reversible alternative.",
         );
-        process.exitCode = 1;
-        return;
       }
       // Round-9 / M-1: envelope `id` field must have a consistent shape across
       // both deleted and already-absent branches so `jq -r .id` doesn't get a
@@ -286,6 +305,10 @@ export function registerInitiative(program: Command): void {
     .option("--json", "emit structured result")
     .action(
       async (initiative: string, project: string, opts: { sortOrder?: string; json?: boolean }) => {
+        const sortOrder =
+          opts.sortOrder !== undefined
+            ? parseCliNumber(opts.sortOrder, { optionName: "--sort-order", allowNegative: true })
+            : undefined;
         const initiativeId = await resolveInitiativeId(initiative);
         if (!initiativeId) throw new NotFoundError(`initiative not found: ${initiative}`);
         const projectId = await resolveProjectId(project);
@@ -293,7 +316,7 @@ export function registerInitiative(program: Command): void {
         const result = await initiativeAddProject({
           initiativeId,
           projectId,
-          sortOrder: opts.sortOrder !== undefined ? Number(opts.sortOrder) : undefined,
+          sortOrder,
         });
         if (opts.json) {
           process.stdout.write(`${JSON.stringify(envelope({ edge_id: result.id }), null, 2)}\n`);
@@ -307,30 +330,39 @@ export function registerInitiative(program: Command): void {
 
   cmd
     .command("remove-project <initiative> <project>")
-    .description("remove a project from an initiative")
+    .description("remove a project from an initiative (requires --yes)")
+    .option("--yes", "confirm destructive operation (required)")
     .option("--json", "emit structured result")
-    .action(async (initiative: string, project: string, opts: { json?: boolean }) => {
-      const initiativeId = await resolveInitiativeId(initiative);
-      if (!initiativeId) throw new NotFoundError(`initiative not found: ${initiative}`);
-      const projectId = await resolveProjectId(project);
-      if (!projectId) throw new NotFoundError(`project not found: ${project}`);
-      const result = await initiativeRemoveProject({ initiativeId, projectId });
-      if (opts.json) {
-        process.stdout.write(`${JSON.stringify(envelope({ ...result }), null, 2)}\n`);
-        return;
-      }
-      if (result.removed) {
-        process.stdout.write(
-          `${chalk.green("✓")} unlinked ${chalk.bold(project)} from ${chalk.bold(initiative)}\n`,
-        );
-        return;
-      }
-      const reasonText =
-        result.reason === "absent"
-          ? `${project} was not linked to ${initiative}`
-          : result.reason === "archived"
-            ? `${initiative} is archived — unarchive it first to remove projects`
-            : (result.message ?? `removal refused (reason: ${result.reason ?? "unknown"})`);
-      process.stdout.write(`${chalk.gray("·")} ${reasonText}\n`);
-    });
+    .action(
+      async (initiative: string, project: string, opts: { json?: boolean; yes?: boolean }) => {
+        if (!opts.yes) {
+          throw new ValidationError(
+            "refusing to remove project from initiative without --yes",
+            "re-run with --yes to confirm this destructive state change",
+          );
+        }
+        const initiativeId = await resolveInitiativeId(initiative);
+        if (!initiativeId) throw new NotFoundError(`initiative not found: ${initiative}`);
+        const projectId = await resolveProjectId(project);
+        if (!projectId) throw new NotFoundError(`project not found: ${project}`);
+        const result = await initiativeRemoveProject({ initiativeId, projectId });
+        if (opts.json) {
+          process.stdout.write(`${JSON.stringify(envelope({ ...result }), null, 2)}\n`);
+          return;
+        }
+        if (result.removed) {
+          process.stdout.write(
+            `${chalk.green("✓")} unlinked ${chalk.bold(project)} from ${chalk.bold(initiative)}\n`,
+          );
+          return;
+        }
+        const reasonText =
+          result.reason === "absent"
+            ? `${project} was not linked to ${initiative}`
+            : result.reason === "archived"
+              ? `${initiative} is archived — unarchive it first to remove projects`
+              : (result.message ?? `removal refused (reason: ${result.reason ?? "unknown"})`);
+        process.stdout.write(`${chalk.gray("·")} ${reasonText}\n`);
+      },
+    );
 }

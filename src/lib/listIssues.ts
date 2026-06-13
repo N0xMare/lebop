@@ -8,12 +8,15 @@
  */
 
 import type { LinearClient } from "@linear/sdk";
+import { mapLimit } from "./concurrency.ts";
 import { ValidationError } from "./errors.ts";
-import { paginateConnection } from "./paginate.ts";
+import { type ConnectionPage, paginateConnection, paginateConnectionPage } from "./paginate.ts";
+import { withRetry } from "./retry.ts";
 import { linear, withClient } from "./sdk.ts";
 import { isUuid } from "./uuid.ts";
 
 type IssueFilter = NonNullable<Parameters<LinearClient["issues"]>[0]>["filter"];
+type ListedIssueNode = Awaited<ReturnType<LinearClient["issues"]>>["nodes"][number];
 
 export interface ListIssuesOpts {
   /** Team key (e.g. "ENG"). When omitted, falls back to caller's resolved team. */
@@ -59,6 +62,8 @@ export interface ListIssuesOpts {
   max?: number;
   /** Items per page request. Default 250. */
   pageSize?: number;
+  /** Cursor returned by a previous page-aware list call. */
+  after?: string;
 }
 
 export interface ListedIssue {
@@ -71,6 +76,15 @@ export interface ListedIssue {
   labels: string[];
   updated_at: string;
   url: string;
+}
+
+export interface ListedIssuesResult {
+  issues: ListedIssue[];
+  count: number;
+  limit: number;
+  has_more: boolean;
+  truncated: boolean;
+  next_cursor: string | null;
 }
 
 /**
@@ -149,6 +163,10 @@ export async function listIssues(
   const filter = await buildIssueFilter(opts, opts.resolvedTeam);
   const max = opts.max ?? 50;
   const pageSize = opts.pageSize ?? 250;
+  const paginateOpts =
+    max === Number.POSITIVE_INFINITY
+      ? { pageSize, initialAfter: opts.after }
+      : { max, pageSize, initialAfter: opts.after };
 
   // Pre-fetch the cached client so paginate can reuse it without
   // double-wrapping retry (paginate retries internally).
@@ -161,27 +179,130 @@ export async function listIssues(
         after,
         includeArchived: opts.includeArchived,
       }),
-    { max, pageSize },
+    paginateOpts,
   );
 
-  return Promise.all(
-    issues.map(async (i) => {
-      // i.state and i.assignee are lazy SDK getters (Promise<T> | undefined);
-      // fine bare since list is read-only and easy to retry.
-      const [state, assignee, labels] = await Promise.all([i.state, i.assignee, i.labels()]);
-      return {
-        identifier: i.identifier,
-        title: i.title,
-        state: state?.name ?? null,
-        state_type: state?.type ?? null,
-        priority: i.priority,
-        assignee: assignee ? { name: assignee.name, email: assignee.email } : null,
-        labels: labels.nodes.map((l) => l.name).sort(),
-        updated_at: i.updatedAt.toISOString(),
-        url: i.url,
-      };
-    }),
+  return mapLimit(issues, 8, shapeIssue);
+}
+
+export async function listIssuesWithMetadata(
+  opts: ListIssuesOpts & { resolvedTeam: string | undefined },
+): Promise<ListedIssuesResult> {
+  const requestedMax = opts.max ?? 50;
+  if (requestedMax === Number.POSITIVE_INFINITY) {
+    const issues = await listIssues(opts);
+    return {
+      issues,
+      count: issues.length,
+      limit: 0,
+      has_more: false,
+      truncated: false,
+      next_cursor: null,
+    };
+  }
+
+  const max = Math.max(0, Math.floor(requestedMax));
+  if (max === 0) {
+    return {
+      issues: [],
+      count: 0,
+      limit: 0,
+      has_more: false,
+      truncated: false,
+      next_cursor: null,
+    };
+  }
+
+  const filter = await buildIssueFilter(opts, opts.resolvedTeam);
+  const pageSize = opts.pageSize ?? 250;
+  const client = await linear();
+  const out: ListedIssueNode[] = [];
+  let after = opts.after;
+  let lastPageInfo: { hasNextPage: boolean; endCursor?: string | null } = {
+    hasNextPage: false,
+    endCursor: null,
+  };
+
+  while (out.length < max) {
+    const first = Math.min(pageSize, max - out.length);
+    const page = await withRetry(() =>
+      client.issues({
+        filter,
+        first,
+        after,
+        includeArchived: opts.includeArchived,
+      }),
+    );
+    out.push(...page.nodes.slice(0, max - out.length));
+    lastPageInfo = page.pageInfo;
+    if (!page.pageInfo.hasNextPage || out.length >= max) break;
+    if (!page.pageInfo.endCursor) {
+      throw new ValidationError(
+        "issue list cannot continue because Linear returned hasNextPage without endCursor",
+        "retry the request; if it repeats, narrow the filter or report the malformed Linear connection page",
+      );
+    }
+    if (page.pageInfo.endCursor === after) {
+      throw new ValidationError(
+        `issue list cannot continue because Linear returned repeated cursor "${page.pageInfo.endCursor}"`,
+        "retry the request; if it repeats, narrow the filter or report the stuck Linear connection cursor",
+      );
+    }
+    after = page.pageInfo.endCursor;
+  }
+
+  const hasMore = out.length >= max && lastPageInfo.hasNextPage;
+  if (hasMore && !lastPageInfo.endCursor) {
+    throw new ValidationError(
+      "issue list cannot continue because Linear returned hasNextPage without endCursor",
+      "retry the request; if it repeats, narrow the filter or report the malformed Linear connection page",
+    );
+  }
+  const issues = await mapLimit(out, 8, shapeIssue);
+  return {
+    issues,
+    count: issues.length,
+    limit: max,
+    has_more: hasMore,
+    truncated: hasMore,
+    next_cursor: hasMore ? (lastPageInfo.endCursor ?? null) : null,
+  };
+}
+
+export async function listIssuesPage(
+  opts: ListIssuesOpts & { resolvedTeam: string | undefined; after?: string; limit: number },
+): Promise<ConnectionPage<ListedIssue>> {
+  const filter = await buildIssueFilter(opts, opts.resolvedTeam);
+  const client = await linear();
+  const page = await paginateConnectionPage(
+    ({ first, after }) =>
+      client.issues({
+        filter,
+        first,
+        after,
+        includeArchived: opts.includeArchived,
+      }),
+    { limit: opts.limit, after: opts.after, pageSize: opts.pageSize },
   );
+  const nodes = await mapLimit(page.nodes, 8, shapeIssue);
+  return { nodes, pageInfo: page.pageInfo };
+}
+
+async function shapeIssue(i: ListedIssueNode): Promise<ListedIssue> {
+  // i.state and i.assignee are lazy SDK getters (Promise<T> | undefined);
+  // fine bare since list is read-only and easy to retry.
+  const [state, assignee, labels] = await Promise.all([i.state, i.assignee, i.labels()]);
+  return {
+    identifier: i.identifier,
+    title: i.title,
+    state: state?.name ?? null,
+    state_type: state?.type ?? null,
+    priority: i.priority,
+    assignee: assignee ? { name: assignee.name, email: assignee.email } : null,
+    labels: labels.nodes.map((l) => l.name).sort(),
+    updated_at: i.updatedAt.toISOString(),
+    url: i.url,
+  };
 }
 
 function parseRelative(input: string): Date {

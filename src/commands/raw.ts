@@ -1,6 +1,11 @@
 import type { Command } from "commander";
+import { ValidationError } from "../lib/errors.ts";
+import {
+  assertRawGraphQLOperationAllowed,
+  assertRawGraphQLPaginateAllowed,
+} from "../lib/rawGraphql.ts";
 import { paginateRawQuery } from "../lib/rawPaginate.ts";
-import { withClient } from "../lib/sdk.ts";
+import { linear, withClient } from "../lib/sdk.ts";
 
 export function registerRaw(program: Command): void {
   program
@@ -15,7 +20,11 @@ export function registerRaw(program: Command): void {
     )
     .option("--query-file <path>", "read query from a file (use this or positional arg)")
     .option("--paginate", "auto-paginate connections via $first/$after vars + pageInfo discovery")
+    .option("--allow-mutation", "allow executing a GraphQL mutation through the raw escape hatch")
+    .option("--yes", "confirm GraphQL mutation execution when --allow-mutation is set")
+    .option("--confirm", "alias for --yes")
     .action(async (queryArg: string | undefined, opts: RawOpts) => {
+      assertSingleStdinSource(queryArg, opts);
       const query = await resolveQuery(queryArg, opts.queryFile);
       const variables = {
         ...(await resolveVariables(opts.variablesJson)),
@@ -23,6 +32,7 @@ export function registerRaw(program: Command): void {
       };
 
       if (opts.paginate) {
+        assertRawGraphQLPaginateAllowed(query);
         const accumulated = await paginateRawQuery(
           variables,
           async (vars) =>
@@ -34,10 +44,23 @@ export function registerRaw(program: Command): void {
         return;
       }
 
-      // `raw` queries are caller-defined; they may be reads or mutations. Wrap
-      // with retry under the assumption that callers passing creates accept
-      // the duplicate-on-retry-after-success risk (the escape hatch contract).
-      const response: unknown = await withClient((c) => c.client.rawRequest(query, variables));
+      const operationKind = assertRawGraphQLOperationAllowed(query, {
+        allowMutation: opts.allowMutation === true,
+        mutationMessage: "raw GraphQL mutation requires --allow-mutation",
+        mutationHint:
+          "prefer first-class lebop write tools; if raw mutation is intentional, re-run with --allow-mutation",
+        surface: "raw GraphQL",
+      });
+      if (operationKind === "mutation" && !isConfirmed(opts)) {
+        throw new ValidationError(
+          "raw GraphQL mutation requires --yes/--confirm with --allow-mutation",
+          "prefer first-class lebop write tools; if raw mutation is intentional, pass --yes/--confirm after verifying the mutation and variables",
+        );
+      }
+      const response: unknown =
+        operationKind === "mutation"
+          ? await (await linear()).client.rawRequest(query, variables)
+          : await withClient((c) => c.client.rawRequest(query, variables));
 
       // rawRequest returns { data, errors?, ... } — unwrap for a clean result view.
       //
@@ -52,11 +75,24 @@ export function registerRaw(program: Command): void {
     });
 }
 
+function assertSingleStdinSource(queryArg: string | undefined, opts: RawOpts): void {
+  if (opts.variablesJson !== "-") return;
+  const queryFromStdin = queryArg === "-" || (!queryArg && !opts.queryFile && !process.stdin.isTTY);
+  if (!queryFromStdin) return;
+  throw new ValidationError(
+    "raw cannot read both query and --variables-json from stdin",
+    "pass the query as a positional argument or --query-file when using --variables-json -, or pass variables from a file",
+  );
+}
+
 interface RawOpts {
   variablesJson?: string;
   variable?: Record<string, unknown>;
   queryFile?: string;
   paginate?: boolean;
+  allowMutation?: boolean;
+  yes?: boolean;
+  confirm?: boolean;
 }
 
 async function resolveQuery(arg: string | undefined, file: string | undefined): Promise<string> {
@@ -65,7 +101,10 @@ async function resolveQuery(arg: string | undefined, file: string | undefined): 
   if (arg === "-" || !process.stdin.isTTY) {
     return (await Bun.stdin.text()).trim();
   }
-  throw new Error("no query provided. pass it as a positional arg, --query-file, or on stdin");
+  throw new ValidationError(
+    "no query provided. pass it as a positional arg, --query-file, or on stdin",
+    "pass a query string, --query-file <path>, or pipe the query on stdin",
+  );
 }
 
 async function resolveVariables(path: string | undefined): Promise<Record<string, unknown>> {
@@ -73,8 +112,11 @@ async function resolveVariables(path: string | undefined): Promise<Record<string
   const text = path === "-" ? await Bun.stdin.text() : await Bun.file(path).text();
   if (!text.trim()) return {};
   const parsed = JSON.parse(text);
-  if (typeof parsed !== "object" || parsed === null) {
-    throw new Error("--variables-json must contain a JSON object");
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new ValidationError(
+      "--variables-json must contain a JSON object",
+      'provide a JSON object such as {"id":"NOX-1"}',
+    );
   }
   return parsed as Record<string, unknown>;
 }
@@ -116,9 +158,16 @@ function collectVariable(
 ): Record<string, unknown> {
   const eq = value.indexOf("=");
   if (eq === -1) {
-    throw new Error(`--variable must be of form k=v (got "${value}")`);
+    throw new ValidationError(
+      `--variable must be of form k=v (got "${value}")`,
+      "use --variable key=value",
+    );
   }
   const key = value.slice(0, eq);
   const raw = value.slice(eq + 1);
   return { ...previous, [key]: raw };
+}
+
+function isConfirmed(opts: Pick<RawOpts, "yes" | "confirm">): boolean {
+  return opts.yes === true || opts.confirm === true;
 }

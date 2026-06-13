@@ -5,8 +5,9 @@ body:
   - type: markdown
     attributes:
       value: |
-        Before filing: skim `docs/spec.md` §3 (positioning) and §13 (roadmap)
-        to see if the idea is already in scope or deliberately out-of-scope.
+        Before filing: skim `docs/spec.md#3-scope` and
+        `docs/spec.md#14-future--out-of-scope` to see if the idea is already
+        in scope or deliberately out-of-scope.
 
   - type: textarea
     id: problem

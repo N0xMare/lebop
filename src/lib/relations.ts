@@ -1,4 +1,7 @@
 import { ValidationError } from "./errors.ts";
+import { normalizeIssueIdentifier } from "./issueIdentifiers.ts";
+import { requireMutationEntity, requireMutationSuccess } from "./mutationResult.ts";
+import { resolveSafetyCap } from "./paginate.ts";
 import { linear, withClient } from "./sdk.ts";
 
 export type LinkKind = "blocks" | "blocked-by" | "duplicates" | "duplicated-by" | "related";
@@ -20,6 +23,27 @@ export interface LinkDelta {
   op: "+" | "-";
   kind: LinkKind;
   target: string;
+}
+
+export function relationPairKey(targetIdentifier: string): string {
+  return targetIdentifier.toUpperCase();
+}
+
+export function relationDeltaKey(delta: Pick<LinkDelta, "kind" | "target">): string {
+  return `${delta.kind}:${relationPairKey(delta.target)}`;
+}
+
+export function relationBatchAddsRequireConfirmation(deltas: readonly LinkDelta[]): boolean {
+  const kindsByTarget = new Map<string, Set<LinkKind>>();
+  for (const delta of deltas) {
+    if (delta.op !== "+") continue;
+    const key = relationPairKey(delta.target);
+    const kinds = kindsByTarget.get(key) ?? new Set<LinkKind>();
+    kinds.add(delta.kind);
+    kindsByTarget.set(key, kinds);
+    if (kinds.size > 1) return true;
+  }
+  return false;
 }
 
 export function parseLinkToken(token: string): LinkDelta {
@@ -62,13 +86,18 @@ export function parseLinkToken(token: string): LinkDelta {
       `pick one of: ${LINK_KINDS.join(", ")}`,
     );
   }
-  if (!/^[A-Z]+-\d+$/.test(target)) {
+  try {
+    return {
+      op,
+      kind: kind as LinkKind,
+      target: normalizeIssueIdentifier(target, "target identifier"),
+    };
+  } catch {
     throw new ValidationError(
       `invalid target identifier "${target}" — expected TEAM-NN`,
       "target identifiers must look like TEAM-NN (e.g. UE-101)",
     );
   }
-  return { op, kind: kind as LinkKind, target };
 }
 
 const CREATE_MUTATION = /* GraphQL */ `
@@ -86,14 +115,23 @@ const DELETE_MUTATION = /* GraphQL */ `
   }
 `;
 
-const FIND_QUERY = /* GraphQL */ `
-  query FindRelation($id: String!) {
+const LIST_RELATIONS_QUERY = /* GraphQL */ `
+  query ListRelations(
+    $id: String!
+    $first: Int!
+    $outboundAfter: String
+    $inboundAfter: String
+    $includeOutbound: Boolean!
+    $includeInbound: Boolean!
+  ) {
     issue(id: $id) {
-      relations {
-        nodes { id type relatedIssue { id identifier } }
+      relations(first: $first, after: $outboundAfter) @include(if: $includeOutbound) {
+        nodes { id type relatedIssue { identifier } }
+        pageInfo { hasNextPage endCursor }
       }
-      inverseRelations {
-        nodes { id type issue { id identifier } }
+      inverseRelations(first: $first, after: $inboundAfter) @include(if: $includeInbound) {
+        nodes { id type issue { identifier } }
+        pageInfo { hasNextPage endCursor }
       }
     }
   }
@@ -104,6 +142,29 @@ export interface RelationSummary {
   type: ApiType;
   otherIdentifier: string;
   direction: Direction;
+}
+
+export interface RelationCreatePreflight {
+  fromIdentifier: string;
+  toIdentifier: string;
+  kind: LinkKind;
+  existing: RelationSummary[];
+  conflicts: RelationSummary[];
+  exact?: RelationSummary;
+  wouldReplace: boolean;
+  duplicateSideEffect: boolean;
+  needsConfirmation: boolean;
+}
+
+export interface ListedRelationsPage {
+  outbound: { id: string; type: ApiType; otherIdentifier: string }[];
+  inbound: { id: string; type: ApiType; otherIdentifier: string }[];
+  complete: boolean;
+  issueMissing?: boolean;
+  pageInfo: {
+    outbound: { hasNextPage: boolean; endCursor: string | null };
+    inbound: { hasNextPage: boolean; endCursor: string | null };
+  };
 }
 
 export async function createLink(
@@ -121,7 +182,103 @@ export async function createLink(
   const response = (await withClient((c) => c.client.rawRequest(CREATE_MUTATION, { input }))) as {
     data: { issueRelationCreate: { success: boolean; issueRelation: { id: string } } };
   };
-  return { id: response.data.issueRelationCreate.issueRelation.id };
+  const relation = requireMutationEntity<{ id: string }>(
+    "issueRelationCreate",
+    response.data.issueRelationCreate as unknown as { success?: boolean } & Record<string, unknown>,
+    "issueRelation",
+  );
+  return { id: relation.id };
+}
+
+export async function preflightCreateLink(
+  selfIdentifier: string,
+  targetIdentifier: string,
+  kind: LinkKind,
+): Promise<RelationCreatePreflight> {
+  const relations = await listRelations(selfIdentifier);
+  if (relations.issueMissing) {
+    throw new ValidationError(
+      `issue not found: ${selfIdentifier}`,
+      "verify the source issue exists and is visible to your token",
+    );
+  }
+  return analyzeRelationCreatePreflight(relations, selfIdentifier, targetIdentifier, kind);
+}
+
+export function analyzeRelationCreatePreflight(
+  relations: ListedRelationsPage,
+  selfIdentifier: string,
+  targetIdentifier: string,
+  kind: LinkKind,
+): RelationCreatePreflight {
+  const requested = LINK_KIND_TO_API[kind];
+  const target = targetIdentifier.toUpperCase();
+  const existing: RelationSummary[] = [
+    ...relations.outbound
+      .filter((r) => r.otherIdentifier.toUpperCase() === target)
+      .map((r) => ({
+        id: r.id,
+        type: r.type,
+        otherIdentifier: r.otherIdentifier,
+        direction: "forward" as const,
+      })),
+    ...relations.inbound
+      .filter((r) => r.otherIdentifier.toUpperCase() === target)
+      .map((r) => ({
+        id: r.id,
+        type: r.type,
+        otherIdentifier: r.otherIdentifier,
+        direction: "inverse" as const,
+      })),
+  ];
+  const exact = existing.find((relation) => relationMatchesKind(relation, requested));
+  const conflicts = exact ? [] : existing;
+  const duplicateSideEffect = requested.type === "duplicate" && exact === undefined;
+  return {
+    fromIdentifier: selfIdentifier.toUpperCase(),
+    toIdentifier: target,
+    kind,
+    existing,
+    conflicts,
+    exact,
+    wouldReplace: conflicts.length > 0,
+    duplicateSideEffect,
+    needsConfirmation: conflicts.length > 0 || duplicateSideEffect,
+  };
+}
+
+export function assertRelationCreateConfirmed(
+  preflight: RelationCreatePreflight,
+  confirmed: boolean,
+): void {
+  if (!preflight.needsConfirmation || confirmed) return;
+  const reasons: string[] = [];
+  if (preflight.wouldReplace) {
+    reasons.push(
+      `would replace existing relation(s): ${preflight.conflicts
+        .map(formatExistingRelation)
+        .join(", ")}`,
+    );
+  }
+  if (preflight.duplicateSideEffect) {
+    reasons.push("duplicate relations can move involved issues to Linear's Duplicate state");
+  }
+  throw new ValidationError(
+    `creating ${preflight.kind} relation ${preflight.fromIdentifier} -> ${preflight.toIdentifier} requires confirmation`,
+    `pass --yes / confirm:true after verifying this intent: ${reasons.join("; ")}`,
+  );
+}
+
+function relationMatchesKind(
+  relation: RelationSummary,
+  requested: { type: ApiType; direction: Direction },
+): boolean {
+  if (requested.type === "related") return relation.type === "related";
+  return relation.type === requested.type && relation.direction === requested.direction;
+}
+
+function formatExistingRelation(relation: RelationSummary): string {
+  return `${relation.direction} ${relation.type} ${relation.otherIdentifier}`;
 }
 
 export async function findLink(
@@ -130,41 +287,27 @@ export async function findLink(
   kind: LinkKind,
 ): Promise<string | null> {
   const { type, direction } = LINK_KIND_TO_API[kind];
-  const response = (await withClient((c) =>
-    c.client.rawRequest(FIND_QUERY, { id: selfIdentifier }),
-  )) as {
-    data: {
-      issue: {
-        relations: {
-          nodes: {
-            id: string;
-            type: ApiType;
-            relatedIssue: { id: string; identifier: string };
-          }[];
-        };
-        inverseRelations: {
-          nodes: { id: string; type: ApiType; issue: { id: string; identifier: string } }[];
-        };
-      } | null;
-    };
-  };
-  const issue = response.data.issue;
-  if (!issue) return null;
-  // Defensive uppercase compare: Linear identifiers are uppercase by convention
-  // ("NOX-123"), and `selfIdentifier`/`targetIdentifier` flow from user input
-  // through `resolveIdentifier` which already normalizes. Locking the
-  // comparison side at this boundary hardens against future call sites that
-  // skip normalization or any backend alias-resolution that surfaces lowercase
-  // identifiers — would otherwise silently miss matches.
+  const relations = await listRelations(selfIdentifier);
+  if (relations.issueMissing) return null;
   const target = targetIdentifier.toUpperCase();
+  if (type === "related") {
+    const outboundMatch = relations.outbound.find(
+      (r) => r.type === type && r.otherIdentifier.toUpperCase() === target,
+    );
+    if (outboundMatch) return outboundMatch.id;
+    const inboundMatch = relations.inbound.find(
+      (r) => r.type === type && r.otherIdentifier.toUpperCase() === target,
+    );
+    return inboundMatch?.id ?? null;
+  }
   if (direction === "forward") {
-    const match = issue.relations.nodes.find(
-      (r) => r.type === type && r.relatedIssue.identifier.toUpperCase() === target,
+    const match = relations.outbound.find(
+      (r) => r.type === type && r.otherIdentifier.toUpperCase() === target,
     );
     return match?.id ?? null;
   }
-  const match = issue.inverseRelations.nodes.find(
-    (r) => r.type === type && r.issue.identifier.toUpperCase() === target,
+  const match = relations.inbound.find(
+    (r) => r.type === type && r.otherIdentifier.toUpperCase() === target,
   );
   return match?.id ?? null;
 }
@@ -173,39 +316,165 @@ export async function deleteLink(relationId: string): Promise<void> {
   // Delete is NOT wrapped with retry — re-running after first success would
   // surface as "not found" since the relation UUID is already gone.
   const client = await linear();
-  await client.client.rawRequest(DELETE_MUTATION, { id: relationId });
+  const response = (await client.client.rawRequest(DELETE_MUTATION, { id: relationId })) as {
+    data: { issueRelationDelete: { success: boolean } };
+  };
+  requireMutationSuccess("issueRelationDelete", response.data.issueRelationDelete);
 }
 
-export async function listRelations(selfIdentifier: string): Promise<{
-  outbound: { id: string; type: ApiType; otherIdentifier: string }[];
-  inbound: { id: string; type: ApiType; otherIdentifier: string }[];
-}> {
+export async function listRelations(selfIdentifier: string): Promise<ListedRelationsPage> {
+  const outbound: ListedRelationsPage["outbound"] = [];
+  const inbound: ListedRelationsPage["inbound"] = [];
+  const cap = resolveSafetyCap();
+  let outboundAfter: string | undefined;
+  let inboundAfter: string | undefined;
+  let outboundDone = false;
+  let inboundDone = false;
+  const outboundSeen = new Set<string>();
+  const inboundSeen = new Set<string>();
+
+  while (!outboundDone || !inboundDone) {
+    const page = await listRelationsPage(selfIdentifier, {
+      first: 250,
+      ...(outboundDone ? { includeOutbound: false } : { outboundAfter, includeOutbound: true }),
+      ...(inboundDone ? { includeInbound: false } : { inboundAfter, includeInbound: true }),
+    });
+    if (page.issueMissing) return page;
+
+    if (!outboundDone) outbound.push(...page.outbound);
+    if (!inboundDone) inbound.push(...page.inbound);
+
+    if (page.pageInfo.outbound.hasNextPage && !page.pageInfo.outbound.endCursor) {
+      throw new ValidationError(
+        `relation list for ${selfIdentifier} cannot continue outbound page`,
+        "Linear returned hasNextPage without endCursor",
+      );
+    }
+    if (page.pageInfo.inbound.hasNextPage && !page.pageInfo.inbound.endCursor) {
+      throw new ValidationError(
+        `relation list for ${selfIdentifier} cannot continue inbound page`,
+        "Linear returned hasNextPage without endCursor",
+      );
+    }
+    if (
+      page.pageInfo.outbound.hasNextPage &&
+      page.pageInfo.outbound.endCursor &&
+      outboundSeen.has(page.pageInfo.outbound.endCursor)
+    ) {
+      throw new ValidationError(
+        `relation list for ${selfIdentifier} outbound cursor did not advance`,
+        "Linear returned the same outbound endCursor on consecutive pages",
+      );
+    }
+    if (
+      page.pageInfo.inbound.hasNextPage &&
+      page.pageInfo.inbound.endCursor &&
+      inboundSeen.has(page.pageInfo.inbound.endCursor)
+    ) {
+      throw new ValidationError(
+        `relation list for ${selfIdentifier} inbound cursor did not advance`,
+        "Linear returned the same inbound endCursor on consecutive pages",
+      );
+    }
+    if (page.pageInfo.outbound.hasNextPage && page.pageInfo.outbound.endCursor) {
+      outboundSeen.add(page.pageInfo.outbound.endCursor);
+    }
+    if (page.pageInfo.inbound.hasNextPage && page.pageInfo.inbound.endCursor) {
+      inboundSeen.add(page.pageInfo.inbound.endCursor);
+    }
+    outboundDone = !page.pageInfo.outbound.hasNextPage;
+    inboundDone = !page.pageInfo.inbound.hasNextPage;
+    outboundAfter = page.pageInfo.outbound.endCursor ?? undefined;
+    inboundAfter = page.pageInfo.inbound.endCursor ?? undefined;
+
+    if (outbound.length + inbound.length >= cap && (!outboundDone || !inboundDone)) {
+      throw new ValidationError(
+        `relation list for ${selfIdentifier} exceeded safety cap ${cap}`,
+        "set LEBOP_MAX_ITEMS=N to raise the ceiling, or use a narrower relation operation",
+      );
+    }
+  }
+
+  return {
+    outbound,
+    inbound,
+    complete: true,
+    pageInfo: {
+      outbound: { hasNextPage: false, endCursor: null },
+      inbound: { hasNextPage: false, endCursor: null },
+    },
+  };
+}
+
+export async function listRelationsPage(
+  selfIdentifier: string,
+  opts: {
+    first: number;
+    outboundAfter?: string;
+    inboundAfter?: string;
+    includeOutbound?: boolean;
+    includeInbound?: boolean;
+  },
+): Promise<ListedRelationsPage> {
+  const first = Math.max(1, Math.min(Math.floor(opts.first), 250));
+  const includeOutbound = opts.includeOutbound ?? true;
+  const includeInbound = opts.includeInbound ?? true;
   const response = (await withClient((c) =>
-    c.client.rawRequest(FIND_QUERY, { id: selfIdentifier }),
+    c.client.rawRequest(LIST_RELATIONS_QUERY, {
+      id: selfIdentifier,
+      first,
+      outboundAfter: opts.outboundAfter,
+      inboundAfter: opts.inboundAfter,
+      includeOutbound,
+      includeInbound,
+    }),
   )) as {
     data: {
       issue: {
-        relations: {
+        relations?: {
           nodes: { id: string; type: ApiType; relatedIssue: { identifier: string } }[];
+          pageInfo: { hasNextPage: boolean; endCursor: string | null };
         };
-        inverseRelations: {
+        inverseRelations?: {
           nodes: { id: string; type: ApiType; issue: { identifier: string } }[];
+          pageInfo: { hasNextPage: boolean; endCursor: string | null };
         };
       } | null;
     };
   };
   const issue = response.data.issue;
-  if (!issue) return { outbound: [], inbound: [] };
+  if (!issue) {
+    return {
+      outbound: [],
+      inbound: [],
+      complete: true,
+      issueMissing: true,
+      pageInfo: {
+        outbound: { hasNextPage: false, endCursor: null },
+        inbound: { hasNextPage: false, endCursor: null },
+      },
+    };
+  }
+  const outboundPageInfo = issue.relations?.pageInfo ?? { hasNextPage: false, endCursor: null };
+  const inboundPageInfo = issue.inverseRelations?.pageInfo ?? {
+    hasNextPage: false,
+    endCursor: null,
+  };
   return {
-    outbound: issue.relations.nodes.map((r) => ({
+    outbound: (issue.relations?.nodes ?? []).map((r) => ({
       id: r.id,
       type: r.type,
       otherIdentifier: r.relatedIssue.identifier,
     })),
-    inbound: issue.inverseRelations.nodes.map((r) => ({
+    inbound: (issue.inverseRelations?.nodes ?? []).map((r) => ({
       id: r.id,
       type: r.type,
       otherIdentifier: r.issue.identifier,
     })),
+    complete: !outboundPageInfo.hasNextPage && !inboundPageInfo.hasNextPage,
+    pageInfo: {
+      outbound: outboundPageInfo,
+      inbound: inboundPageInfo,
+    },
   };
 }

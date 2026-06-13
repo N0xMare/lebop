@@ -15,19 +15,24 @@
  */
 
 import type { TeamMetadata } from "./cache.ts";
+import { type IssueCacheRefreshSummary, summarizeIssueCacheRefresh } from "./cacheCoherence.ts";
+import { refreshCachedIssueByIdentifier } from "./cacheRefresh.ts";
+import { mapLimit } from "./concurrency.ts";
 import { LebopError, mapSdkError, NotFoundError, ValidationError } from "./errors.ts";
 import {
   deriveTeamFromIdentifiers,
   getTeamMetadata,
+  ResolveError,
   resolveAssigneeId,
   resolveCycleIdByName,
   resolveLabelIds,
   resolveMilestoneIdByName,
   resolvePriority,
+  resolveProjectIdByName,
   resolveStateId,
   withFreshMetadataOnMiss,
 } from "./resolve.ts";
-import { linear, withClient } from "./sdk.ts";
+import { withClient } from "./sdk.ts";
 import { isUuid } from "./uuid.ts";
 
 export interface BulkUpdatePatch {
@@ -46,10 +51,12 @@ export interface BulkUpdateInput {
   patch: BulkUpdatePatch;
   /** Override the derived team for state/labels/assignee resolution. */
   team?: string;
+  dryRun?: boolean;
   repoHash?: string;
+  repoRoot?: string | null;
 }
 
-export type BulkRowStatus = "updated" | "failed";
+export type BulkRowStatus = "updated" | "would_update" | "failed";
 
 export interface BulkRowResult {
   identifier: string;
@@ -62,7 +69,14 @@ export interface BulkRowResult {
 
 export interface BulkUpdateResult {
   results: BulkRowResult[];
-  summary: { updated: number; failed: number; total: number };
+  summary: {
+    updated: number;
+    would_update: number;
+    failed: number;
+    total: number;
+    dry_run: boolean;
+  };
+  cache: IssueCacheRefreshSummary;
 }
 
 const ISSUE_BATCH_UPDATE_MUTATION = /* GraphQL */ `
@@ -77,14 +91,6 @@ const ISSUE_BATCH_UPDATE_MUTATION = /* GraphQL */ `
 const RESOLVE_ISSUE_ID_QUERY = /* GraphQL */ `
   query ResolveIssueId($id: String!) {
     issue(id: $id) { id identifier }
-  }
-`;
-
-const RESOLVE_PROJECT_QUERY = /* GraphQL */ `
-  query ResolveProjectForBulk($name: String!) {
-    projects(filter: { name: { eq: $name } }, first: 1) {
-      nodes { id }
-    }
   }
 `;
 
@@ -107,7 +113,11 @@ const RESOLVE_PROJECT_QUERY = /* GraphQL */ `
 export async function bulkUpdateIssues(input: BulkUpdateInput): Promise<BulkUpdateResult> {
   const ids = input.identifiers;
   if (ids.length === 0) {
-    return { results: [], summary: { updated: 0, failed: 0, total: 0 } };
+    return {
+      results: [],
+      summary: { updated: 0, would_update: 0, failed: 0, total: 0, dry_run: input.dryRun === true },
+      cache: summarizeIssueCacheRefresh([]),
+    };
   }
   const repoHash = input.repoHash ?? "_global";
   const upperIds = ids.map((id) => id.toUpperCase());
@@ -156,17 +166,7 @@ export async function bulkUpdateIssues(input: BulkUpdateInput): Promise<BulkUpda
   } else if (isUuid(input.patch.project)) {
     projectId = input.patch.project;
   } else {
-    const response = (await withClient((c) =>
-      c.client.rawRequest(RESOLVE_PROJECT_QUERY, { name: input.patch.project }),
-    )) as { data: { projects: { nodes: { id: string }[] } } };
-    const pid = response.data.projects.nodes[0]?.id;
-    if (!pid) {
-      throw new ValidationError(
-        `project not found: ${input.patch.project}`,
-        "pass the project name (case-sensitive workspace lookup) or UUID",
-      );
-    }
-    projectId = pid;
+    projectId = await resolveProjectIdByName(input.patch.project, { teamKey: input.team });
   }
   if (projectId !== undefined) {
     linearInput.projectId = projectId;
@@ -179,7 +179,16 @@ export async function bulkUpdateIssues(input: BulkUpdateInput): Promise<BulkUpda
   } else if (input.patch.milestone === null) {
     milestoneId = null;
   } else {
-    milestoneId = await resolveMilestoneIdByName(input.patch.milestone);
+    const milestoneProjectId = projectId && typeof projectId === "string" ? projectId : undefined;
+    if (!isUuid(input.patch.milestone) && !milestoneProjectId) {
+      throw new ResolveError(
+        `bulk_update_issues milestone name "${input.patch.milestone}" requires a target project scope`,
+        "include project in the same patch, or use the milestone UUID instead",
+      );
+    }
+    milestoneId = await resolveMilestoneIdByName(input.patch.milestone, {
+      projectId: milestoneProjectId,
+    });
   }
   if (milestoneId !== undefined) {
     linearInput.projectMilestoneId = milestoneId;
@@ -279,39 +288,37 @@ export async function bulkUpdateIssues(input: BulkUpdateInput): Promise<BulkUpda
     | { kind: "not_found" }
     | { kind: "error"; error: LebopError | Error };
   const outcomes = new Map<string, ResolveOutcome>();
-  await Promise.all(
-    upperIds.map(async (id) => {
-      try {
-        const r = (await withClient((c) =>
-          c.client.rawRequest(RESOLVE_ISSUE_ID_QUERY, { id }),
-        )) as { data: { issue: { id: string; identifier: string } | null } };
-        if (r.data.issue) {
-          // Key by the caller's input `id` (not Linear's echoed identifier)
-          // so every outcome branch — resolved / not_found / error — uses
-          // a consistent key. Today the two are equivalent because Linear
-          // echoes verbatim, but a future normalization could silently
-          // diverge if we trust the echo.
-          outcomes.set(id, {
-            kind: "resolved",
-            uuid: r.data.issue.id,
-          });
-        } else {
-          outcomes.set(id, { kind: "not_found" });
-        }
-      } catch (err) {
-        // The SDK boundary wraps rawRequest with mapSdkError, so caught
-        // errors are already structured LebopError subtypes in practice.
-        // Defensive mapSdkError call is idempotent (LebopError short-
-        // circuits) — guards against any caller that bypassed the boundary.
-        const mapped = (err instanceof LebopError ? err : mapSdkError(err)) as LebopError | Error;
-        if (mapped instanceof NotFoundError) {
-          outcomes.set(id, { kind: "not_found" });
-        } else {
-          outcomes.set(id, { kind: "error", error: mapped });
-        }
+  await mapLimit(upperIds, 8, async (id) => {
+    try {
+      const r = (await withClient((c) => c.client.rawRequest(RESOLVE_ISSUE_ID_QUERY, { id }))) as {
+        data: { issue: { id: string; identifier: string } | null };
+      };
+      if (r.data.issue) {
+        // Key by the caller's input `id` (not Linear's echoed identifier)
+        // so every outcome branch — resolved / not_found / error — uses
+        // a consistent key. Today the two are equivalent because Linear
+        // echoes verbatim, but a future normalization could silently
+        // diverge if we trust the echo.
+        outcomes.set(id, {
+          kind: "resolved",
+          uuid: r.data.issue.id,
+        });
+      } else {
+        outcomes.set(id, { kind: "not_found" });
       }
-    }),
-  );
+    } catch (err) {
+      // The SDK boundary wraps rawRequest with mapSdkError, so caught
+      // errors are already structured LebopError subtypes in practice.
+      // Defensive mapSdkError call is idempotent (LebopError short-
+      // circuits) — guards against any caller that bypassed the boundary.
+      const mapped = (err instanceof LebopError ? err : mapSdkError(err)) as LebopError | Error;
+      if (mapped instanceof NotFoundError) {
+        outcomes.set(id, { kind: "not_found" });
+      } else {
+        outcomes.set(id, { kind: "error", error: mapped });
+      }
+    }
+  });
 
   // ---------- step 3: fire issueBatchUpdate against resolved UUIDs ----------
   const resolvedIds: string[] = [];
@@ -349,55 +356,80 @@ export async function bulkUpdateIssues(input: BulkUpdateInput): Promise<BulkUpda
   }
 
   if (resolvedIds.length > 0) {
-    try {
-      const client = await linear();
-      const batchResponse = (await client.client.rawRequest(ISSUE_BATCH_UPDATE_MUTATION, {
-        ids: resolvedIds,
-        input: linearInput,
-      })) as {
-        data: {
-          issueBatchUpdate: { success: boolean; issues: { id: string; identifier: string }[] };
-        };
-      };
-      // Match by UUID (the unambiguous handle), not by echoed identifier:
-      // pair.identifier is the caller's input post-Nit-#3 fix while Linear's
-      // batch echo carries the canonical identifier. They match in production
-      // (Linear echoes verbatim) but tests with parallel-FIFO mocks can shuffle
-      // the mapping. UUID match removes that dependency entirely.
-      const updatedUuids = new Set(batchResponse.data.issueBatchUpdate.issues.map((i) => i.id));
-      for (const pair of resolvedPairs) {
-        if (updatedUuids.has(pair.uuid)) {
-          results.push({
-            identifier: pair.identifier,
-            status: "updated",
-            fields: fieldsApplied,
-          });
-        } else {
-          // The batch mutation succeeded overall but Linear didn't echo this
-          // identifier back — treat as failed for observability.
-          results.push({
-            identifier: pair.identifier,
-            status: "failed",
-            error: {
-              code: "unknown",
-              message: "issueBatchUpdate did not echo this identifier",
-            },
-          });
-        }
-      }
-    } catch (err) {
-      const code = err instanceof LebopError ? err.code : "unknown";
-      const message =
-        err instanceof LebopError ? err.message : ((err as Error).message ?? String(err));
-      const hint = err instanceof LebopError ? err.hint : undefined;
-      // Whole-batch failure — mark every resolved row as failed with the same
-      // error. Pre-resolved not_found rows stay as-is.
+    if (input.dryRun === true) {
       for (const pair of resolvedPairs) {
         results.push({
           identifier: pair.identifier,
-          status: "failed",
-          error: hint ? { code, message, hint } : { code, message },
+          status: "would_update",
+          fields: fieldsApplied,
         });
+      }
+    } else {
+      try {
+        const batchResponse = (await withClient((client) =>
+          client.client.rawRequest(ISSUE_BATCH_UPDATE_MUTATION, {
+            ids: resolvedIds,
+            input: linearInput,
+          }),
+        )) as {
+          data: {
+            issueBatchUpdate: { success: boolean; issues: { id: string; identifier: string }[] };
+          };
+        };
+        // Match by UUID (the unambiguous handle), not by echoed identifier:
+        // pair.identifier is the caller's input post-Nit-#3 fix while Linear's
+        // batch echo carries the canonical identifier. They match in production
+        // (Linear echoes verbatim) but tests with parallel-FIFO mocks can shuffle
+        // the mapping. UUID match removes that dependency entirely.
+        if (batchResponse.data.issueBatchUpdate.success !== true) {
+          for (const pair of resolvedPairs) {
+            results.push({
+              identifier: pair.identifier,
+              status: "failed",
+              error: {
+                code: "validation_error",
+                message: "issueBatchUpdate failed",
+                hint: "Linear returned success:false for issueBatchUpdate",
+              },
+            });
+          }
+        } else {
+          const updatedUuids = new Set(batchResponse.data.issueBatchUpdate.issues.map((i) => i.id));
+          for (const pair of resolvedPairs) {
+            if (updatedUuids.has(pair.uuid)) {
+              results.push({
+                identifier: pair.identifier,
+                status: "updated",
+                fields: fieldsApplied,
+              });
+            } else {
+              // The batch mutation succeeded overall but Linear didn't echo this
+              // identifier back — treat as failed for observability.
+              results.push({
+                identifier: pair.identifier,
+                status: "failed",
+                error: {
+                  code: "unknown",
+                  message: "issueBatchUpdate did not echo this identifier",
+                },
+              });
+            }
+          }
+        }
+      } catch (err) {
+        const code = err instanceof LebopError ? err.code : "unknown";
+        const message =
+          err instanceof LebopError ? err.message : ((err as Error).message ?? String(err));
+        const hint = err instanceof LebopError ? err.hint : undefined;
+        // Whole-batch failure — mark every resolved row as failed with the same
+        // error. Pre-resolved not_found rows stay as-is.
+        for (const pair of resolvedPairs) {
+          results.push({
+            identifier: pair.identifier,
+            status: "failed",
+            error: hint ? { code, message, hint } : { code, message },
+          });
+        }
       }
     }
   }
@@ -405,13 +437,27 @@ export async function bulkUpdateIssues(input: BulkUpdateInput): Promise<BulkUpda
   // Sort results back into the caller's input order.
   const orderIndex = new Map(upperIds.map((id, i) => [id, i]));
   results.sort((a, b) => (orderIndex.get(a.identifier) ?? 0) - (orderIndex.get(b.identifier) ?? 0));
+  const cacheRows = await mapLimit(
+    input.dryRun === true
+      ? []
+      : results.filter((row) => row.status === "updated").map((row) => row.identifier),
+    4,
+    (identifier) =>
+      refreshCachedIssueByIdentifier(identifier, {
+        repoHash: input.repoHash,
+        repoRoot: input.repoRoot,
+      }),
+  );
 
   return {
     results,
     summary: {
       updated: results.filter((r) => r.status === "updated").length,
+      would_update: results.filter((r) => r.status === "would_update").length,
       failed: results.filter((r) => r.status === "failed").length,
       total: results.length,
+      dry_run: input.dryRun === true,
     },
+    cache: summarizeIssueCacheRefresh(cacheRows),
   };
 }

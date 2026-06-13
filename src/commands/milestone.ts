@@ -1,12 +1,14 @@
 import chalk from "chalk";
 import type { Command } from "commander";
+import { parseCliNumber } from "../lib/cliOptions.ts";
 import { envelope } from "../lib/envelope.ts";
-import { NotFoundError, tryIdempotentDelete } from "../lib/errors.ts";
+import { NotFoundError, tryIdempotentDelete, ValidationError } from "../lib/errors.ts";
 import {
   createMilestone,
   deleteMilestone,
   getMilestone,
   listMilestones,
+  resolveExistingProjectId,
   resolveProjectId,
   updateMilestone,
 } from "../lib/milestones.ts";
@@ -29,7 +31,7 @@ export function registerMilestone(program: Command): void {
     .action(async (opts: { project?: string; includeArchived?: boolean; json?: boolean }) => {
       let projectId: string | undefined;
       if (opts.project) {
-        const resolved = await resolveProjectId(opts.project);
+        const resolved = await resolveExistingProjectId(opts.project);
         if (!resolved) throw new NotFoundError(`project not found: ${opts.project}`);
         projectId = resolved;
       }
@@ -112,11 +114,21 @@ export function registerMilestone(program: Command): void {
         // Round-7 / MED-5: enforce mutual-exclusion (the round-6 H17
         // sibling-flags work allowed both silently — `--project-id` won).
         if (opts.project && opts.projectId) {
-          throw new Error("pass exactly one of --project / --project-id, not both");
+          throw new ValidationError(
+            "pass exactly one of --project / --project-id, not both",
+            "choose one project selector",
+          );
         }
         if (!opts.project && !opts.projectId) {
-          throw new Error("either --project <name-or-id> or --project-id <uuid> is required");
+          throw new ValidationError(
+            "either --project <name-or-id> or --project-id <uuid> is required",
+            "milestones must be created inside a project",
+          );
         }
+        const sortOrder =
+          opts.sortOrder !== undefined
+            ? parseCliNumber(opts.sortOrder, { optionName: "--sort-order", allowNegative: true })
+            : undefined;
         const projectId = opts.projectId ?? (await resolveProjectId(opts.project as string));
         if (!projectId) throw new NotFoundError(`project not found: ${opts.project}`);
         const created = await createMilestone({
@@ -124,7 +136,7 @@ export function registerMilestone(program: Command): void {
           projectId,
           description: opts.description,
           targetDate: opts.targetDate,
-          sortOrder: opts.sortOrder !== undefined ? Number(opts.sortOrder) : undefined,
+          sortOrder,
         });
         if (opts.json) {
           process.stdout.write(`${JSON.stringify(envelope({ milestone: created }), null, 2)}\n`);
@@ -163,7 +175,12 @@ export function registerMilestone(program: Command): void {
         if (opts.targetDate !== undefined) {
           input.targetDate = opts.targetDate === "null" ? null : opts.targetDate;
         }
-        if (opts.sortOrder !== undefined) input.sortOrder = Number(opts.sortOrder);
+        if (opts.sortOrder !== undefined) {
+          input.sortOrder = parseCliNumber(opts.sortOrder, {
+            optionName: "--sort-order",
+            allowNegative: true,
+          });
+        }
         if (opts.project !== undefined) {
           const projectId = await resolveProjectId(opts.project);
           if (!projectId) throw new NotFoundError(`project not found: ${opts.project}`);
@@ -171,8 +188,9 @@ export function registerMilestone(program: Command): void {
         }
 
         if (Object.keys(input).length === 0) {
-          throw new Error(
+          throw new ValidationError(
             "nothing to update — pass at least one of --name / --description / --target-date / --sort-order / --project",
+            "pass at least one update field",
           );
         }
 
@@ -194,12 +212,10 @@ export function registerMilestone(program: Command): void {
     .option("--json", "emit structured result")
     .action(async (id: string, opts: { yes?: boolean; json?: boolean }) => {
       if (!opts.yes) {
-        process.stderr.write(
-          `${chalk.red("error:")} refusing to delete milestone ${chalk.bold(id)} without --yes\n` +
-            `  ${chalk.cyan("hint:")} re-run with --yes to confirm. This operation is irreversible.\n`,
+        throw new ValidationError(
+          `refusing to delete milestone ${id} without --yes`,
+          "re-run with --yes to confirm. This operation is irreversible.",
         );
-        process.exitCode = 1;
-        return;
       }
       // Round-8 / N2: discriminated union — narrow via `r.status`.
       const r = await tryIdempotentDelete(() => deleteMilestone(id));

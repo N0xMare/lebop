@@ -22,6 +22,7 @@
  */
 
 import { ValidationError } from "./errors.ts";
+import { resolveSafetyCap } from "./paginate.ts";
 
 interface PageInfo {
   hasNextPage: boolean;
@@ -48,9 +49,16 @@ export async function paginateRawQuery(
   const allNodes: unknown[] = [];
   let lastResponse: Record<string, unknown> | null = null;
   let connectionKey: string | null = null;
+  const safetyCap = resolveSafetyCap();
+  const seenCursors = new Set<string>();
+  if (after) seenCursors.add(after);
 
   while (true) {
-    const vars = { ...initialVars, first: pageSize, after };
+    const remaining = safetyCap - allNodes.length;
+    if (remaining <= 0) {
+      throwRawCapExceeded(safetyCap);
+    }
+    const vars = { ...initialVars, first: Math.min(pageSize, remaining), after };
     const response = await fetchPage(vars);
     lastResponse = response.data;
 
@@ -65,9 +73,29 @@ export async function paginateRawQuery(
     }
 
     const conn = response.data[connectionKey] as ConnectionLike;
-    allNodes.push(...conn.nodes);
-    if (!conn.pageInfo.hasNextPage || !conn.pageInfo.endCursor) break;
-    after = conn.pageInfo.endCursor;
+    allNodes.push(...conn.nodes.slice(0, remaining));
+    if (
+      allNodes.length >= safetyCap &&
+      (conn.pageInfo.hasNextPage || conn.nodes.length > remaining)
+    ) {
+      throwRawCapExceeded(safetyCap);
+    }
+    if (!conn.pageInfo.hasNextPage) break;
+    const nextCursor = conn.pageInfo.endCursor;
+    if (!nextCursor) {
+      throw new ValidationError(
+        `--paginate: connection "${connectionKey}" cannot continue because Linear returned hasNextPage without endCursor`,
+        "retry the query; if it repeats, narrow the query or report the malformed Linear connection page",
+      );
+    }
+    if (seenCursors.has(nextCursor)) {
+      throw new ValidationError(
+        `--paginate: repeated cursor "${nextCursor}" from connection "${connectionKey}"`,
+        "check the query's after/endCursor wiring; the cursor did not advance",
+      );
+    }
+    seenCursors.add(nextCursor);
+    after = nextCursor;
   }
 
   if (lastResponse && connectionKey) {
@@ -80,6 +108,13 @@ export async function paginateRawQuery(
     };
   }
   return lastResponse;
+}
+
+function throwRawCapExceeded(cap: number): never {
+  throw new ValidationError(
+    `--paginate hit the safety cap of ${cap} items but the connection still reports more pages`,
+    `set LEBOP_MAX_ITEMS=N (where N > ${cap}) to raise the ceiling, or pass a tighter GraphQL filter`,
+  );
 }
 
 /**

@@ -1,11 +1,12 @@
 import chalk from "chalk";
 import type { Command } from "commander";
 import { envelope } from "../lib/envelope.ts";
-import { NotFoundError } from "../lib/errors.ts";
+import { NotFoundError, ValidationError } from "../lib/errors.ts";
 import {
   createInitiativeUpdate,
   type InitiativeHealth,
   listInitiativeUpdates,
+  resolveExistingInitiativeId,
   resolveInitiativeId,
 } from "../lib/initiatives.ts";
 import { resolveBody } from "../lib/io.ts";
@@ -40,13 +41,16 @@ export function registerInitiativeUpdate(program: Command): void {
         if (!initiativeId) throw new NotFoundError(`initiative not found: ${initiative}`);
 
         const body = await resolveBody(opts);
-        if (!body.trim()) throw new Error("empty update body");
+        if (!body.trim()) {
+          throw new ValidationError("empty update body", "pass --body, --body-file, or --stdin");
+        }
 
         let health: InitiativeHealth | undefined;
         if (opts.health) {
           if (!(HEALTH_VALUES as readonly string[]).includes(opts.health)) {
-            throw new Error(
+            throw new ValidationError(
               `invalid --health "${opts.health}". expected: ${HEALTH_VALUES.join(", ")}`,
+              `expected one of: ${HEALTH_VALUES.join(", ")}`,
             );
           }
           health = opts.health as InitiativeHealth;
@@ -71,7 +75,7 @@ export function registerInitiativeUpdate(program: Command): void {
     .description("list status updates on an initiative")
     .option("--json", "emit structured records")
     .action(async (initiative: string, opts: { json?: boolean }) => {
-      const initiativeId = await resolveInitiativeId(initiative);
+      const initiativeId = await resolveExistingInitiativeId(initiative);
       if (!initiativeId) throw new NotFoundError(`initiative not found: ${initiative}`);
       const updates = await listInitiativeUpdates(initiativeId);
       if (opts.json) {

@@ -6,7 +6,6 @@ estimate: 2
 labels: [type:feature]
 blocks:
   - 02-impl
-  - 03-bench
 ---
 
 # Design

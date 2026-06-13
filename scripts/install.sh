@@ -4,7 +4,7 @@
 #   curl -fsSL https://raw.githubusercontent.com/N0xMare/lebop/main/scripts/install.sh | bash
 #
 # Env overrides:
-#   LEBOP_VERSION=v1.0.0          # pin a specific tag (default: latest)
+#   LEBOP_VERSION=v0.0.3          # pin a specific tag (default: latest)
 #   LEBOP_INSTALL_DIR=/usr/local/bin  # install location (default: $HOME/.local/bin if writable, else /usr/local/bin)
 #   LEBOP_REPO=N0xMare/lebop      # source repo (default)
 
@@ -46,8 +46,10 @@ asset="lebop-${os}-${arch}"
 if [ "$VERSION" = "latest" ]; then
   info "resolving latest release of $REPO"
   # GitHub redirects /releases/latest to the tagged URL; capture the tag.
-  redirect="$(curl -fsSLI -o /dev/null -w '%{url_effective}' \
-    "https://github.com/${REPO}/releases/latest")"
+  if ! redirect="$(curl -fsSLI -o /dev/null -w '%{url_effective}' \
+    "https://github.com/${REPO}/releases/latest")"; then
+    die "could not resolve latest release tag for $REPO"
+  fi
   VERSION="${redirect##*/}"
   case "$VERSION" in
     v[0-9]*) ;;
@@ -79,15 +81,24 @@ fi
 # --- verify -----------------------------------------------------------------
 
 info "verifying SHA256"
-expected="$(grep -E "[[:space:]]${asset}\$" "$tmp/SHA256SUMS" | awk '{print $1}')"
+expected="$(
+  awk -v asset="$asset" '
+    $2 == asset { print $1; found = 1; exit }
+    END { if (!found) exit 1 }
+  ' "$tmp/SHA256SUMS" || true
+)"
 if [ -z "$expected" ]; then
   die "no SHA256 entry for $asset in SHA256SUMS"
 fi
 
 if command -v sha256sum >/dev/null 2>&1; then
-  actual="$(sha256sum "$tmp/$asset" | awk '{print $1}')"
+  if ! actual="$(sha256sum "$tmp/$asset" | awk '{print $1}')"; then
+    die "sha256sum failed while verifying $asset"
+  fi
 elif command -v shasum >/dev/null 2>&1; then
-  actual="$(shasum -a 256 "$tmp/$asset" | awk '{print $1}')"
+  if ! actual="$(shasum -a 256 "$tmp/$asset" | awk '{print $1}')"; then
+    die "shasum failed while verifying $asset"
+  fi
 else
   die "neither sha256sum nor shasum found; cannot verify"
 fi
@@ -100,13 +111,25 @@ fi
 
 if [ -n "${LEBOP_INSTALL_DIR:-}" ]; then
   install_dir="$LEBOP_INSTALL_DIR"
-elif [ -w "${HOME}/.local/bin" ] || mkdir -p "${HOME}/.local/bin" 2>/dev/null; then
+elif mkdir -p "${HOME}/.local/bin" 2>/dev/null && [ -w "${HOME}/.local/bin" ]; then
   install_dir="${HOME}/.local/bin"
 else
   install_dir="/usr/local/bin"
 fi
 
-mkdir -p "$install_dir"
+if ! mkdir -p "$install_dir" 2>/dev/null; then
+  if [ -n "${LEBOP_INSTALL_DIR:-}" ]; then
+    die "could not create install dir: $install_dir"
+  fi
+  warn "$install_dir could not be created without sudo; trying sudo (non-interactive)"
+  if ! sudo -n mkdir -p "$install_dir" 2>/dev/null; then
+    if [ -t 0 ]; then
+      sudo mkdir -p "$install_dir"
+    else
+      die "$install_dir requires sudo but no tty for password prompt. Set LEBOP_INSTALL_DIR to a writable path (e.g. \$HOME/.local/bin)."
+    fi
+  fi
+fi
 target="${install_dir}/lebop"
 
 # --- install ----------------------------------------------------------------

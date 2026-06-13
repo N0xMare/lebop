@@ -26,6 +26,7 @@ import { registerPlan } from "./commands/plan.ts";
 import { registerProject } from "./commands/project.ts";
 import { registerProjectUpdate } from "./commands/project-update.ts";
 import { registerProjects } from "./commands/projects.ts";
+import { registerPublish } from "./commands/publish.ts";
 import { registerPull } from "./commands/pull.ts";
 import { registerPush } from "./commands/push.ts";
 import { registerRaw } from "./commands/raw.ts";
@@ -37,36 +38,102 @@ import { registerStatus } from "./commands/status.ts";
 import { registerTeam } from "./commands/team.ts";
 import { registerTeams } from "./commands/teams.ts";
 import { registerUnarchive } from "./commands/unarchive.ts";
+import { registerWorkspace } from "./commands/workspace.ts";
 import { preprocessSetArgv } from "./lib/argvPrep.ts";
 import { SCHEMA_VERSION } from "./lib/envelope.ts";
 import { LebopError } from "./lib/errors.ts";
+import { runWithRequestContext, setRequestOverrides } from "./lib/requestContext.ts";
+import { LEBOP_VERSION } from "./lib/version.ts";
 
-// Round-7 / Q4: captured by the preAction hook so the top-level catch can
-// emit a structured `{ok:false, schema_version, error: {code, message, hint}}`
-// envelope to stdout when `--json` is set (vs. the human-prose stderr path).
-// Module-level flag because per-command `--json` doesn't propagate to the
-// top-level catch otherwise. Reset on each `run()` call so test harnesses
-// that re-invoke the CLI in the same process don't leak state.
+// Captured by the preAction hook so the top-level catch can emit a structured
+// `{ok:false, schema_version, error: {code, message, hint}}` envelope to stdout
+// when `--json` is set. Per-command `--json` does not propagate to the
+// top-level catch otherwise. Reset on each `run()` call so test harnesses that
+// re-invoke the CLI in the same process do not leak state.
 let _wantsJsonError = false;
+let _restoreParserStderr: (() => void) | null = null;
 
 export async function run(rawArgv: string[]): Promise<void> {
   _wantsJsonError = false;
-  // Round-6 / H18: enforce NO_COLOR precedence per no-color.org spec.
-  // chalk honors FORCE_COLOR over NO_COLOR by default — pin the priority
-  // back to "NO_COLOR wins" by hard-disabling chalk when NO_COLOR is set,
-  // regardless of FORCE_COLOR's value. Tests that set NO_COLOR=1 expect
-  // ANSI-free output even when their CI also exports FORCE_COLOR.
+  restoreParserStderr();
+  // Enforce NO_COLOR precedence per no-color.org. Chalk honors FORCE_COLOR
+  // over NO_COLOR by default, so hard-disable chalk when NO_COLOR is set even
+  // if CI also exports FORCE_COLOR.
   if (process.env.NO_COLOR !== undefined && process.env.NO_COLOR !== "") {
     chalk.level = 0;
   }
 
   const argv = preprocessSetArgv(rawArgv);
+  _wantsJsonError = argvRequestsJson(argv);
+  if (_wantsJsonError) _restoreParserStderr = silenceStderr();
+  const program = buildCliProgram();
+
+  try {
+    await runWithRequestContext({}, () => program.parseAsync(argv));
+    restoreParserStderr();
+  } catch (err) {
+    // If the failing command was running in `--json` mode, emit the structured
+    // envelope on stdout so the caller's JSON parser gets a parseable payload
+    // instead of chalk-formatted human prose. Errors thrown before the
+    // preAction hook ran keep the human path since `_wantsJsonError` is false.
+    if (_wantsJsonError) {
+      restoreParserStderr();
+      const payload =
+        err instanceof LebopError
+          ? {
+              ok: false,
+              schema_version: SCHEMA_VERSION,
+              error: {
+                code: err.code,
+                message: err.message,
+                hint: err.hint,
+                ...(err.details ? { details: err.details } : {}),
+              },
+            }
+          : {
+              ok: false,
+              schema_version: SCHEMA_VERSION,
+              error: { code: "unknown", message: (err as Error).message ?? String(err) },
+            };
+      process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+      process.exit(1);
+    }
+    restoreParserStderr();
+    if (err instanceof LebopError) {
+      process.stderr.write(`${chalk.red(`error[${err.code}]:`)} ${err.message}\n`);
+      if (err.hint) process.stderr.write(`  ${chalk.cyan("hint:")} ${err.hint}\n`);
+    } else {
+      const msg = (err as Error).message ?? String(err);
+      process.stderr.write(`${chalk.red("error:")} ${msg}\n`);
+    }
+    process.exit(1);
+  }
+}
+
+function silenceStderr(): () => void {
+  const originalWrite = process.stderr.write;
+  process.stderr.write = ((_chunk: unknown, encoding?: unknown, cb?: unknown) => {
+    if (typeof encoding === "function") encoding();
+    if (typeof cb === "function") cb();
+    return true;
+  }) as typeof process.stderr.write;
+  return () => {
+    process.stderr.write = originalWrite;
+  };
+}
+
+function restoreParserStderr(): void {
+  _restoreParserStderr?.();
+  _restoreParserStderr = null;
+}
+
+export function buildCliProgram(): Command {
   const program = new Command();
 
   program
     .name("lebop")
     .description("agentic Linear CLI — pull/edit/push loop for coding agents")
-    .version("0.0.2")
+    .version(LEBOP_VERSION)
     .option(
       "--workspace <slug>",
       "select Linear workspace (overrides default + LEBOP_WORKSPACE env)",
@@ -80,10 +147,10 @@ export async function run(rawArgv: string[]): Promise<void> {
       // `actionCommand` is the leaf subcommand being invoked — that's the
       // one whose opts we want for `--json`, `--workspace`, `--team`.
       //
-      // Propagate --workspace and --team into env vars so every subcommand
-      // picks them up without per-command plumbing. Per-command flags still
-      // take precedence — they're checked first inside resolveConfig and
-      // loadAuthForWorkspace.
+      // Propagate --workspace and --team through request-local overrides so
+      // in-process run() calls cannot leak root flags into the next command.
+      // Per-command flags still take precedence inside resolveConfig callers
+      // that pass explicit teamOverride values.
       const rootOpts = thisCommand.opts();
       const leafOpts = actionCommand.opts() as {
         workspace?: string;
@@ -93,27 +160,28 @@ export async function run(rawArgv: string[]): Promise<void> {
       const ws = (leafOpts.workspace ?? (rootOpts.workspace as string | undefined)) as
         | string
         | undefined;
-      if (ws) process.env.LEBOP_WORKSPACE = ws;
       const team = (leafOpts.team ?? (rootOpts.team as string | undefined)) as string | undefined;
-      if (team) process.env.LEBOP_TEAM = team;
-      // Round-7 / Q4: capture per-command `--json` from the LEAF subcommand
-      // so the top-level catch formats LebopError as a structured envelope
-      // instead of chalk prose when the failing command was running in
-      // JSON mode. `--json` lives on individual subcommands, not the root.
+      setRequestOverrides({ workspace: ws, team });
+      restoreParserStderr();
+      // Capture per-command `--json` from the leaf subcommand so the top-level
+      // catch formats LebopError as a structured envelope instead of chalk
+      // prose. `--json` lives on individual subcommands, not the root.
       if (leafOpts.json !== undefined) _wantsJsonError = Boolean(leafOpts.json);
     })
     .showHelpAfterError()
-    // Round-8 / R8-LOW-7: Commander exits 1 on unknown options by default
-    // (it throws a CommanderError, our top-level catch sets exitCode=1).
-    // Standard convention is 2 for usage errors, 1 for runtime. Hook
-    // `exitOverride` to differentiate: commander's CommanderError has a
-    // `.code` that lets us pick the right exit code. We then rethrow so
-    // the existing catch path still handles output formatting.
+    .configureOutput({
+      writeErr: (str) => {
+        if (!_wantsJsonError) process.stderr.write(str);
+      },
+      outputError: (str, write) => {
+        if (!_wantsJsonError) write(str);
+      },
+    })
+    // Commander exits 1 on unknown options by default. Standard convention is
+    // 2 for usage errors and 1 for runtime failures, so classify commander's
+    // error code here and rethrow through the existing output path.
     .exitOverride((err) => {
-      // Round-8 / R8-LOW-7: differentiate usage errors (exit 2) from
-      // runtime errors (exit 1) per Unix tradition. Commander's default
-      // is to exit 1 for everything; we re-classify the usage-error family
-      // here. Help / version paths keep their natural exit 0.
+      // Help / version paths keep their natural exit 0.
       if (
         err.code === "commander.help" ||
         err.code === "commander.helpDisplayed" ||
@@ -122,14 +190,27 @@ export async function run(rawArgv: string[]): Promise<void> {
         // Successful informational exit — let it pass through cleanly.
         process.exit(0);
       }
-      const isUsageError =
-        err.code === "commander.unknownOption" ||
-        err.code === "commander.unknownCommand" ||
-        err.code === "commander.missingArgument" ||
-        err.code === "commander.missingMandatoryOptionValue" ||
-        err.code === "commander.optionMissingArgument" ||
-        err.code === "commander.invalidArgument";
+      const isUsageError = isCommanderUsageError(err.code);
       if (isUsageError) {
+        if (_wantsJsonError) {
+          restoreParserStderr();
+          process.stdout.write(
+            `${JSON.stringify(
+              {
+                ok: false,
+                schema_version: SCHEMA_VERSION,
+                error: {
+                  code: "invalid_arguments",
+                  message: err.message,
+                  hint: "run the command with --help to see accepted arguments",
+                },
+              },
+              null,
+              2,
+            )}\n`,
+          );
+          process.exit(2);
+        }
         process.stderr.write(`${err.message}\n`);
         process.exit(2);
       }
@@ -146,6 +227,7 @@ export async function run(rawArgv: string[]): Promise<void> {
   registerProject(program);
   registerProjectUpdate(program);
   registerTeams(program);
+  registerWorkspace(program);
 
   registerShow(program);
   registerPull(program);
@@ -171,6 +253,7 @@ export async function run(rawArgv: string[]): Promise<void> {
   registerArchive(program);
   registerUnarchive(program);
   registerPlan(program);
+  registerPublish(program);
 
   registerCache(program);
 
@@ -183,38 +266,20 @@ export async function run(rawArgv: string[]): Promise<void> {
   registerMcp(program);
   registerCompletions(program);
 
-  try {
-    await program.parseAsync(argv);
-  } catch (err) {
-    // Round-7 / Q4: if the failing command was running in `--json` mode,
-    // emit the structured envelope on stdout so the caller's `jq` pipe
-    // (or equivalent JSON parser) gets a parseable payload instead of
-    // chalk-formatted human prose. Errors thrown BEFORE the preAction
-    // hook ran (e.g., top-level --workspace resolution failures) keep
-    // the human path since `_wantsJsonError` stays false.
-    if (_wantsJsonError) {
-      const payload =
-        err instanceof LebopError
-          ? {
-              ok: false,
-              schema_version: SCHEMA_VERSION,
-              error: { code: err.code, message: err.message, hint: err.hint },
-            }
-          : {
-              ok: false,
-              schema_version: SCHEMA_VERSION,
-              error: { code: "unknown", message: (err as Error).message ?? String(err) },
-            };
-      process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
-      process.exit(1);
-    }
-    if (err instanceof LebopError) {
-      process.stderr.write(`${chalk.red(`error[${err.code}]:`)} ${err.message}\n`);
-      if (err.hint) process.stderr.write(`  ${chalk.cyan("hint:")} ${err.hint}\n`);
-    } else {
-      const msg = (err as Error).message ?? String(err);
-      process.stderr.write(`${chalk.red("error:")} ${msg}\n`);
-    }
-    process.exit(1);
-  }
+  return program;
+}
+
+function isCommanderUsageError(code: string): boolean {
+  return (
+    code === "commander.unknownOption" ||
+    code === "commander.unknownCommand" ||
+    code === "commander.missingArgument" ||
+    code === "commander.missingMandatoryOptionValue" ||
+    code === "commander.optionMissingArgument" ||
+    code === "commander.invalidArgument"
+  );
+}
+
+function argvRequestsJson(argv: string[]): boolean {
+  return argv.some((arg) => arg === "--json" || arg.startsWith("--json="));
 }

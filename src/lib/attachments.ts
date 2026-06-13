@@ -7,12 +7,13 @@
  *
  * Linear API surface used:
  *   - Issue.attachments connection (read)
- *   - attachmentUpdate(id, input) (update — title/url only)
+ *   - attachmentUpdate(id, input) (update — title only; Linear does not allow URL edits)
  *   - attachmentDelete(id) (delete)
  */
 
-import { mapSdkError, NotFoundError } from "./errors.ts";
-import { paginateRaw } from "./paginate.ts";
+import { mapSdkError, NotFoundError, ValidationError } from "./errors.ts";
+import { requireMutationEntity, requireMutationSuccess } from "./mutationResult.ts";
+import { paginateRaw, paginateRawPage } from "./paginate.ts";
 import { linear, withClient } from "./sdk.ts";
 
 export interface ListedAttachment {
@@ -27,6 +28,18 @@ export interface ListedAttachment {
   source_type: string | null;
   metadata: Record<string, unknown> | null;
   creator: { id: string; name: string; email: string } | null;
+}
+
+export interface LinkedUrlAttachment {
+  id: string;
+  title: string;
+  url: string;
+}
+
+export interface LinkUrlAttachmentResult {
+  issue: string;
+  attachment: LinkedUrlAttachment;
+  status: "linked" | "already-linked";
 }
 
 interface AttachmentNode {
@@ -67,6 +80,15 @@ const LIST_ATTACHMENTS_QUERY = /* GraphQL */ `
   }
 `;
 
+const ATTACH_URL_MUTATION = /* GraphQL */ `
+  mutation AttachURL($issueId: String!, $url: String!, $title: String!) {
+    attachmentLinkURL(issueId: $issueId, url: $url, title: $title) {
+      success
+      attachment { id title url }
+    }
+  }
+`;
+
 function shape(a: AttachmentNode): ListedAttachment {
   return {
     id: a.id,
@@ -78,13 +100,71 @@ function shape(a: AttachmentNode): ListedAttachment {
   };
 }
 
+export async function linkUrlAttachment(
+  identifier: string,
+  url: string,
+  title = url,
+): Promise<LinkUrlAttachmentResult> {
+  const upperId = identifier.toUpperCase();
+  const fetched = await withClient((c) => c.issue(upperId));
+  if (!fetched) {
+    throw new NotFoundError(
+      `issue not found: ${upperId}`,
+      `verify ${upperId} exists and is visible to your token`,
+    );
+  }
+
+  try {
+    const client = await linear();
+    const response = (await client.client.rawRequest(ATTACH_URL_MUTATION, {
+      issueId: fetched.id,
+      url,
+      title,
+    })) as {
+      data: {
+        attachmentLinkURL: {
+          success: boolean;
+          attachment: LinkedUrlAttachment;
+        };
+      };
+    };
+    const attachment = requireMutationEntity<LinkedUrlAttachment>(
+      "attachmentLinkURL",
+      response.data.attachmentLinkURL,
+      "attachment",
+    );
+    return { issue: upperId, attachment, status: "linked" };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (!/already.*linked/i.test(msg)) {
+      throw mapSdkError(err);
+    }
+
+    // Idempotent path: find the existing attachment and surface it with the
+    // same envelope shape. listAttachments is scoped to the issue.
+    const existing = await listAttachments(upperId);
+    const match = existing.find((a) => a.url === url);
+    if (!match) {
+      throw mapSdkError(err);
+    }
+    return {
+      issue: upperId,
+      attachment: { id: match.id, title: match.title, url: match.url },
+      status: "already-linked",
+    };
+  }
+}
+
 /**
  * List all attachments on one issue. Paginates server-side; capped by the
  * standard `LEBOP_MAX_ITEMS` runtime safety bound. Throws NotFoundError if
  * the issue identifier doesn't resolve — matches the wave-1 `get_*` contract
  * (caller can re-shape to `null` at the MCP/CLI boundary if preferred).
  */
-export async function listAttachments(identifier: string): Promise<ListedAttachment[]> {
+export async function listAttachments(
+  identifier: string,
+  opts: { max?: number } = {},
+): Promise<ListedAttachment[]> {
   const client = await linear();
   const upperId = identifier.toUpperCase();
   const nodes = await paginateRaw<AttachmentNode, AttachmentsPage>(
@@ -103,13 +183,51 @@ export async function listAttachments(identifier: string): Promise<ListedAttachm
       }
       return response.data.issue.attachments ?? null;
     },
-    { pageSize: 250 },
+    { pageSize: 250, max: opts.max },
   );
   return nodes.map(shape);
 }
 
+export async function listAttachmentsPage(
+  identifier: string,
+  opts: { first: number; after?: string } = { first: 250 },
+): Promise<{
+  attachments: ListedAttachment[];
+  pageInfo: { hasNextPage: boolean; endCursor: string | null };
+}> {
+  const client = await linear();
+  const upperId = identifier.toUpperCase();
+  const page = await paginateRawPage<AttachmentNode, AttachmentsPage>(
+    ({ first, after }) =>
+      client.client.rawRequest(LIST_ATTACHMENTS_QUERY, {
+        id: upperId,
+        first,
+        after,
+      }) as Promise<AttachmentsPage>,
+    (response) => {
+      if (response.data.issue === null) {
+        throw new NotFoundError(
+          `issue not found: ${upperId}`,
+          "verify the identifier (TEAM-NN) or your team scope",
+        );
+      }
+      return response.data.issue.attachments ?? null;
+    },
+    { limit: opts.first, after: opts.after, pageSize: 250 },
+  );
+  return {
+    attachments: page.nodes.map(shape),
+    pageInfo: page.pageInfo,
+  };
+}
+
 export interface UpdateAttachmentInput {
   title?: string;
+  /**
+   * Linear's current AttachmentUpdateInput does not support URL changes.
+   * Kept here so old CLI/MCP callers get a structured validation error
+   * instead of an unknown GraphQL schema error.
+   */
   url?: string;
 }
 
@@ -130,23 +248,33 @@ const UPDATE_ATTACHMENT_MUTATION = /* GraphQL */ `
 `;
 
 /**
- * Update an attachment's title and/or URL. Idempotent at the value level —
+ * Update an attachment's title. Idempotent at the value level —
  * retry-wrapped via withClient.
  */
 export async function updateAttachment(
   id: string,
   input: UpdateAttachmentInput,
 ): Promise<ListedAttachment> {
+  if (input.url !== undefined) {
+    throw new ValidationError(
+      "attachment URL cannot be updated by Linear's AttachmentUpdateInput",
+      "delete the attachment and create a replacement with `lebop link` / `link_url_to_issue`",
+    );
+  }
   const linearInput: Record<string, unknown> = {};
   if (input.title !== undefined) linearInput.title = input.title;
-  if (input.url !== undefined) linearInput.url = input.url;
   try {
     const response = (await withClient((c) =>
       c.client.rawRequest(UPDATE_ATTACHMENT_MUTATION, { id, input: linearInput }),
     )) as {
       data: { attachmentUpdate: { success: boolean; attachment: AttachmentNode } };
     };
-    return shape(response.data.attachmentUpdate.attachment);
+    const attachment = requireMutationEntity<AttachmentNode>(
+      "attachmentUpdate",
+      response.data.attachmentUpdate,
+      "attachment",
+    );
+    return shape(attachment);
   } catch (err) {
     throw mapSdkError(err);
   }
@@ -167,5 +295,6 @@ export async function deleteAttachment(id: string): Promise<boolean> {
   const response = (await client.client.rawRequest(DELETE_ATTACHMENT_MUTATION, { id })) as {
     data: { attachmentDelete: { success: boolean } };
   };
-  return response.data.attachmentDelete.success;
+  requireMutationSuccess("attachmentDelete", response.data.attachmentDelete);
+  return true;
 }

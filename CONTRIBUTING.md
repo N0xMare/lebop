@@ -12,15 +12,26 @@ Install Bun (`curl -fsSL https://bun.sh/install | bash`), then:
 
 ```sh
 bun install
-bun run check          # biome (lint + format)
-bunx tsc --noEmit      # type-check
+bun run check          # biome lint + format check
+bun run typecheck      # TypeScript
 bun run test           # vitest (do not use bare `bun test` — that's
                        # Bun's built-in runner, which trips on
                        # vitest-only APIs like vi.resetModules)
+bun run check:package  # npm package contents + install-script assumptions
 ```
 
-All four gates must be green before opening a PR. CI runs the same set on
-every PR.
+Those core gates must be green before opening a PR. CI also verifies GitHub
+Actions refs, runs `actionlint`, and builds a compiled binary smoke. If you
+have `actionlint` installed locally, run:
+
+```sh
+node scripts/check-npm-pack.mjs --workflow-action-refs
+actionlint .github/workflows/*.yml
+```
+
+Release tags run the same gate, build four Bun-compiled binaries, and gate
+the Linux x64 release artifact on the full Noxor live harness report
+validator.
 
 ## Project shape
 
@@ -43,13 +54,14 @@ See `docs/spec.md` for the full architecture.
 ## Testing against Linear
 
 Most of lebop's correctness depends on Linear's GraphQL surface. **Live
-integration tests must run against a sandbox project** — never modify real
-Linear data during development.
+integration tests must run against a sandbox workspace/team** — never modify
+real Linear data during development.
 
-If you don't have a sandbox, create one in a Linear team you own and use
-it exclusively for mutation testing. The pattern in `docs/spec.md` §12
-(Discovered quirks) reflects facts caught during sandbox-driven testing;
-keep this discipline when adding new GraphQL paths.
+Project-only fixtures are not enough for the current surface: live coverage
+touches labels, projects, initiatives, milestones, documents, cycles, agent
+sessions, publish/cache flows, destructive cleanup, and MCP calls. Use a
+dedicated workspace/team boundary like the NOX/Noxor sandbox described in
+`docs/spec.md`, and keep that discipline when adding new GraphQL paths.
 
 ## Commits + PRs
 
@@ -65,8 +77,8 @@ keep this discipline when adding new GraphQL paths.
 ## What's in scope vs out
 
 In scope: anything aligned with "best for agents, sufficient for humans"
-positioning. Bulk edits, declarative plans, lint, CAS, MCP tools, CLI
-ergonomics for agent workflows.
+positioning. Bulk edits, declarative plans, lint, `updatedAt` stale guards,
+MCP tools, CLI ergonomics for agent workflows.
 
 Out of scope: interactive ergonomics that
 [`@schpet/linear-cli`](https://github.com/schpet/linear-cli) does well —
@@ -81,7 +93,7 @@ Open an issue with:
 1. lebop version (`lebop --version`) and Bun version (`bun --version`)
 2. The exact command you ran (with secrets redacted)
 3. The output you got (and what you expected)
-4. If applicable, the JSON output of `lebop --version` and `lebop teams
-   --json` to confirm auth + connectivity
+4. If applicable, `lebop auth whoami --json` and `lebop teams --json`
+   output with workspace names, user fields, and secrets redacted
 
 For security-sensitive bugs (token mishandling, etc.), please open a private GitHub Security Advisory at `https://github.com/N0xMare/lebop/security/advisories/new` rather than a public issue.

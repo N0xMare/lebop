@@ -11,13 +11,16 @@ This is a minimal `lebop plan` directory you can copy and adapt.
 
 To use it:
 
-1. Replace `team: TEAM` with your team's key (run `lebop teams` to list keys).
-2. (Optional) Tweak titles, labels, priorities, and bodies to match a real
+1. Copy this directory first, for example:
+   `mkdir -p plans && cp -R docs/examples/getting-started plans/getting-started-demo`.
+2. In the copied `_project.md`, replace `team: TEAM` with your team's key
+   (run `lebop teams` to list keys).
+3. (Optional) Tweak titles, labels, priorities, and bodies to match a real
    initiative.
-3. `lebop plan validate docs/examples/getting-started`
-4. `lebop plan apply docs/examples/getting-started --dry-run`
-5. `lebop plan apply docs/examples/getting-started`
+4. `lebop plan validate plans/getting-started-demo`
+5. `lebop plan apply plans/getting-started-demo --dry-run`
+6. `lebop plan apply plans/getting-started-demo`
 
 After the first apply, `linear_id:` is written back to each frontmatter and
 slug-based link entries (`blocks: [02-impl]`) are rewritten to the real
-identifier (`blocks: [TEAM-42]`). Re-applying is idempotent.
+identifier (`blocks: [TEAM-42]`). Re-applying the copied plan is idempotent.

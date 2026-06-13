@@ -1,6 +1,6 @@
 ---
-description: Push locally-modified lebop cache entries back to Linear (CAS-guarded)
-argument-hint: [issue-ids…] [--dry-run] [--force] [--strict] [--json]
+description: Push locally-modified lebop cache entries back to Linear (updatedAt stale-guarded)
+argument-hint: [issue-ids…] [--team KEY] [--project-id UUID ...] [--dry-run] [--force] [--yes|--confirm] [--strict] [--json]
 ---
 
 Before pushing:
@@ -10,7 +10,7 @@ Before pushing:
 Then run `lebop push $ARGUMENTS`.
 
 After it completes:
-- If any entity came back `stale`, the cache is behind Linear — surface this and recommend `lebop pull <id> --refresh` (do NOT auto-`--force` without asking).
+- If any entity came back `stale`, the cache is behind Linear — surface this and recommend the right refresh selector only after the user confirms local cache overwrite: issue stale → `lebop pull TEAM-123 --refresh --yes`; project stale → `lebop pull --project-id <uuid> --refresh --yes`. Do NOT auto-`--force` without asking.
 - If any came back `lint-blocked`, show the lint warnings inline and offer to either fix them (`lebop lint --fix`) or push without `--strict` (with a clear explanation of why that's worse).
 - On success, run `lebop status` once more to confirm the cache is clean.
 

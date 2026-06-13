@@ -1,15 +1,17 @@
 name: canary
 
-# Daily integration smoke against the noxor sandbox workspace. Catches
-# Linear API schema drift before users do — the unit-test suite mocks the
-# SDK so it can't.
+# Daily read smoke plus weekly full-surface smoke against the noxor sandbox
+# workspace. Catches Linear API schema drift before users do — the unit-test
+# suite mocks the SDK so it can't.
 #
 # Setup: requires repo secret `LEBOP_NOXOR_TOKEN` (a Linear PAK scoped to
-# the noxor sandbox workspace, read-only is sufficient).
+# the noxor sandbox workspace). The daily job is read-oriented; the weekly
+# and manual full live harness below needs write permission in that sandbox.
 
 on:
   schedule:
     - cron: "0 14 * * *" # 14:00 UTC daily — keeps drift detection within ~24h.
+    - cron: "0 16 * * 1" # 16:00 UTC Mondays — full write/publish Noxor harness.
   workflow_dispatch: {}
 
 permissions:
@@ -20,20 +22,52 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  public-installer-smoke:
+    name: public installer smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: install latest public release
+        env:
+          LEBOP_INSTALL_DIR: ${{ runner.temp }}/lebop-public-install
+        run: |
+          set -euo pipefail
+          latest="$(
+            curl -fsSL https://api.github.com/repos/N0xMare/lebop/releases/latest |
+              node -e 'let s=""; process.stdin.on("data", d => s += d); process.stdin.on("end", () => process.stdout.write(JSON.parse(s).tag_name));'
+          )"
+          expected="${latest#v}"
+          installer="$(mktemp)"
+          trap 'rm -f "$installer"' EXIT
+          curl -fsSL https://raw.githubusercontent.com/N0xMare/lebop/main/scripts/install.sh -o "$installer"
+          LEBOP_VERSION="$latest" bash "$installer"
+          actual="$("$LEBOP_INSTALL_DIR/lebop" --version | tr -d '\r\n')"
+          if [ "$actual" != "$expected" ]; then
+            echo "::error::installed lebop reported $actual, expected $expected"
+            exit 1
+          fi
+          "$LEBOP_INSTALL_DIR/lebop" --help > /dev/null
+          "$LEBOP_INSTALL_DIR/lebop" mcp --help > /dev/null
+
   smoke:
     name: smoke vs noxor
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 45
+    concurrency:
+      group: noxor-live-write
+      cancel-in-progress: false
     env:
       # Job-level env can't use ${{ runner.temp }} — that context is only
       # available inside steps. /tmp is always writable on ubuntu-latest.
       LEBOP_HOME: /tmp/lebop-canary
       LEBOP_NOXOR_TOKEN: ${{ secrets.LEBOP_NOXOR_TOKEN }}
+      LEBOP_CANARY_WORKSPACE: noxor
+      LEBOP_CANARY_TEAM: NOX
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
 
-      - uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
         with:
           bun-version: 1.3.13
 
@@ -50,91 +84,341 @@ jobs:
       - name: prep isolated LEBOP_HOME + auth
         run: |
           set -euo pipefail
+          umask 077
           mkdir -p "$LEBOP_HOME"
           chmod 700 "$LEBOP_HOME"
+          tokenfile=""
+          auth_json=""
+          cleanup_tmp_auth() {
+            rm -f "${tokenfile:-}" "${auth_json:-}"
+          }
+          trap cleanup_tmp_auth EXIT
           tokenfile="$(mktemp)"
           printf '%s' "$LEBOP_NOXOR_TOKEN" > "$tokenfile"
-          ./bin/lebop auth login --token-file "$tokenfile"
-          rm -f "$tokenfile"
-          ./bin/lebop auth list
+          ./bin/lebop auth login --token-file "$tokenfile" > /dev/null
+          auth_json="$(mktemp)"
+          ./bin/lebop auth list --json > "$auth_json"
+          node - "$auth_json" <<'NODE'
+          const fs = require("node:fs");
+          const payload = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+          if (!Array.isArray(payload.workspaces) || payload.workspaces.length === 0) {
+            throw new Error("auth list returned no workspaces");
+          }
+          NODE
 
       - name: read smoke (CLI surface)
         run: |
           set -euo pipefail
+          mkdir -p docs/local
+          report="docs/local/canary-read-cli-report-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.json"
+          started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          steps_file="$(mktemp)"
+          issue_id=""
+          write_report() {
+            local status="$1"
+            local exit_code="${2:-0}"
+            node - "$report" "$status" "$exit_code" "$started_at" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${issue_id:-}" "$steps_file" "$LEBOP_CANARY_WORKSPACE" "$LEBOP_CANARY_TEAM" <<'NODE'
+          const fs = require("node:fs");
+          const path = require("node:path");
+          const [report, status, exitCode, startedAt, finishedAt, issueId, stepsFile, workspace, team] = process.argv.slice(2);
+          const steps = fs.existsSync(stepsFile)
+            ? fs.readFileSync(stepsFile, "utf8").split(/\n/).filter(Boolean).map((name) => ({ name, status: "attempted" }))
+            : [];
+          fs.mkdirSync(path.dirname(report), { recursive: true });
+          fs.writeFileSync(report, `${JSON.stringify({
+            status,
+            exit_code: Number(exitCode),
+            started_at: startedAt,
+            finished_at: finishedAt,
+            lane: "cli-read-smoke",
+            workspace,
+            team,
+            issue_fixture: issueId ? "selected" : null,
+            steps,
+          }, null, 2)}\n`);
+          NODE
+          }
+          trap 'code=$?; if [ "$code" -ne 0 ]; then write_report failed "$code"; fi' EXIT
+          record() {
+            printf '%s\n' "$1" >> "$steps_file"
+            echo "--- $1 ---"
+          }
+          validate_json_file() {
+            node - "$1" "$2" <<'NODE'
+          const fs = require("node:fs");
+          const [, , file, label] = process.argv;
+          JSON.parse(fs.readFileSync(file, "utf8"));
+          console.log(`validated ${label} JSON`);
+          NODE
+          }
+          run_json_read() {
+            local label="$1"
+            shift
+            local json_out
+            json_out="$(mktemp)"
+            "$@" > "$json_out"
+            validate_json_file "$json_out" "$label"
+            rm -f "$json_out"
+          }
           # Exercise every read path that hit Linear in the May 2026 round
           # of fixes. Failure of any single command fails the workflow.
 
-          echo '--- auth whoami --refresh ---'
-          ./bin/lebop --workspace noxor auth whoami noxor --refresh
+          record 'auth whoami --refresh'
+          run_json_read 'auth whoami --refresh' ./bin/lebop --workspace "$LEBOP_CANARY_WORKSPACE" auth whoami "$LEBOP_CANARY_WORKSPACE" --refresh --json
 
-          echo '--- teams ---'
-          ./bin/lebop --workspace noxor teams
+          record 'teams'
+          run_json_read 'teams' ./bin/lebop --workspace "$LEBOP_CANARY_WORKSPACE" teams --json
 
-          echo '--- list ---'
-          ./bin/lebop --workspace noxor list --team NOX --limit 3
+          record 'list'
+          run_json_read 'list' ./bin/lebop --workspace "$LEBOP_CANARY_WORKSPACE" list --team "$LEBOP_CANARY_TEAM" --limit 3 --json
 
-          echo '--- mine ---'
-          ./bin/lebop --workspace noxor mine --team NOX --limit 3 || true
+          record 'mine'
+          run_json_read 'mine' ./bin/lebop --workspace "$LEBOP_CANARY_WORKSPACE" mine --team "$LEBOP_CANARY_TEAM" --limit 3 --json
 
-          echo '--- show NOX-1 ---'
-          ./bin/lebop --workspace noxor show NOX-1 > /dev/null
+          record 'select issue fixture'
+          issue_id="$(
+            ./bin/lebop --workspace "$LEBOP_CANARY_WORKSPACE" list --team "$LEBOP_CANARY_TEAM" --limit 1 --json \
+              | node -e 'let s=""; process.stdin.on("data", d => s += d); process.stdin.on("end", () => { const j = JSON.parse(s); const issue = (j.data?.issues ?? j.issues ?? [])[0]; if (!issue?.identifier) { console.error("no NOX issue available for show smoke"); process.exit(1); } process.stdout.write(issue.identifier); });'
+          )"
+          record 'show issue'
+          run_json_read 'show issue' ./bin/lebop --workspace "$LEBOP_CANARY_WORKSPACE" show "$issue_id" --json
 
-          echo '--- projects ---'
-          ./bin/lebop --workspace noxor projects --team NOX
+          record 'projects'
+          run_json_read 'projects' ./bin/lebop --workspace "$LEBOP_CANARY_WORKSPACE" projects --team "$LEBOP_CANARY_TEAM" --json
 
-          echo '--- project list ---'
-          ./bin/lebop --workspace noxor project list --team NOX
+          record 'project list'
+          run_json_read 'project list' ./bin/lebop --workspace "$LEBOP_CANARY_WORKSPACE" project list --team "$LEBOP_CANARY_TEAM" --json
 
-          echo '--- initiative list ---'
-          ./bin/lebop --workspace noxor initiative list
+          record 'initiative list'
+          run_json_read 'initiative list' ./bin/lebop --workspace "$LEBOP_CANARY_WORKSPACE" initiative list --json
 
-          echo '--- document list ---'
-          ./bin/lebop --workspace noxor document list
+          record 'document list'
+          run_json_read 'document list' ./bin/lebop --workspace "$LEBOP_CANARY_WORKSPACE" document list --json
 
-          echo '--- agent-session list ---'
-          ./bin/lebop --workspace noxor agent-session list --limit 5
+          record 'agent-session list'
+          run_json_read 'agent-session list' ./bin/lebop --workspace "$LEBOP_CANARY_WORKSPACE" agent-session list --limit 5 --json
 
-          echo '--- team members ---'
-          ./bin/lebop --workspace noxor team members NOX
+          record 'team members'
+          run_json_read 'team members' ./bin/lebop --workspace "$LEBOP_CANARY_WORKSPACE" team members "$LEBOP_CANARY_TEAM" --json
 
-          echo '--- cycle list ---'
-          ./bin/lebop --workspace noxor cycle list --team NOX
+          record 'cycle list'
+          run_json_read 'cycle list' ./bin/lebop --workspace "$LEBOP_CANARY_WORKSPACE" cycle list --team "$LEBOP_CANARY_TEAM" --json
 
-          echo '--- label list ---'
-          ./bin/lebop --workspace noxor label list --team NOX
+          record 'label list'
+          run_json_read 'label list' ./bin/lebop --workspace "$LEBOP_CANARY_WORKSPACE" label list --team "$LEBOP_CANARY_TEAM" --json
 
-          echo '--- schema dump ---'
-          ./bin/lebop --workspace noxor schema > /dev/null
+          record 'schema dump'
+          run_json_read 'schema dump' ./bin/lebop --workspace "$LEBOP_CANARY_WORKSPACE" schema --json
 
-          echo '--- raw viewer query ---'
-          ./bin/lebop --workspace noxor raw 'query { viewer { id email } }' > /dev/null
+          record 'raw viewer query'
+          run_json_read 'raw viewer query' ./bin/lebop --workspace "$LEBOP_CANARY_WORKSPACE" raw 'query { viewer { id email } }'
 
-      - name: MCP smoke (initialize + tools/list + tools/call list_issues)
+          record 'workspace explore projects'
+          explore_json="$(mktemp)"
+          ./bin/lebop --workspace "$LEBOP_CANARY_WORKSPACE" workspace explore /projects --team "$LEBOP_CANARY_TEAM" --limit 1 --json > "$explore_json"
+          node - "$explore_json" <<'NODE'
+          const fs = require("node:fs");
+          const payload = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+          if (payload.path !== "/projects") throw new Error(`expected /projects, got ${payload.path}`);
+          if (!Array.isArray(payload.items)) throw new Error("workspace explore items missing");
+          if (!payload.page) throw new Error("workspace explore page metadata missing");
+          NODE
+
+          record 'workspace fetch issue'
+          cli_context_dir="$(mktemp -d)"
+          fetch_json="$(mktemp)"
+          ./bin/lebop --workspace "$LEBOP_CANARY_WORKSPACE" workspace fetch "/issues/${issue_id}" \
+            --include comments,relations,attachments \
+            --depth shallow \
+            --limit 2 \
+            --to "$cli_context_dir" \
+            --json > "$fetch_json"
+          node - "$fetch_json" <<'NODE'
+          const fs = require("node:fs");
+          const payload = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+          if (payload.kind !== "issue") throw new Error(`expected issue dossier, got ${payload.kind}`);
+          if (!payload.manifest_file || !fs.existsSync(payload.manifest_file)) {
+            throw new Error("workspace fetch manifest_file missing or not written");
+          }
+          if (!payload.counts) throw new Error("workspace fetch counts missing");
+          NODE
+          rm -rf "$cli_context_dir"
+          write_report passed 0
+          trap - EXIT
+
+      - name: MCP smoke (initialize + tools/list + tools/call read context)
         run: |
           set -euo pipefail
-          export LEBOP_WORKSPACE=noxor
+          mkdir -p docs/local
+          report="docs/local/canary-read-mcp-report-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.json"
+          started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          steps_file="$(mktemp)"
+          issue_id=""
+          write_report() {
+            local status="$1"
+            local exit_code="${2:-0}"
+            node - "$report" "$status" "$exit_code" "$started_at" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${issue_id:-}" "$steps_file" "$LEBOP_CANARY_WORKSPACE" "$LEBOP_CANARY_TEAM" <<'NODE'
+          const fs = require("node:fs");
+          const path = require("node:path");
+          const [report, status, exitCode, startedAt, finishedAt, issueId, stepsFile, workspace, team] = process.argv.slice(2);
+          const steps = fs.existsSync(stepsFile)
+            ? fs.readFileSync(stepsFile, "utf8").split(/\n/).filter(Boolean).map((name) => ({ name, status: "attempted" }))
+            : [];
+          fs.mkdirSync(path.dirname(report), { recursive: true });
+          fs.writeFileSync(report, `${JSON.stringify({
+            status,
+            exit_code: Number(exitCode),
+            started_at: startedAt,
+            finished_at: finishedAt,
+            lane: "mcp-read-smoke",
+            workspace,
+            team,
+            issue_fixture: issueId ? "selected" : null,
+            steps,
+          }, null, 2)}\n`);
+          NODE
+          }
+          trap 'code=$?; if [ "$code" -ne 0 ]; then write_report failed "$code"; fi' EXIT
+          record() {
+            printf '%s\n' "$1" >> "$steps_file"
+            echo "--- $1 ---"
+          }
+          summarize_mcp_output() {
+            node - "$1" <<'NODE'
+          const fs = require("node:fs");
+          const file = process.argv[2];
+          const raw = fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "";
+          const lines = raw.trim().split(/\n+/).filter(Boolean);
+          let parsed = 0;
+          let toolCount = 0;
+          const ids = [];
+          const errors = [];
+          for (const [index, line] of lines.entries()) {
+            let message;
+            try {
+              message = JSON.parse(line);
+            } catch {
+              errors.push(`line ${index + 1}: non-JSON stdout`);
+              continue;
+            }
+            parsed += 1;
+            if (message.id !== undefined) ids.push(message.id);
+            if (Array.isArray(message.result?.tools)) toolCount = message.result.tools.length;
+            if (message.error) errors.push(`id=${message.id ?? "?"}: JSON-RPC error`);
+            if (message.result?.isError) errors.push(`id=${message.id ?? "?"}: tool isError=true`);
+          }
+          console.log(`MCP stdout summary: lines=${lines.length} parsed=${parsed} ids=${ids.join(",") || "none"} tools=${toolCount}`);
+          for (const error of errors) console.log(`MCP stdout issue: ${error}`);
+          NODE
+          }
+          fail_mcp() {
+            local message="$1"
+            echo "::error::$message"
+            summarize_mcp_output "$out"
+            exit 1
+          }
+          export LEBOP_WORKSPACE="$LEBOP_CANARY_WORKSPACE"
           out="$(mktemp)"
+          mcp_context_dir="$(mktemp -d)"
+          record 'select issue fixture'
+          issue_id="$(
+            ./bin/lebop --workspace "$LEBOP_CANARY_WORKSPACE" list --team "$LEBOP_CANARY_TEAM" --limit 1 --json \
+              | node -e 'let s=""; process.stdin.on("data", d => s += d); process.stdin.on("end", () => { const j = JSON.parse(s); const issue = (j.data?.issues ?? j.issues ?? [])[0]; if (!issue?.identifier) { console.error("no NOX issue available for MCP fetch smoke"); process.exit(1); } process.stdout.write(issue.identifier); });'
+          )"
+          record 'mcp initialize tools/list and read calls'
+          set +e
           (
             echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"canary","version":"1"}}}'
             echo '{"jsonrpc":"2.0","method":"notifications/initialized"}'
             echo '{"jsonrpc":"2.0","id":2,"method":"tools/list"}'
-            echo '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"list_issues","arguments":{"team":"NOX","limit":2,"workspace":"noxor"}}}'
-          ) | timeout 12 ./bin/lebop mcp > "$out" || true
-
-          # Validate handshake response
-          grep -q '"protocolVersion":"2024-11-05"' "$out" || { echo '::error::MCP initialize failed'; cat "$out"; exit 1; }
-          # Validate tool list contains expected tools (sample across surfaces)
-          for t in list_issues lint_text list_documents get_issue list_comments cache_status diff_issue plan_validate raw_graphql list_workspaces whoami; do
-            grep -q "\"name\":\"$t\"" "$out" || { echo "::error::MCP tools/list missing $t"; cat "$out"; exit 1; }
-          done
-          # Validate tool call returned (not isError)
-          grep -q '"id":3' "$out"                        || { echo '::error::MCP tools/call list_issues never responded'; cat "$out"; exit 1; }
-          if grep -q '"id":3.*"isError":true' "$out"; then
-            echo '::error::MCP list_issues returned an error'; cat "$out"; exit 1
+            echo "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"list_issues\",\"arguments\":{\"team\":\"${LEBOP_CANARY_TEAM}\",\"limit\":2,\"workspace\":\"${LEBOP_CANARY_WORKSPACE}\"}}}"
+            echo "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{\"name\":\"explore_linear_workspace\",\"arguments\":{\"path\":\"/projects\",\"team\":\"${LEBOP_CANARY_TEAM}\",\"limit\":1,\"workspace\":\"${LEBOP_CANARY_WORKSPACE}\"}}}"
+            echo "{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"tools/call\",\"params\":{\"name\":\"fetch_linear_workspace\",\"arguments\":{\"target\":\"/issues/${issue_id}\",\"include\":[\"comments\",\"relations\",\"attachments\"],\"depth\":\"shallow\",\"limit\":2,\"to\":\"${mcp_context_dir}\",\"workspace\":\"${LEBOP_CANARY_WORKSPACE}\"}}}"
+          ) | timeout 12 ./bin/lebop mcp > "$out"
+          mcp_status=$?
+          set -e
+          if [ "$mcp_status" -ne 0 ]; then
+            fail_mcp "MCP smoke process exited with status $mcp_status"
           fi
 
+          # Validate handshake response
+          grep -q '"protocolVersion":"2024-11-05"' "$out" || fail_mcp 'MCP initialize failed'
+          # Validate tool list contains expected tools (sample across surfaces)
+          for t in list_issues lint_files lint_text list_documents get_issue list_comments cache_status diff_issue diff_project pull_project explore_linear_workspace fetch_linear_workspace review_linear_changes publish_linear_changes plan_validate raw_graphql list_workspaces whoami refresh_whoami update_relations; do
+            grep -q "\"name\":\"$t\"" "$out" || fail_mcp "MCP tools/list missing $t"
+          done
+          # Validate tool calls returned (not isError)
+          for id in 3 4 5; do
+            grep -q "\"id\":$id" "$out" || fail_mcp "MCP tools/call id=$id never responded"
+            if grep -q "\"id\":$id.*\"isError\":true" "$out"; then
+              fail_mcp "MCP tools/call id=$id returned an error"
+            fi
+          done
+          node - "$out" <<'NODE'
+          const fs = require("node:fs");
+          const lines = fs.readFileSync(process.argv[2], "utf8").trim().split(/\n+/).filter(Boolean).map((line) => JSON.parse(line));
+          const byId = new Map(lines.filter((line) => line.id !== undefined).map((line) => [line.id, line]));
+          function toolPayload(id) {
+            const msg = byId.get(id);
+            if (!msg) throw new Error(`missing MCP response id=${id}`);
+            if (msg.result?.isError) throw new Error(`MCP response id=${id} isError=true`);
+            const text = msg.result?.content?.[0]?.text;
+            if (!text) throw new Error(`MCP response id=${id} missing text content`);
+            return JSON.parse(text);
+          }
+          const list = toolPayload(3);
+          if (!Array.isArray(list.issues ?? list.data?.issues)) throw new Error("list_issues payload missing issues array");
+          const explore = toolPayload(4);
+          if (explore.path !== "/projects") throw new Error(`explore payload path mismatch: ${explore.path}`);
+          if (!Array.isArray(explore.items)) throw new Error("explore payload items missing");
+          const fetch = toolPayload(5);
+          if (fetch.kind !== "issue") throw new Error(`fetch payload kind mismatch: ${fetch.kind}`);
+          if (!fetch.manifest_file || !fs.existsSync(fetch.manifest_file)) {
+            throw new Error("fetch payload manifest_file missing or not written");
+          }
+          NODE
+
           rm -f "$out"
+          rm -rf "$mcp_context_dir"
+          write_report passed 0
+          trap - EXIT
           echo 'MCP smoke ✓'
+
+      - name: full live harness (weekly/manual write-enabled)
+        if: github.event_name == 'workflow_dispatch' || github.event.schedule == '0 16 * * 1'
+        run: |
+          set -euo pipefail
+          bun scripts/live-nox-surface-smoke.mjs
+
+      - name: validate full live harness report
+        if: github.event_name == 'workflow_dispatch' || github.event.schedule == '0 16 * * 1'
+        env:
+          LEBOP_LIVE_EXPECT_WORKSPACE: noxor
+          LEBOP_LIVE_EXPECT_TEAM: NOX
+        run: |
+          set -euo pipefail
+          report="$(
+            find docs/local -maxdepth 1 -type f -name 'live-nox-surface-report-*.json' -printf '%T@ %p\n' |
+              sort -nr |
+              awk 'NR == 1 { sub(/^[^ ]+ /, ""); print }'
+          )"
+          bun scripts/live-nox-surface-smoke.mjs --validate-report "$report"
+
+      - name: upload live harness reports
+        if: (github.event_name == 'workflow_dispatch' || github.event.schedule == '0 16 * * 1') && always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: live-noxor-reports
+          path: docs/local/live-nox-surface-report-*.json
+          if-no-files-found: warn
+
+      - name: upload read smoke reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: canary-read-smoke-reports
+          path: docs/local/canary-read-*-report-*.json
+          if-no-files-found: warn
 
       - name: cleanup
         if: always()

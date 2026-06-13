@@ -6,28 +6,11 @@
  * surface it as `slug_id` on the shaped record.
  */
 
-import { NotFoundError, tryMapToNull, ValidationError } from "./errors.ts";
-import { paginateRaw } from "./paginate.ts";
+import { NotFoundError, tryMapToNull } from "./errors.ts";
+import { assertIconNotEmoji } from "./icons.ts";
+import { requireMutationEntity, requireMutationSuccess } from "./mutationResult.ts";
+import { type ConnectionPage, paginateRaw, paginateRawPage } from "./paginate.ts";
 import { linear, withClient } from "./sdk.ts";
-
-/**
- * Linear's `icon` field is an internal name (PascalCase, e.g. "BarChart" or
- * "Rocket"). Passing a Unicode emoji silently round-trips as a non-functional
- * string; reject those up-front with a structured ValidationError so callers
- * get an actionable message instead of an opaque server-side rejection.
- *
- * Uses `\p{Extended_Pictographic}` (Unicode 9+) which covers emoji, dingbats,
- * symbols, and the bulk of icon-shaped pictographic codepoints.
- */
-function assertIconNotEmoji(icon: string | undefined, field = "icon"): void {
-  if (icon === undefined) return;
-  if (/^\p{Extended_Pictographic}/u.test(icon)) {
-    throw new ValidationError(
-      `${field} "${icon}" looks like an emoji — Linear expects an internal icon name (PascalCase)`,
-      "use a name like 'BarChart', 'Rocket', 'Target'. Omit if unsure.",
-    );
-  }
-}
 
 export interface ListedDocument {
   id: string;
@@ -36,6 +19,7 @@ export interface ListedDocument {
   icon: string | null;
   url: string;
   project: { id: string; name: string } | null;
+  issue: { id: string; identifier: string; title: string } | null;
   creator: { id: string; name: string; email: string } | null;
   archived_at: string | null;
 }
@@ -55,6 +39,7 @@ const LIST_DOCUMENTS_QUERY = /* GraphQL */ `
         url
         archivedAt
         project { id name }
+        issue { id identifier title }
         creator { id name email }
       }
       pageInfo { hasNextPage endCursor }
@@ -70,6 +55,7 @@ interface DocNode {
   url: string;
   archivedAt: string | null;
   project: { id: string; name: string } | null;
+  issue: { id: string; identifier: string; title: string } | null;
   creator: { id: string; name: string; email: string } | null;
 }
 
@@ -91,22 +77,23 @@ function shape(d: DocNode): ListedDocument {
     url: d.url,
     archived_at: d.archivedAt,
     project: d.project,
+    issue: d.issue ?? null,
     creator: d.creator,
   };
 }
 
 export async function listDocuments(opts: {
   projectId?: string;
+  issueId?: string;
+  search?: string;
   max?: number;
 }): Promise<ListedDocument[]> {
-  const filter: Record<string, unknown> = {};
-  if (opts.projectId) filter.project = { id: { eq: opts.projectId } };
-
+  const filter = buildDocumentFilter(opts);
   const client = await linear();
   const raw = await paginateRaw<DocNode, DocsPage>(
     ({ first, after }) =>
       client.client.rawRequest(LIST_DOCUMENTS_QUERY, {
-        filter: Object.keys(filter).length > 0 ? filter : undefined,
+        filter,
         first,
         after,
       }) as Promise<DocsPage>,
@@ -114,6 +101,40 @@ export async function listDocuments(opts: {
     { pageSize: 250, max: opts.max },
   );
   return raw.map(shape);
+}
+
+export async function listDocumentsPage(opts: {
+  projectId?: string;
+  issueId?: string;
+  search?: string;
+  limit: number;
+  after?: string;
+}): Promise<ConnectionPage<ListedDocument>> {
+  const filter = buildDocumentFilter(opts);
+  const client = await linear();
+  const page = await paginateRawPage<DocNode, DocsPage>(
+    ({ first, after }) =>
+      client.client.rawRequest(LIST_DOCUMENTS_QUERY, {
+        filter,
+        first,
+        after,
+      }) as Promise<DocsPage>,
+    (response) => response.data.documents,
+    { limit: opts.limit, after: opts.after, pageSize: 250 },
+  );
+  return { nodes: page.nodes.map(shape), pageInfo: page.pageInfo };
+}
+
+function buildDocumentFilter(opts: {
+  projectId?: string;
+  issueId?: string;
+  search?: string;
+}): Record<string, unknown> | undefined {
+  const filter: Record<string, unknown> = {};
+  if (opts.projectId) filter.project = { id: { eq: opts.projectId } };
+  if (opts.issueId) filter.issue = { id: { eq: opts.issueId } };
+  if (opts.search) filter.title = { containsIgnoreCase: opts.search };
+  return Object.keys(filter).length > 0 ? filter : undefined;
 }
 
 const GET_DOCUMENT_QUERY = /* GraphQL */ `
@@ -127,6 +148,7 @@ const GET_DOCUMENT_QUERY = /* GraphQL */ `
       content
       archivedAt
       project { id name }
+      issue { id identifier title }
       creator { id name email }
     }
   }
@@ -148,7 +170,7 @@ export async function getDocument(id: string): Promise<FullDocument | null> {
 export interface CreateDocumentInput {
   title: string;
   content?: string;
-  /** Project UUID. Documents must be attached to a project (not workspace-level via API). */
+  /** Project UUID. lebop's first-class create wrapper is currently project-scoped. */
   projectId: string;
   icon?: string;
 }
@@ -160,6 +182,7 @@ const CREATE_DOCUMENT_MUTATION = /* GraphQL */ `
       document {
         id title slugId icon url content archivedAt
         project { id name }
+        issue { id identifier title }
         creator { id name email }
       }
     }
@@ -178,7 +201,11 @@ export async function createDocument(input: CreateDocumentInput): Promise<FullDo
       };
     };
   };
-  const d = response.data.documentCreate.document;
+  const d = requireMutationEntity<DocNode & { content: string | null }>(
+    "documentCreate",
+    response.data.documentCreate,
+    "document",
+  );
   return { ...shape(d), content: d.content };
 }
 
@@ -195,6 +222,7 @@ const UPDATE_DOCUMENT_MUTATION = /* GraphQL */ `
       document {
         id title slugId icon url content archivedAt
         project { id name }
+        issue { id identifier title }
         creator { id name email }
       }
     }
@@ -217,7 +245,11 @@ export async function updateDocument(
       };
     };
   };
-  const d = response.data.documentUpdate.document;
+  const d = requireMutationEntity<DocNode & { content: string | null }>(
+    "documentUpdate",
+    response.data.documentUpdate,
+    "document",
+  );
   return { ...shape(d), content: d.content };
 }
 
@@ -257,5 +289,6 @@ export async function deleteDocument(id: string): Promise<boolean> {
   const response = (await client.client.rawRequest(DELETE_DOCUMENT_MUTATION, { id })) as {
     data: { documentDelete: { success: boolean } };
   };
-  return response.data.documentDelete.success;
+  requireMutationSuccess("documentDelete", response.data.documentDelete);
+  return true;
 }

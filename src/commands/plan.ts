@@ -1,20 +1,16 @@
-import { existsSync } from "node:fs";
-import { readdir } from "node:fs/promises";
-import { join } from "node:path";
 import chalk from "chalk";
 import type { Command } from "commander";
-import { writeAtomic } from "../lib/cache.ts";
 import { resolveConfig } from "../lib/config.ts";
 import { envelope } from "../lib/envelope.ts";
-import { applyFixesFixpoint, lintContent } from "../lib/lint.ts";
-import { applyPlan } from "../lib/planApply.ts";
+import { ValidationError } from "../lib/errors.ts";
+import { applyPlan, preflightPlanApply } from "../lib/planApply.ts";
 import type { PlanDiffResult } from "../lib/planDiff.ts";
 import { diffPlan } from "../lib/planDiff.ts";
+import { countRemainingPlanLintWarnings, lintPlanFiles } from "../lib/planLint.ts";
 import { parsePlan } from "../lib/planParse.ts";
 import { pullPlan } from "../lib/planPull.ts";
-import type { ParsedPlan } from "../lib/planTypes.ts";
-import { validatePlan } from "../lib/planValidate.ts";
-import type { Warning } from "../lib/quirks.ts";
+import type { ParsedPlan, ValidationResult } from "../lib/planTypes.ts";
+import { validatePlanWithFreshTeamMetadata } from "../lib/planValidate.ts";
 import { getTeamMetadata } from "../lib/resolve.ts";
 
 interface CommonOpts {
@@ -24,11 +20,16 @@ interface CommonOpts {
 
 interface ApplyCmdOpts extends CommonOpts {
   dryRun?: boolean;
+  force?: boolean;
+  yes?: boolean;
+  confirm?: boolean;
   strict?: boolean;
 }
 
 interface PullCmdOpts extends CommonOpts {
   force?: boolean;
+  yes?: boolean;
+  confirm?: boolean;
   includeNew?: boolean;
 }
 
@@ -51,12 +52,15 @@ export function registerPlan(program: Command): void {
       const parsed = await parsePlan(dir);
       const team = opts.team ?? parsed.project.frontmatter.team;
       const config = await resolveConfig({ teamOverride: team });
-      const teamMetadata = await getTeamMetadata(config.repoHash, config.team);
       const lintCtx = {
         repoConfig: config.repoConfig,
         workspaceUrlPrefix: config.workspaceUrlPrefix,
       };
-      const result = validatePlan(parsed, teamMetadata, lintCtx);
+      const { validation: result } = await validatePlanWithFreshTeamMetadata(parsed, {
+        repoHash: config.repoHash,
+        team: config.team,
+        lintCtx,
+      });
 
       if (opts.json) {
         process.stdout.write(
@@ -73,20 +77,36 @@ export function registerPlan(program: Command): void {
     .description("create/update the project + issues + links described by the plan")
     .option("--team <key>", "override the resolved team")
     .option("--dry-run", "print the plan without writing to Linear")
+    .option(
+      "--force",
+      "apply existing Linear updates even when plan updatedAt snapshots are missing/stale",
+    )
+    .option("--yes", "confirm --force when applying mutations")
+    .option("--confirm", "alias for --yes")
     .option("--strict", "block any issue whose body has lint warnings")
     .option("--json", "emit structured result")
     .action(async (dir: string, opts: ApplyCmdOpts) => {
+      const dryRun = opts.dryRun === true;
+      if (opts.force === true && !dryRun && !isConfirmed(opts)) {
+        throw new ValidationError(
+          "refusing to apply plan with --force without --yes/--confirm",
+          "run with --dry-run to preview, or pass --yes/--confirm after verifying plan stale-guard bypass is intended",
+        );
+      }
       const parsed = await parsePlan(dir);
       const team = opts.team ?? parsed.project.frontmatter.team;
       const config = await resolveConfig({ teamOverride: team });
-      const teamMetadata = await getTeamMetadata(config.repoHash, config.team);
       const lintCtx = {
         repoConfig: config.repoConfig,
         workspaceUrlPrefix: config.workspaceUrlPrefix,
       };
+      const { teamMetadata, validation } = await validatePlanWithFreshTeamMetadata(parsed, {
+        repoHash: config.repoHash,
+        team: config.team,
+        lintCtx,
+      });
 
       // Fail fast on validation errors; proceed on warnings.
-      const validation = validatePlan(parsed, teamMetadata, lintCtx);
       if (validation.errors.length > 0) {
         if (opts.json) {
           process.stdout.write(`${JSON.stringify(envelope({ validation }), null, 2)}\n`);
@@ -102,23 +122,49 @@ export function registerPlan(program: Command): void {
         printWarnings(validation.warnings);
       }
 
+      const preflight = await preflightPlanApply(parsed);
+      if (!preflight.ready) {
+        if (opts.json) {
+          process.stdout.write(
+            `${JSON.stringify(envelope({ dry_run: dryRun, preflight }), null, 2)}\n`,
+          );
+        } else {
+          const label = dryRun ? "refusing dry-run preview:" : "refusing to apply:";
+          process.stderr.write(`${chalk.yellow(label)} plan preflight failed\n`);
+          for (const blocker of preflight.blockers) {
+            process.stderr.write(`  - ${blocker}\n`);
+          }
+        }
+        process.exitCode = 1;
+        return;
+      }
+
       const result = await applyPlan(parsed, teamMetadata, {
-        dryRun: opts.dryRun,
+        dryRun,
+        force: opts.force,
         strict: opts.strict,
         lintCtx,
       });
 
       if (opts.json) {
         process.stdout.write(
-          `${JSON.stringify(envelope({ dry_run: !!opts.dryRun, ...result }), null, 2)}\n`,
+          `${JSON.stringify(envelope({ dry_run: dryRun, ...result }), null, 2)}\n`,
         );
       } else {
-        printApply(result, !!opts.dryRun);
+        printApply(result, dryRun);
       }
 
       const hasErrors =
         result.project.status === "error" ||
-        result.issues.some((i) => i.status === "error" || i.status === "lint-blocked") ||
+        result.project.status === "created-writeback-failed" ||
+        result.project.status === "updated-writeback-failed" ||
+        result.issues.some(
+          (i) =>
+            i.status === "error" ||
+            i.status === "lint-blocked" ||
+            i.status === "created-writeback-failed" ||
+            i.status === "updated-writeback-failed",
+        ) ||
         result.relations.some((r) => r.status === "error");
       if (hasErrors) process.exitCode = 1;
     });
@@ -140,7 +186,7 @@ export function registerPlan(program: Command): void {
       } else {
         printDiff(result);
       }
-      if (result.has_drift) process.exitCode = 1;
+      if (hasDiffFailure(result)) process.exitCode = 1;
     });
 
   plan
@@ -159,40 +205,21 @@ export function registerPlan(program: Command): void {
         workspaceUrlPrefix: config.workspaceUrlPrefix,
       };
 
-      // Collect every `.md` file in the plan dir — the project file + every issue.
-      const entries = await readdir(parsed.dir, { withFileTypes: true });
-      const files = entries
-        .filter((e) => e.isFile() && e.name.endsWith(".md"))
-        .map((e) => join(parsed.dir, e.name));
-
-      const perFile: { path: string; warnings: Warning[]; fixedCount: number }[] = [];
-      for (const file of files) {
-        if (!existsSync(file)) continue;
-        const raw = await Bun.file(file).text();
-        // Extract body (after frontmatter) so lint sees only the markdown content.
-        const m = raw.match(/^﻿?---\r?\n[\s\S]*?\r?\n?---\r?\n?([\s\S]*)$/);
-        const body = (m?.[1] ?? raw).replace(/^\r?\n/, "");
-        const head = m ? raw.slice(0, raw.length - body.length) : "";
-        const { warnings } = lintContent(body, lintCtx);
-
-        let fixedCount = 0;
-        if (opts.fix && warnings.some((w) => w.fix)) {
-          const { content: fixedBody } = applyFixesFixpoint(body, lintCtx);
-          await writeAtomic(file, `${head}${fixedBody}`);
-          fixedCount = warnings.filter((w) => w.fix).length;
-        }
-        perFile.push({ path: file, warnings, fixedCount });
-      }
+      const perFile = await lintPlanFiles(parsed, { fix: opts.fix, lintCtx });
 
       if (opts.json) {
+        const remaining = countRemainingPlanLintWarnings(perFile, Boolean(opts.fix));
         process.stdout.write(
           `${JSON.stringify(
             envelope({
+              dir,
               files: perFile.map((f) => ({
                 path: f.path,
                 warnings: f.warnings,
-                fixed: f.fixedCount,
+                fixed: f.fixed,
               })),
+              remaining_warnings: remaining,
+              strict_failed: opts.strict === true && remaining > 0,
             }),
             null,
             2,
@@ -221,7 +248,7 @@ export function registerPlan(program: Command): void {
             );
           }
           total += f.warnings.length;
-          fixed += f.fixedCount;
+          fixed += f.fixed;
         }
         process.stdout.write(
           `\n${chalk.gray(
@@ -230,10 +257,7 @@ export function registerPlan(program: Command): void {
         );
       }
 
-      const remaining = perFile.reduce(
-        (sum, f) => sum + (f.warnings.length - (opts.fix ? f.fixedCount : 0)),
-        0,
-      );
+      const remaining = countRemainingPlanLintWarnings(perFile, Boolean(opts.fix));
       if (opts.strict && remaining > 0) process.exitCode = 1;
     });
 
@@ -242,9 +266,17 @@ export function registerPlan(program: Command): void {
     .description("bring remote Linear state back into plan files (overwrites local)")
     .option("--team <key>", "override the resolved team")
     .option("--force", "pull even if local has drift (overwrites local edits)")
+    .option("--yes", "confirm --force overwrite behavior")
+    .option("--confirm", "alias for --yes")
     .option("--include-new", "also import issues that exist on remote but not in the plan")
     .option("--json", "emit structured result")
     .action(async (dir: string, opts: PullCmdOpts) => {
+      if (opts.force === true && !isConfirmed(opts)) {
+        throw new ValidationError(
+          "refusing to pull plan with --force without --yes/--confirm",
+          "run `lebop plan diff` to inspect first, or pass --yes/--confirm after verifying local file overwrite is intended",
+        );
+      }
       const parsed = await parsePlan(dir);
       const team = opts.team ?? parsed.project.frontmatter.team;
       const config = await resolveConfig({ teamOverride: team });
@@ -252,13 +284,21 @@ export function registerPlan(program: Command): void {
 
       if (!opts.force) {
         const preDiff = await diffPlan(parsed, teamMetadata);
-        if (preDiff.has_drift) {
+        if (hasDiffFailure(preDiff)) {
+          const refused = preDiff.has_incomplete_scan
+            ? "diff-scan-incomplete"
+            : preDiff.has_blockers
+              ? "diff-blocker-detected"
+              : "drift-detected";
+          const hint = preDiff.has_incomplete_scan
+            ? "run `lebop plan diff` to inspect the scan failure, then retry once Linear is reachable or re-run with --force --yes after verifying local file overwrite is intended"
+            : "run `lebop plan diff` to inspect, then re-run with --force --yes after verifying local file overwrite is intended";
           if (opts.json) {
             process.stdout.write(
               `${JSON.stringify(
                 envelope({
-                  refused: "drift-detected",
-                  hint: "run `lebop plan diff` to inspect, then re-run with --force to overwrite local",
+                  refused,
+                  hint,
                   diff: preDiff,
                 }),
                 null,
@@ -266,9 +306,15 @@ export function registerPlan(program: Command): void {
               )}\n`,
             );
           } else {
-            process.stderr.write(
-              `${chalk.yellow("refusing to pull:")} local plan has drift. Run \`lebop plan diff ${dir}\` to inspect, then \`lebop plan pull ${dir} --force\` to overwrite.\n`,
-            );
+            if (preDiff.has_incomplete_scan) {
+              process.stderr.write(
+                `${chalk.yellow("refusing to pull:")} remote-only issue scan failed. Run \`lebop plan diff ${dir}\` to inspect, then retry once Linear is reachable or \`lebop plan pull ${dir} --force --yes\` after verifying local file overwrite is intended.\n`,
+              );
+            } else {
+              process.stderr.write(
+                `${chalk.yellow("refusing to pull:")} local plan has drift. Run \`lebop plan diff ${dir}\` to inspect, then \`lebop plan pull ${dir} --force --yes\` after verifying local file overwrite is intended.\n`,
+              );
+            }
           }
           process.exitCode = 1;
           return;
@@ -284,7 +330,9 @@ export function registerPlan(program: Command): void {
 
       const hasErrors =
         result.project.status === "error" ||
-        result.issues.some((i) => i.status === "error" || i.status === "missing-remote");
+        result.issues.some((i) => i.status === "error" || i.status === "missing-remote") ||
+        result.new_import_errors.length > 0 ||
+        result.remote_scan_error !== undefined;
       if (hasErrors) process.exitCode = 1;
     });
 }
@@ -304,7 +352,11 @@ function summarizeParse(plan: ParsedPlan) {
   };
 }
 
-function printValidate(parsed: ParsedPlan, result: ReturnType<typeof validatePlan>): void {
+function isConfirmed(opts: { yes?: boolean; confirm?: boolean }): boolean {
+  return opts.yes === true || opts.confirm === true;
+}
+
+function printValidate(parsed: ParsedPlan, result: ValidationResult): void {
   process.stdout.write(
     `${chalk.bold(parsed.dir)}\n  project: ${chalk.cyan(parsed.project.frontmatter.name)}\n  issues: ${chalk.cyan(String(parsed.issues.length))}\n`,
   );
@@ -321,7 +373,7 @@ function printValidate(parsed: ParsedPlan, result: ReturnType<typeof validatePla
   }
 }
 
-function printWarnings(warnings: ReturnType<typeof validatePlan>["warnings"]): void {
+function printWarnings(warnings: ValidationResult["warnings"]): void {
   process.stdout.write(`\n${chalk.yellow(`${warnings.length} warning(s):`)}\n`);
   for (const w of warnings) {
     const loc = w.path ? `${chalk.gray(w.path)}: ` : "";
@@ -361,45 +413,46 @@ function printApply(result: Awaited<ReturnType<typeof applyPlan>>, dryRun: boole
 }
 
 function printDiff(result: PlanDiffResult): void {
-  if (!result.has_drift) {
+  if (!hasDiffFailure(result)) {
     process.stdout.write(`${chalk.green("✓")} plan matches Linear — no drift\n`);
-    return;
   }
 
-  // Project
-  const p = result.project;
-  process.stdout.write(
-    `${diffIcon(p.status)} project/${chalk.bold(p.name)}  ${chalk.gray(p.status)}\n`,
-  );
-  for (const f of p.field_changes) {
+  if (result.has_drift || result.has_blockers) {
+    // Project
+    const p = result.project;
     process.stdout.write(
-      `  ${chalk.cyan(f.field)}: ${chalk.red(JSON.stringify(f.remote))} ${chalk.gray("(remote)")} → ${chalk.green(JSON.stringify(f.local))} ${chalk.gray("(local)")}\n`,
+      `${diffIcon(p.status)} project/${chalk.bold(p.name)}  ${chalk.gray(p.status)}${p.error ? `  ${chalk.red(p.error)}` : ""}\n`,
     );
-  }
-  if (p.content_patch) printPatch(p.content_patch);
-
-  // Issues
-  for (const i of result.issues) {
-    const label = i.linear_id ? chalk.bold(i.linear_id) : chalk.bold(i.slug);
-    process.stdout.write(
-      `${diffIcon(i.status)} ${label}  ${chalk.gray(i.status)}${i.error ? `  ${chalk.red(i.error)}` : ""}\n`,
-    );
-    for (const f of i.field_changes) {
+    for (const f of p.field_changes) {
       process.stdout.write(
         `  ${chalk.cyan(f.field)}: ${chalk.red(JSON.stringify(f.remote))} ${chalk.gray("(remote)")} → ${chalk.green(JSON.stringify(f.local))} ${chalk.gray("(local)")}\n`,
       );
     }
-    for (const r of i.relations_missing_remote) {
+    if (p.content_patch) printPatch(p.content_patch);
+
+    // Issues
+    for (const i of result.issues) {
+      const label = i.linear_id ? chalk.bold(i.linear_id) : chalk.bold(i.slug);
       process.stdout.write(
-        `  ${chalk.yellow("+")} ${chalk.cyan(r.kind)}:${r.target} ${chalk.gray("(in plan, not on remote)")}\n`,
+        `${diffIcon(i.status)} ${label}  ${chalk.gray(i.status)}${i.error ? `  ${chalk.red(i.error)}` : ""}\n`,
       );
+      for (const f of i.field_changes) {
+        process.stdout.write(
+          `  ${chalk.cyan(f.field)}: ${chalk.red(JSON.stringify(f.remote))} ${chalk.gray("(remote)")} → ${chalk.green(JSON.stringify(f.local))} ${chalk.gray("(local)")}\n`,
+        );
+      }
+      for (const r of i.relations_missing_remote) {
+        process.stdout.write(
+          `  ${chalk.yellow("+")} ${chalk.cyan(r.kind)}:${r.target} ${chalk.gray("(in plan, not on remote)")}\n`,
+        );
+      }
+      for (const r of i.relations_extra_remote) {
+        process.stdout.write(
+          `  ${chalk.yellow("-")} ${chalk.cyan(r.kind)}:${r.target} ${chalk.gray("(on remote, not in plan)")}\n`,
+        );
+      }
+      if (i.body_patch) printPatch(i.body_patch);
     }
-    for (const r of i.relations_extra_remote) {
-      process.stdout.write(
-        `  ${chalk.yellow("-")} ${chalk.cyan(r.kind)}:${r.target} ${chalk.gray("(on remote, not in plan)")}\n`,
-      );
-    }
-    if (i.body_patch) printPatch(i.body_patch);
   }
 
   // Extra remote (not-in-plan) issues
@@ -416,6 +469,15 @@ function printDiff(result: PlanDiffResult): void {
       chalk.gray("  use `lebop plan pull <dir> --include-new` to import them\n"),
     );
   }
+  if (result.extra_remote_issues_error) {
+    process.stdout.write(
+      `\n${chalk.red("remote-only issue scan failed:")} ${result.extra_remote_issues_error}\n`,
+    );
+  }
+}
+
+function hasDiffFailure(result: PlanDiffResult): boolean {
+  return result.has_drift || result.has_blockers || result.has_incomplete_scan;
 }
 
 function printPull(result: Awaited<ReturnType<typeof pullPlan>>): void {
@@ -434,9 +496,19 @@ function printPull(result: Awaited<ReturnType<typeof pullPlan>>): void {
       `${chalk.green("+")} ${chalk.bold(n.identifier)} imported → ${chalk.cyan(n.path)}\n`,
     );
   }
+  for (const n of result.new_import_errors) {
+    process.stdout.write(
+      `${chalk.red("✗")} ${chalk.bold(n.identifier)} ${chalk.gray(n.title)} ${chalk.red(n.error)}\n`,
+    );
+  }
   for (const s of result.skipped_new) {
     process.stdout.write(
       `${chalk.yellow("?")} ${chalk.bold(s.identifier)} ${chalk.gray(s.title)} ${chalk.gray("(remote-only; --include-new to import)")}\n`,
+    );
+  }
+  if (result.remote_scan_error) {
+    process.stdout.write(
+      `\n${chalk.red("remote-only issue scan failed:")} ${result.remote_scan_error}\n`,
     );
   }
 }
@@ -494,6 +566,10 @@ function statusIcon(status: string): string {
   switch (status) {
     case "created":
       return chalk.green("✓");
+    case "created-writeback-failed":
+      return chalk.red("✗");
+    case "updated-writeback-failed":
+      return chalk.red("✗");
     case "updated":
       return chalk.green("✓");
     case "unchanged":

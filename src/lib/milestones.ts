@@ -5,7 +5,10 @@
  */
 
 import { tryMapToNull } from "./errors.ts";
-import { paginateRaw } from "./paginate.ts";
+import { requireMutationEntity, requireMutationSuccess } from "./mutationResult.ts";
+import { type ConnectionPage, paginateRaw, paginateRawPage } from "./paginate.ts";
+import { getProject } from "./projects.ts";
+import { ResolveError, resolveProjectIdByName } from "./resolve.ts";
 import { linear, withClient } from "./sdk.ts";
 import { isUuid } from "./uuid.ts";
 
@@ -85,13 +88,12 @@ interface MilestonesPageRaw {
 export async function listMilestones(opts: {
   projectId?: string;
   project?: string;
+  search?: string;
   /** Round-7 / HIGH-2: surface cascade-archived rows alongside live ones. */
   includeArchived?: boolean;
+  max?: number;
 }): Promise<ListedMilestone[]> {
-  const filter: Record<string, unknown> = {};
-  if (opts.projectId) filter.project = { id: { eq: opts.projectId } };
-  else if (opts.project) filter.project = { name: { eq: opts.project } };
-
+  const filter = buildMilestoneFilter(opts);
   const client = await linear();
   const raw = await paginateRaw<
     MilestonesPageRaw["data"]["projectMilestones"]["nodes"][number],
@@ -99,15 +101,54 @@ export async function listMilestones(opts: {
   >(
     ({ first, after }) =>
       client.client.rawRequest(LIST_MILESTONES_QUERY, {
-        filter: Object.keys(filter).length > 0 ? filter : undefined,
+        filter,
         first,
         after,
         includeArchived: Boolean(opts.includeArchived),
       }) as Promise<MilestonesPageRaw>,
     (response) => response.data.projectMilestones,
-    { pageSize: 250 },
+    { pageSize: 250, max: opts.max },
   );
   return raw.map(shapeMilestone);
+}
+
+export async function listMilestonesPage(opts: {
+  projectId?: string;
+  project?: string;
+  search?: string;
+  includeArchived?: boolean;
+  limit: number;
+  after?: string;
+}): Promise<ConnectionPage<ListedMilestone>> {
+  const filter = buildMilestoneFilter(opts);
+  const client = await linear();
+  const page = await paginateRawPage<
+    MilestonesPageRaw["data"]["projectMilestones"]["nodes"][number],
+    MilestonesPageRaw
+  >(
+    ({ first, after }) =>
+      client.client.rawRequest(LIST_MILESTONES_QUERY, {
+        filter,
+        first,
+        after,
+        includeArchived: Boolean(opts.includeArchived),
+      }) as Promise<MilestonesPageRaw>,
+    (response) => response.data.projectMilestones,
+    { limit: opts.limit, after: opts.after, pageSize: 250 },
+  );
+  return { nodes: page.nodes.map(shapeMilestone), pageInfo: page.pageInfo };
+}
+
+function buildMilestoneFilter(opts: {
+  projectId?: string;
+  project?: string;
+  search?: string;
+}): Record<string, unknown> | undefined {
+  const filter: Record<string, unknown> = {};
+  if (opts.projectId) filter.project = { id: { eq: opts.projectId } };
+  else if (opts.project) filter.project = { name: { eq: opts.project } };
+  if (opts.search) filter.name = { containsIgnoreCase: opts.search };
+  return Object.keys(filter).length > 0 ? filter : undefined;
 }
 
 // Uses the list-shape query (with includeArchived: true) rather than the
@@ -132,6 +173,20 @@ const GET_MILESTONE_QUERY = /* GraphQL */ `
         archivedAt
         project { id name }
       }
+    }
+  }
+`;
+
+const GET_MILESTONE_DIRECT_QUERY = /* GraphQL */ `
+  query GetMilestoneDirect($id: String!) {
+    projectMilestone(id: $id) {
+      id
+      name
+      description
+      targetDate
+      sortOrder
+      archivedAt
+      project { id name }
     }
   }
 `;
@@ -181,7 +236,33 @@ export async function getMilestone(id: string): Promise<ListedMilestone | null> 
   );
   if (!response) return null;
   const m = response.data.projectMilestones.nodes[0];
-  return m ? shapeMilestone(m) : null;
+  if (m) return shapeMilestone(m);
+
+  // Linear's list-shape filter is archive-resilient but can lag immediately
+  // after creation. The direct getter sees fresh live rows, while still hiding
+  // some cascade-archived rows; use it only as a fallback after the archived
+  // query returned no nodes.
+  type DirectResp = {
+    data: {
+      projectMilestone: {
+        id: string;
+        name: string;
+        description: string | null;
+        targetDate: string | null;
+        sortOrder: number;
+        archivedAt: string | null;
+        project: { id: string; name: string };
+      } | null;
+    };
+  };
+  const direct = await tryMapToNull<DirectResp>(
+    () =>
+      withClient((c) =>
+        c.client.rawRequest(GET_MILESTONE_DIRECT_QUERY, { id }),
+      ) as Promise<DirectResp>,
+  );
+  const directMilestone = direct?.data.projectMilestone;
+  return directMilestone ? shapeMilestone(directMilestone) : null;
 }
 
 export interface CreateMilestoneInput {
@@ -214,7 +295,12 @@ export async function createMilestone(input: CreateMilestoneInput): Promise<List
   const response = (await client.client.rawRequest(CREATE_MILESTONE_MUTATION, { input })) as {
     data: { projectMilestoneCreate: { success: boolean; projectMilestone: MilestoneNode } };
   };
-  return shapeMilestone(response.data.projectMilestoneCreate.projectMilestone);
+  const milestone = requireMutationEntity<MilestoneNode>(
+    "projectMilestoneCreate",
+    response.data.projectMilestoneCreate,
+    "projectMilestone",
+  );
+  return shapeMilestone(milestone);
 }
 
 export interface UpdateMilestoneInput {
@@ -248,7 +334,12 @@ export async function updateMilestone(
   )) as {
     data: { projectMilestoneUpdate: { success: boolean; projectMilestone: MilestoneNode } };
   };
-  return shapeMilestone(response.data.projectMilestoneUpdate.projectMilestone);
+  const milestone = requireMutationEntity<MilestoneNode>(
+    "projectMilestoneUpdate",
+    response.data.projectMilestoneUpdate,
+    "projectMilestone",
+  );
+  return shapeMilestone(milestone);
 }
 
 const DELETE_MILESTONE_MUTATION = /* GraphQL */ `
@@ -263,7 +354,8 @@ export async function deleteMilestone(id: string): Promise<boolean> {
   const response = (await client.client.rawRequest(DELETE_MILESTONE_MUTATION, { id })) as {
     data: { projectMilestoneDelete: { success: boolean } };
   };
-  return response.data.projectMilestoneDelete.success;
+  requireMutationSuccess("projectMilestoneDelete", response.data.projectMilestoneDelete);
+  return true;
 }
 
 /**
@@ -274,16 +366,16 @@ export async function deleteMilestone(id: string): Promise<boolean> {
 export async function resolveProjectId(nameOrId: string): Promise<string | null> {
   // UUID shape — return as-is.
   if (isUuid(nameOrId)) return nameOrId;
+  try {
+    return await resolveProjectIdByName(nameOrId);
+  } catch (err) {
+    if (err instanceof ResolveError && err.message.startsWith("project not found:")) return null;
+    throw err;
+  }
+}
 
-  const PROJECTS_QUERY = /* GraphQL */ `
-    query ResolveProject($name: String!) {
-      projects(filter: { name: { eq: $name } }, first: 1) {
-        nodes { id name }
-      }
-    }
-  `;
-  const response = (await withClient((c) =>
-    c.client.rawRequest(PROJECTS_QUERY, { name: nameOrId }),
-  )) as { data: { projects: { nodes: { id: string; name: string }[] } } };
-  return response.data.projects.nodes[0]?.id ?? null;
+export async function resolveExistingProjectId(nameOrId: string): Promise<string | null> {
+  if (!isUuid(nameOrId)) return resolveProjectId(nameOrId);
+  const project = await getProject(nameOrId);
+  return project ? nameOrId : null;
 }

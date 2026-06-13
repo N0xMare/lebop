@@ -72,6 +72,14 @@ interface PageInfo {
   endCursor?: string | null;
 }
 
+export interface ConnectionPage<T> {
+  nodes: T[];
+  pageInfo: {
+    hasNextPage: boolean;
+    endCursor: string | null;
+  };
+}
+
 interface Connection<T> {
   nodes: T[];
   pageInfo: PageInfo;
@@ -117,6 +125,27 @@ function throwCapExceeded(cap: number): never {
   );
 }
 
+function assertContinuablePage(pageInfo: PageInfo, context: string): string | null {
+  const cursor = pageInfo.endCursor ?? null;
+  if (pageInfo.hasNextPage && !cursor) {
+    throw new ValidationError(
+      `${context} cannot continue because Linear returned hasNextPage without endCursor`,
+      "retry the request; if it repeats, narrow the query or report the malformed Linear connection page",
+    );
+  }
+  return cursor;
+}
+
+function assertCursorAdvanced(seenCursors: Set<string>, cursor: string, context: string): void {
+  if (seenCursors.has(cursor)) {
+    throw new ValidationError(
+      `${context} cannot continue because Linear returned repeated cursor "${cursor}"`,
+      "retry the request; if it repeats, narrow the query or report the stuck Linear connection cursor",
+    );
+  }
+  seenCursors.add(cursor);
+}
+
 /**
  * Walk an SDK-style connection to completion (or up to `max` items).
  *
@@ -134,6 +163,8 @@ export async function paginateConnection<T>(
   const max = opts.max ?? safetyCap;
   const out: T[] = [];
   let after: string | undefined = opts.initialAfter;
+  const seenCursors = new Set<string>();
+  if (after) seenCursors.add(after);
 
   while (out.length < max) {
     const remaining = max - out.length;
@@ -153,11 +184,31 @@ export async function paginateConnection<T>(
       if (!explicitMax && page.pageInfo.hasNextPage) throwCapExceeded(safetyCap);
       break;
     }
-    if (!page.pageInfo.hasNextPage || !page.pageInfo.endCursor) break;
-    after = page.pageInfo.endCursor;
+    const nextCursor = assertContinuablePage(page.pageInfo, "paginated connection");
+    if (!page.pageInfo.hasNextPage) break;
+    assertCursorAdvanced(seenCursors, nextCursor as string, "paginated connection");
+    after = nextCursor as string;
   }
 
   return out.slice(0, max);
+}
+
+export async function paginateConnectionPage<T>(
+  fetchPage: (args: { first: number; after?: string }) => Promise<Connection<T>>,
+  opts: { limit: number; after?: string; pageSize?: number },
+): Promise<ConnectionPage<T>> {
+  const first = Math.max(1, Math.min(opts.limit, opts.pageSize ?? DEFAULT_PAGE_SIZE));
+  const page = await withRetry(() =>
+    fetchPage(opts.after === undefined ? { first } : { first, after: opts.after }),
+  );
+  assertContinuablePage(page.pageInfo, "paginated connection page");
+  return {
+    nodes: page.nodes.slice(0, first),
+    pageInfo: {
+      hasNextPage: page.pageInfo.hasNextPage,
+      endCursor: page.pageInfo.endCursor ?? null,
+    },
+  };
 }
 
 /**
@@ -179,6 +230,8 @@ export async function paginateRaw<T, R>(
   const max = opts.max ?? safetyCap;
   const out: T[] = [];
   let after: string | undefined = opts.initialAfter;
+  const seenCursors = new Set<string>();
+  if (after) seenCursors.add(after);
 
   while (out.length < max) {
     const remaining = max - out.length;
@@ -194,9 +247,32 @@ export async function paginateRaw<T, R>(
       if (!explicitMax && conn.pageInfo.hasNextPage) throwCapExceeded(safetyCap);
       break;
     }
-    if (!conn.pageInfo.hasNextPage || !conn.pageInfo.endCursor) break;
-    after = conn.pageInfo.endCursor;
+    const nextCursor = assertContinuablePage(conn.pageInfo, "raw paginated connection");
+    if (!conn.pageInfo.hasNextPage) break;
+    assertCursorAdvanced(seenCursors, nextCursor as string, "raw paginated connection");
+    after = nextCursor as string;
   }
 
   return out.slice(0, max);
+}
+
+export async function paginateRawPage<T, R>(
+  fetchPage: (args: { first: number; after?: string }) => Promise<R>,
+  pickConnection: (response: R) => Connection<T> | null,
+  opts: { limit: number; after?: string; pageSize?: number },
+): Promise<ConnectionPage<T>> {
+  const first = Math.max(1, Math.min(opts.limit, opts.pageSize ?? DEFAULT_PAGE_SIZE));
+  const response = await withRetry(() =>
+    fetchPage(opts.after === undefined ? { first } : { first, after: opts.after }),
+  );
+  const conn = pickConnection(response);
+  if (!conn) return { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } };
+  assertContinuablePage(conn.pageInfo, "raw paginated connection page");
+  return {
+    nodes: conn.nodes.slice(0, first),
+    pageInfo: {
+      hasNextPage: conn.pageInfo.hasNextPage,
+      endCursor: conn.pageInfo.endCursor ?? null,
+    },
+  };
 }

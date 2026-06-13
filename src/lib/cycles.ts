@@ -6,7 +6,7 @@
  */
 
 import { tryMapToNull } from "./errors.ts";
-import { paginateRaw } from "./paginate.ts";
+import { type ConnectionPage, paginateRaw, paginateRawPage } from "./paginate.ts";
 import { linear, withClient } from "./sdk.ts";
 
 export interface ListedCycle {
@@ -72,16 +72,14 @@ function shape(c: CycleNode): ListedCycle {
 }
 
 export async function listCycles(
-  opts: { team?: string; max?: number } = {},
+  opts: { team?: string; search?: string; max?: number } = {},
 ): Promise<ListedCycle[]> {
-  const filter: Record<string, unknown> = {};
-  if (opts.team) filter.team = { key: { eq: opts.team } };
-
+  const filter = buildCycleFilter(opts);
   const client = await linear();
   const raw = await paginateRaw<CycleNode, CyclesPage>(
     ({ first, after }) =>
       client.client.rawRequest(LIST_CYCLES_QUERY, {
-        filter: Object.keys(filter).length > 0 ? filter : undefined,
+        filter,
         first,
         after,
       }) as Promise<CyclesPage>,
@@ -89,6 +87,34 @@ export async function listCycles(
     { pageSize: 250, max: opts.max },
   );
   return raw.map(shape);
+}
+
+export async function listCyclesPage(
+  opts: { team?: string; search?: string; limit: number; after?: string } = { limit: 25 },
+): Promise<ConnectionPage<ListedCycle>> {
+  const filter = buildCycleFilter(opts);
+  const client = await linear();
+  const page = await paginateRawPage<CycleNode, CyclesPage>(
+    ({ first, after }) =>
+      client.client.rawRequest(LIST_CYCLES_QUERY, {
+        filter,
+        first,
+        after,
+      }) as Promise<CyclesPage>,
+    (response) => response.data.cycles,
+    { limit: opts.limit, after: opts.after, pageSize: 250 },
+  );
+  return { nodes: page.nodes.map(shape), pageInfo: page.pageInfo };
+}
+
+function buildCycleFilter(opts: {
+  team?: string;
+  search?: string;
+}): Record<string, unknown> | undefined {
+  const filter: Record<string, unknown> = {};
+  if (opts.team) filter.team = { key: { eq: opts.team } };
+  if (opts.search) filter.name = { containsIgnoreCase: opts.search };
+  return Object.keys(filter).length > 0 ? filter : undefined;
 }
 
 const GET_CYCLE_QUERY = /* GraphQL */ `

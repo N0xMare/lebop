@@ -25,8 +25,10 @@ Two surfaces share a common lib core:
 
 One sentence: stateless tool over `@linear/sdk`, with markdown + YAML cache
 under `~/.lebop/cache/<repo-hash>/` for the bulk loop and direct mutations for
-single-shot ops. CAS via `updatedAt` catches races at push time. The agent
-edits files (or calls MCP tools); lebop owns the transport.
+single-shot ops. An `updatedAt` stale guard catches remote drift before guarded
+writes; Linear does not expose a mutation-level `expectedUpdatedAt`, so this is
+best-effort rather than atomic server-side CAS. The agent edits files (or calls
+MCP tools); lebop owns the transport.
 
 **Core assumption:** the calling agent has filesystem edit primitives
 (`Read`/`Write`/`Edit`) **or** can issue MCP tool calls. The whole design
@@ -45,9 +47,9 @@ MCP server hit the same wall: every field becomes a separate API round-trip.
 |---|---|
 | No batch ops — N issue updates = N sequential CLI invocations | time + agent context |
 | `linear project update` has no `--content-file`; requires raw GraphQL + `--variables-json` | friction |
-| Adding a label requires 3 round-trips (team labels → issue labels → full-replacement submit); `labelIds` REPLACES | boilerplate |
+| Raw Linear label updates require team labels + current issue labels + replacement `labelIds`; `labelIds` REPLACES | boilerplate hidden by CLI `set labels +/-` and MCP `update_issue labels_add/labels_remove` |
 | Linear silently mutates markdown — table cells starting with `1.` get `\n\n` injected (ordered-list-marker quirk) | invisible until push → fetch → diff |
-| No CAS / staleness protection — `issueUpdate` has no `expectedUpdatedAt` | silent clobber risk |
+| No staleness protection — `issueUpdate` has no `expectedUpdatedAt` server-side precondition | silent clobber risk |
 | `linear issue view` returns 3 KB of JSON for 300 bytes of description | context bloat |
 
 Goal: collapse the agent workflow from "N round-trips per field" to "pull
@@ -59,18 +61,17 @@ declarative authoring).
 
 ## 3. Scope
 
-### In scope (shipped today)
+### In scope (`0.0.3` shipped surface)
 
 | Group | Commands |
 |---|---|
-| **Auth** | `auth login` (incl. `--from-schpet`), `auth logout`, `auth whoami [--refresh]` |
-| **Discovery** | `list`, `projects`, `teams` |
-| **Read** | `show <id>` (no cache write) |
-| **Bulk loop** | `pull`, `push`, `status`, `diff <id>`, `lint` |
-| **Single-shot edit** | `set <field>`, `comment` |
-| **Lifecycle** | `new`, `archive` |
-| **Declarative authoring** | `plan validate / apply / diff / pull / lint` |
-| **Escape hatch** | `raw` |
+| **Auth + workspace selection** | `auth login/logout/list/default/token/whoami/set-default-team`, root `--workspace` / `--team` |
+| **Workspace research** | `workspace explore`, `workspace fetch` for projects, issues, initiatives, documents, cycles, milestones, agent sessions, and child collections |
+| **Issue read/write** | `list`, `mine`, `show`, `new`, `set`, `bulk update`, `archive`, `unarchive`, `relation`, `link`, `attachment` |
+| **Cache loop** | `pull`, `push`, `status`, `cache status/gc`, `diff`, `lint` |
+| **Linear PM objects** | `project`, `projects`, `project-update`, `initiative`, `initiative-update`, `milestone`, `cycle`, `document`, `agent-session`, `label`, `team`, `teams`, `lookup` |
+| **Declarative authoring** | `plan validate/apply/diff/pull/lint` plus reviewed `publish review/apply` |
+| **Escape hatches + local utility** | `raw`, `schema`, `completions`, `mcp` |
 
 Plus the runtime substrate:
 
@@ -78,31 +79,35 @@ Plus the runtime substrate:
 - Per-repo config at `~/.lebop/config.yaml`
 - Local cache of issues / projects / comments / team metadata under
   `~/.lebop/cache/<repo-hash>/`
-- CAS via `updatedAt` (refuse push on remote drift; `--force` to bypass)
+- `updatedAt` stale guard (refuse push on remote drift; `--force --yes` to bypass)
 - Markdown linter with universal renderer rules + repo-scoped rules
 - GraphQL escape hatch (`raw`)
 - Agent skill + slash-command prompts (`agents/skills/lebop/`,
   `agents/commands/`) — platform-agnostic markdown; bundled installer
   for Claude Code, point any other agent at the files directly
-- Cursor pagination across all list operations (no silent truncation)
-- Structured error taxonomy (`LebopError` + 8 subtypes) — see §13.1
+- Cursor continuation on list/search surfaces that expose `--cursor` /
+  `next_cursor`; bounded metadata on capped surfaces that do not yet expose a
+  continuation token
+- Structured error taxonomy (`LebopError` + 9 subtypes) — see §13.1
 
-### In scope before public release (see §13)
+### Current release scope (see §13)
 
 - **MCP server** (`lebop mcp`) wrapping the lib core
 - **Bun-compiled standalone binaries** (single-file, no runtime install)
-- **Multi-workspace auth** (`auth list / default / token / migrate`,
-  `--workspace` flag, system keyring storage)
-- **Full feature parity** with `@schpet/linear-cli` minus interactive-only
-  ergonomics — see §13.2 for the complete table
+- **Workspace auth** (`auth list / default / token`, `--workspace` flag,
+  mode-0600 auth JSON; no keyring command is shipped)
+- **Linear CLI parity where useful** minus deliberately skipped
+  interactive-only ergonomics — see §13.2 for shipped vs planned details
 - **First-class Linear PM verbs**: initiatives + initiative-update,
-  milestones, cycles (list/view), labels, documents (full CRUD),
-  agent-sessions, team members, project-update with `--health`
-- **Issue attach** (file upload) and **issue link** (URL attach)
-- **Comment edit/delete** + replies + attachments
-- **Rich `list` filters** (`--search`, `--unassigned`, `--cycle`,
-  `--milestone`, `--created-after`, `--include-archived`, `--all-teams`,
-  `--all-states`)
+  milestones, cycles (list/view), labels (list/create/delete),
+  project-scoped documents (CRUD), agent-sessions (list/view), team members
+  (list), team detail, team workflow states, project-update with `--health`
+- **Issue link** (URL attach) and attachment lifecycle wrappers; file upload
+  creation remains planned
+- **Comment edit/delete** + replies
+- **Rich issue filters** (`--search`, `--unassigned`, `--cycle`,
+  `--milestone`, `--created-after`, `--include-archived`, `--all-teams`;
+  `mine --all-states` for assigned work outside active states)
 - **`lebop schema`** (offline GraphQL schema dump)
 - **Shell completions** (bash/zsh/fish)
 
@@ -116,7 +121,7 @@ Plus the runtime substrate:
 - **Linear webhook subscriptions** — pull-on-demand model only
 - **Multi-workspace content migration**
 - **UI** — CLI + files + MCP only
-- **Conflict merging on CAS** — abort and require explicit `pull --refresh`
+- **Conflict merging after stale refusal** — abort and require explicit `pull --refresh --yes`
 - **Comment edit on existing comment via cache** — comments are read-only
   in the cache; mutate via `comment update` direct command
 - **Watch mode / autopush** — explicit action only
@@ -126,11 +131,11 @@ Plus the runtime substrate:
 ### Out of scope post-release (genuinely future, not pre-public)
 
 - App-actor OAuth (`actor=app` audit-trail separation)
-- MCP HTTP+SSE transport (stdio is the pre-release shape)
+- MCP HTTP+SSE transport (stdio is the shipped shape)
 - `lebop new --from <template>` template-driven scaffolding
 - Sort control on `list`
 - Default-template handling on `new`
-- `team create / delete / autolinks` (rare ops; `raw` covers)
+- `team create / delete / autolinks` (rare UI-managed ops; use raw GraphQL only when explicitly requested)
 - Issue delete (`archive` is the supported path; destructive ops via `raw`)
 
 ---
@@ -139,13 +144,28 @@ Plus the runtime substrate:
 
 ### 4.1 Prerequisites
 
-- **Bun 1.1+** (`curl -fsSL https://bun.sh/install | bash`)
-- A **Linear personal API key** (Linear → Settings → API → Personal API
-  keys → Create key)
+| Install path | Bun required? | Scope |
+|---|---:|---|
+| GitHub Releases binary installer | No | Normal CLI/MCP use |
+| Source checkout, local development, tests, release builds | Yes, Bun 1.3.13+ | `bun install`, `bun link`, tests, compiled binaries |
+
+All install paths need a **Linear personal API key** (Linear → Settings → API
+→ Personal API keys → Create key).
 
 ### 4.2 Install
 
-From source (current; binary distribution lands in v1.0 — see §13):
+Recommended binary install:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/N0xMare/lebop/main/scripts/install.sh | bash
+```
+
+The installer downloads the matching GitHub Releases binary for macOS/Linux
+x64/arm64, verifies it against `SHA256SUMS`, and writes it to
+`~/.local/bin/lebop` or `/usr/local/bin/lebop`. Pin a release with
+`LEBOP_VERSION=v0.0.3`.
+
+From source (Bun required):
 
 ```sh
 git clone <repo-url>
@@ -170,7 +190,7 @@ sudo ln -sf "$HOME/.bun/bin/lebop" /usr/local/bin/lebop
 Verify:
 
 ```sh
-lebop --version       # 0.0.2
+lebop --version       # 0.0.3
 which lebop           # /opt/homebrew/bin/lebop (or /usr/local/bin/lebop)
 ```
 
@@ -188,9 +208,9 @@ which set of credentials to use later.
 Alternatives:
 
 ```sh
-lebop auth login --token "lin_api_..."
 lebop auth login --token-file path/to/token
 lebop auth login --from-schpet            # import from @schpet/linear-cli
+lebop auth login --token "lin_api_..."    # avoid when possible; shell history can leak it
 ```
 
 Stored at `~/.lebop/auth.json` (mode 0600, dir 0700). The file supports
@@ -202,7 +222,8 @@ lebop auth list                    # list configured workspaces (default marked 
 lebop auth list --json             # structured records
 lebop auth default                 # print current default slug
 lebop auth default <slug>          # set the default workspace
-lebop auth token [<slug>]          # print API token (handy for `curl`)
+lebop auth token [<slug>]          # print masked token preview
+lebop auth token [<slug>] --unsafe # print full token for piping to curl
 lebop auth whoami [<slug>]         # show cached viewer for a workspace
 lebop auth whoami [<slug>] --refresh   # re-validate against Linear
 lebop auth logout [<slug>]         # remove one workspace; if only one is configured, removes the file
@@ -243,7 +264,7 @@ workspace_team_defaults:
   acme-side-project: SIDE
 
 workspaces:
-  TEAM:
+  your-workspace-slug:
     url_prefix: https://linear.app/your-workspace-slug   # required by L004
 
 repos:
@@ -273,7 +294,7 @@ above team resolution still applies.
 | Env var | Default | Effect |
 |---|---|---|
 | `LEBOP_MAX_ITEMS` | `10000` | Hard cap on items any paginated list operation will return. lebop emits a one-shot stderr warning when a walk crosses 50% of the cap, and throws `ValidationError` (`code: validation_error`) if the cap is hit while the server still reports more pages. Set higher (`LEBOP_MAX_ITEMS=50000`) for genuinely large workspaces, or lower for tight CI envs. |
-| `LEBOP_HOME` | `~/.lebop` | Root for auth + config + cache. Useful for test isolation. |
+| `LEBOP_HOME` | `~/.lebop` | Root for auth, config, cache, context dossiers, and publish review records. Useful for test isolation. |
 | `LEBOP_WORKSPACE` | unset | Active Linear workspace slug; set by `--workspace <slug>`. |
 | `LEBOP_TEAM` | unset | Active team key; set by `--team KEY` or as an explicit override. |
 
@@ -286,24 +307,33 @@ agents/
 ├── README.md                     # how to wire any agent to lebop
 ├── skills/lebop/SKILL.md         # main "how an agent uses lebop" guide
 └── commands/                     # individual slash-command prompts
+    ├── lebop-research.md
     ├── lebop-pull.md
     ├── lebop-push.md
+    ├── lebop-publish.md
     └── lebop-lint.md
 ```
 
 The frontmatter on `SKILL.md` is Claude Code-compatible; the body is
 portable across platforms.
 
-**Claude Code** — bundled installer:
+**Claude Code** — bundled asset installer:
 
 ```sh
 ./bin/install-claude
 ```
 
-Symlinks `agents/skills/lebop/SKILL.md` → `~/.claude/skills/lebop/` and
-each `agents/commands/*.md` → `~/.claude/commands/`. Re-run anytime —
-symlinks stay in sync with `git pull`. Restart Claude Code to pick up
-the skill.
+Run this from a source or package checkout that will remain on disk. It
+symlinks the whole `agents/skills/lebop/` directory →
+`~/.claude/skills/lebop/` and each `agents/commands/*.md` file →
+`~/.claude/commands/`. Re-run anytime —
+symlinks stay in sync with `git pull`. Existing real skill directories or
+same-named command files are moved to timestamped backups before symlinking.
+Restart Claude Code to pick up the skill.
+
+The one-line release installer installs only the standalone `lebop` binary.
+CLI and MCP work without these markdown assets; install the assets separately
+when you want Claude Code skill/slash-command guidance.
 
 **Other agents** — point your platform's skill/rule/prompt loader at the
 files in `agents/` directly. The content is the same.
@@ -322,36 +352,27 @@ lebop/                                # this repo
 ├── src/
 │   ├── cli.ts                        # commander dispatcher; registers all subcommands
 │   ├── commands/                     # thin shells over lib/; one file per top-level verb
-│   └── lib/                          # lib core (also consumed by the MCP server)
-│       ├── auth.ts                   # PAK persistence + validation
-│       ├── sdk.ts                    # singleton LinearClient
-│       ├── config.ts                 # cwd → git root → repo config → team
-│       ├── cache.ts                  # atomic read/write (temp + rename)
-│       ├── resolve.ts                # name ↔ UUID + 1h-TTL team metadata
-│       ├── pullQuery.ts              # multi-alias issue query builder
-│       ├── pushMutations.ts          # batched issueUpdate / projectUpdate
-│       ├── relations.ts              # issueRelation create/delete/find
-│       ├── diff.ts                   # field-level diff against _server snapshot
-│       ├── build.ts                  # FetchedIssue → IssueMetadata + description
-│       ├── expand.ts                 # ID range expansion (TEAM-101..TEAM-109)
-│       ├── argvPrep.ts               # auto-insert `--` before negative `set` deltas
-│       ├── errors.ts                 # rewriteNotFound translator
-│       ├── quirks.ts                 # Linear renderer rules (L001-L006 universal + R001-R002 repo-scoped)
-│       ├── lint.ts                   # rule runner + fixpoint
-│       ├── planParse.ts              # frontmatter splitter + plan-dir walker
-│       ├── planTypes.ts              # frontmatter schema + LinkKey mapping
-│       ├── planValidate.ts           # slug/link/cycle/lint/state/label checks
-│       ├── planApply.ts              # topological project + issue + relation realizer
-│       ├── planDiff.ts               # local-vs-remote drift (incl. relations)
-│       ├── planPull.ts               # overwrite local from remote
-│       ├── prompt.ts                 # hidden-input stdin prompt
-│       ├── paths.ts                  # ~/.lebop/ path constants
-│       └── types.ts                  # shared types (AuthFile, RepoConfig, etc.)
-├── tests/                            # vitest unit tests on pure lib functions
+│   ├── mcp/server.ts                 # stdio MCP server; registers tools over lib functions
+│   └── lib/                          # shared core consumed by CLI + MCP
+│       ├── auth/config/requestContext # credentials, defaults, per-call workspace/team scope
+│       ├── sdk/retry/paginate/raw     # Linear SDK access, retry, GraphQL pagination/escape hatch
+│       ├── issues/projects/etc.       # entity CRUD/list helpers for Linear concepts
+│       ├── resolve/lookups            # name/key/UUID resolution and team metadata
+│       ├── cache/pull/push/diff       # local cache, updatedAt snapshots, mutations, status
+│       ├── workspaceExplore/workspaceFetch # ls-style discovery and local context dossiers
+│       ├── workspaceContextWriter     # safe local context materialization
+│       ├── planParse/Validate/Apply   # declarative plan parsing, linting, realization, sync
+│       ├── linearPublish/publishStore # review/apply publish workflow records
+│       ├── lint/quirks                # Linear markdown renderer rules
+│       ├── toolSurfaceManifest        # CLI/MCP parity inventory
+│       └── toolBehaviorContracts      # payload/behavior contracts used by tests + live harness
+├── tests/                            # vitest unit/integration tests plus harness contract tests
+├── scripts/                          # installer, package checks, live Noxor full-surface harness
+├── .github/workflows/                # CI, canary, release gates
 ├── agents/                           # platform-agnostic agent integrations
 │   ├── README.md
 │   ├── skills/lebop/SKILL.md
-│   └── commands/lebop-{pull,push,lint}.md
+│   └── commands/lebop-{research,pull,push,publish,lint}.md
 └── docs/
     ├── spec.md                       # this file (single source of truth)
     └── examples/getting-started/     # generic example plan
@@ -359,30 +380,36 @@ lebop/                                # this repo
 ~/.lebop/                             # runtime state — never touched by git
 ├── auth.json                         # PAK + viewer cache (0600)
 ├── config.yaml                       # optional user config
-└── cache/<repo-hash>/
-    ├── issues/<IDENTIFIER>/
-    │   ├── description.md            # user-editable
-    │   ├── metadata.yaml             # user-editable + _server: snapshot
-    │   └── comments/<comment-uuid>.md  # read-only; refreshed on pull
-    ├── projects/<project-uuid>/
-    │   ├── content.md
-    │   └── metadata.yaml
-    └── _team/<TEAM-KEY>.yaml         # team metadata (1h TTL)
+├── cache/<repo-hash>/
+│   ├── issues/<IDENTIFIER>/
+│   │   ├── description.md            # user-editable
+│   │   ├── metadata.yaml             # user-editable + _server: snapshot
+│   │   └── comments/<comment-uuid>.md  # read-only; refreshed on pull
+│   ├── projects/<project-uuid>/
+│   │   ├── content.md
+│   │   └── metadata.yaml
+│   └── _team/<TEAM-KEY>.yaml         # team metadata (1h TTL)
+├── context/<repo-hash>/              # workspace fetch dossiers (research exports)
+└── publish-reviews/<review-id>.json  # reviewed publish records
 ```
 
 `<repo-hash>` = `sha256(absolute-git-root-path).slice(0, 12)`. Deterministic,
 short, keeps multi-repo caches separated. Fallback `_global` when cwd isn't
 in a git repo.
 
-**Principle:** whatever repo the user's shell is in stays pristine. All
-runtime state lives under `~/.lebop/`.
+**Principle:** default lebop auth/cache/context/publish-review state lives
+under `~/.lebop/`. Commands that target user files, such as `plan
+apply`/`plan pull` writeback and explicit `--to` exports, write where the
+caller points them.
 
 ### 5.2 Two surfaces, one lib
 
-The `commands/` layer is intentionally thin — each file parses argv, calls
-into `lib/`, and formats output (human or `--json`). The MCP server (see
-§13.3) consumes the same `lib/` functions and emits MCP-tool-shaped responses.
-**No business logic lives in `commands/` or in the MCP layer.**
+The `commands/` layer should stay thin: parse argv, call into `lib/`, and
+format output (human or `--json`). The MCP server (see §13.3) consumes the
+same `lib/` functions and emits MCP-tool-shaped responses. Wrapper-specific
+code belongs to argument normalization, transport formatting, error envelopes,
+and request-local workspace/team scope; durable Linear behavior belongs in
+`lib/` and should be covered by shared contracts/tests.
 
 ### 5.3 Atomicity
 
@@ -418,16 +445,16 @@ lebop lint --strict     # exit non-zero on any warning
 lebop push --dry-run
 
 # 6. Push
-lebop push              # CAS-protected via updatedAt
-lebop push --force      # skip CAS (after manual reconciliation)
+lebop push              # guarded by updatedAt stale checks
+lebop push --force --yes  # skip stale guard (after manual reconciliation)
 lebop push --strict     # block on lint warnings
 ```
 
 ### 6.1 `pull` — fetch entities into the cache
 
 ```
-lebop pull [IDS...] [--project NAME] [--project-id UUID] [--refresh]
-                    [--no-comments] [--to <dir>] [--json]
+lebop pull [IDS...] [--team KEY] [--project NAME] [--project-id UUID]
+                    [--refresh] [--yes|--confirm] [--no-comments] [--to <dir>] [--json]
 ```
 
 By default writes `description.md` + `metadata.yaml` atomically per entity.
@@ -435,17 +462,138 @@ Comments are bundled into `issues/<ID>/comments/<comment-uuid>.md` as
 read-only files with YAML frontmatter, because agents routinely need thread
 context.
 
-- Refuses overwriting locally-modified entries unless `--refresh`
+- Refuses overwriting locally-modified entries unless `--refresh --yes` (or
+  `--refresh --confirm`)
+- `--refresh` requires `--yes` or `--confirm` because it can overwrite
+  local cached edits.
 - `--to <dir>` switches to **export mode**: writes to `<dir>/<id>/` instead
   of the cache, skipping the unpushed-edits guard. `status` and `push` only
   see the canonical cache; `--to` files are leaf copies for "drop issue
   context next to code." A warning is printed to make this clear.
 - Per-entity GraphQL errors are tolerated — successful entities still land.
 
-### 6.2 `push` — diff cache vs remote, mutate
+### 6.2 `workspace` — explore/fetch Linear context
 
 ```
-lebop push [IDS...] [--dry-run] [--force] [--strict] [--json]
+lebop workspace explore [path] [--query TEXT] [--team KEY]
+                         [--kind project|issue|initiative|document|cycle|milestone|agent-session]
+                         [--include-archived] [--limit N]
+                         [--cursor TOKEN] [--json]
+
+lebop workspace fetch <target> [--include ITEMS] [--depth shallow|full]
+                       [--limit N] [--cursor TOKEN] [--to DIR] [--json]
+```
+
+`workspace explore` is an ls-style discovery layer over Linear concepts.
+It returns concise records with stable paths such as `/projects/<id>`,
+`/issues/TEAM-123`, and `/initiatives/<id>`, plus `next_paths` for
+follow-up exploration. When `--query` is provided, it searches projects,
+issues, initiatives, documents, cycles, milestones, and agent sessions from
+one call for agent disambiguation. `--kind` can narrow that search and
+accepts singular/plural aliases for `project`, `issue`, `initiative`,
+`document`, `cycle`, `milestone`, and `agent-session`; `agent_session` and
+`agent_sessions` are accepted underscore aliases.
+Explore collection/team paths are discovery-only and are marked
+`fetchable: false`; concrete project, issue, initiative, document, cycle,
+milestone, and agent-session records are fetchable. Non-cursor-backed capped collections
+return conservative `page.bounded` metadata with `continuation:
+"not_available"` instead of reporting completion.
+The MCP equivalent is `explore_linear_workspace` with the same discovery
+contract through JSON-RPC. Use one of these surfaces as the first call when
+an agent needs to understand what Linear context exists.
+`--team` / MCP `team` narrows only project, issue, and cycle
+searches/listings. It is not a generic workspace narrowing control for
+initiatives, documents, milestones, or agent sessions; use `--kind`,
+concrete paths, child paths, smaller limits, or fetch controls for those.
+`--limit` is the normal page size for listings. For search, it applies per
+selected kind, so the total returned item count can exceed `--limit`.
+
+`workspace fetch` materializes a bounded project, issue, initiative,
+document, cycle, milestone, agent-session, or supported child-collection
+dossier into local files. Omitted `--include` uses the default dossier shape;
+CLI `--include ""` or MCP `include: []` means no optional child collections.
+Omitted `--depth` defaults to `full` on both CLI and MCP. The command response stays small: root path,
+manifest path, counts, omitted/truncated metadata, continuations, and
+recommended files to read first. Context dossiers live under
+`~/.lebop/context/<repo-hash>/`
+unless `--to` is provided. They are research exports, not editable cache
+rows, so `status`/`push` still operate only on `~/.lebop/cache`.
+`--limit` is not a global dossier budget: it applies per collection, per
+parent for nested issue fields, and per direction for relations.
+Use `--cursor` only with a continuation token returned by a prior
+`workspace fetch` / `fetch_linear_workspace` response; continuations preserve
+the target-specific include projection.
+The MCP equivalent is `fetch_linear_workspace`; it writes the same style of
+local dossier and returns the same compact manifest shape for agents that
+cannot or should not shell out to the CLI. Its narrowing fields are
+`include`, `depth`, `limit`, and `to`, matching CLI `--include`, `--depth`,
+fetch `--limit`, and `--to`.
+Document fetches include content by default; explicit empty include writes
+only the document shell and omits content from markdown, summary, and
+manifest files.
+
+When Linear includes rate-limit headers, `workspace explore`,
+`workspace fetch`, `explore_linear_workspace`, and `fetch_linear_workspace`
+attach optional envelope sidecar metadata at `_meta.linear_api`. This is
+transport/API-budget visibility, not part of the semantic workspace result
+or fetch manifest. It includes observed request count for the tool call and
+the latest Linear request, endpoint, and complexity budget headers when
+available. Agents should narrow with `--kind`, smaller explore/fetch
+`--limit`, fetch `include`/`depth`, child paths, or concrete targets when
+remaining request or complexity budget is low; use `--team` / MCP `team`
+only for project, issue, or cycle discovery.
+
+Allowed `workspace fetch --include` / `fetch_linear_workspace.include`
+vocabulary is dossier-kind specific. CLI accepts comma-separated values or
+`--include ""` for an explicit empty include; MCP accepts an array, with
+`include: []` as the explicit empty include. Hyphenated aliases normalize to
+underscores.
+
+| Dossier kind | Allowed includes |
+|---|---|
+| `project` | `issues`, `issue_details`, `comments`, `relations`, `attachments`, `agent_sessions`, `issue_documents`, `issue_document_details`, `documents`, `document_details`, `updates`, `milestones` |
+| `issue` | `comments`, `relations`, `attachments`, `agent_sessions`, `documents`, `document_details` |
+| `initiative` | `projects`, `project_issues`, `issue_details`, `comments`, `relations`, `attachments`, `agent_sessions`, `issue_documents`, `issue_document_details`, `project_documents`, `project_document_details`, `updates`, `project_updates`, `project_milestones` |
+| `document` | `content` |
+| `cycle` / `milestone` | `issues`, `issue_details`, `comments`, `relations`, `attachments`, `agent_sessions`, `issue_documents`, `issue_document_details` |
+| `agent-session` | no optional includes |
+
+### 6.3 `publish` — review/apply/verify plan or cache content
+
+```
+lebop publish review --plan <dir> [--team KEY] [--strict] [--json]
+lebop publish review --cache [IDS...] [--project-id UUID...] [--all-modified] [--team KEY] [--strict] [--json]
+lebop publish apply <review-id> [--no-verify] [--json]
+```
+
+`publish review` is the task-shaped write preview for agent-authored plan
+directories. It validates, lints, diffs, dry-runs the plan apply, then
+stores a local review record under `~/.lebop/publish-reviews/`. The
+result includes a `review_id`, readiness summary, blockers, validation
+errors/warnings, lint warnings, drift, and the next publish call.
+
+With `--cache`, `publish review` reviews modified editable cache rows
+instead of a plan directory. It supports issue identifiers and
+`--project-id` selectors, plus `--all-modified` when the intended target is
+every modified cache row. The review hashes the selected cache files, lints
+changed issue descriptions/project content, captures remote `updatedAt`
+snapshots, and dry-runs the shared cache push engine.
+
+`publish apply <review-id>` publishes only the reviewed content. Before
+mutating Linear it recomputes the reviewed plan/cache hash and refuses if
+local files changed after review. It also refuses when Linear changed since
+the review snapshot. By default it verifies the result and returns
+`status: "verified"` only when the remote/cache state matches the reviewed
+intent. `--no-verify` is accepted only by `publish apply`; do not pass it to
+`publish review`. With `--no-verify`, apply skips the post-publish verification step
+and returns `status: "published_unverified"` on successful unverified
+publish.
+
+### 6.4 `push` — diff cache vs remote, mutate
+
+```
+lebop push [IDS...] [--team KEY] [--dry-run] [--force] [--yes|--confirm] [--strict]
+                  [--project-id UUID ...] [--json]
 ```
 
 Per-entity flow:
@@ -453,9 +601,15 @@ Per-entity flow:
 1. Read local files.
 2. Fetch current remote `updatedAt` (batched query across all entities being
    pushed).
-3. **CAS:** if remote `updatedAt > local _server.updated_at` → abort this
-   entity, report conflict, suggest `lebop pull <ID> --refresh`. `--force`
-   skips CAS.
+3. **Stale guard:** if remote `updatedAt` differs from local
+   `_server.updated_at`, abort this entity and report conflict. For an issue
+   cache row, suggest
+   `lebop pull TEAM-123 --refresh --yes`; for a project cache row, suggest
+   `lebop pull --project-id <uuid> --refresh --yes`, after confirming local
+   cache overwrite. Real mutations re-read `updatedAt` immediately before the
+   write to shrink the race window. Because Linear exposes no mutation-level
+   `expectedUpdatedAt`, this remains a best-effort stale guard, not atomic
+   server-side CAS. `--force --yes` skips the guard.
 4. Compute field-level diff. Resolve names → UUIDs via cached team metadata.
 5. Emit `issueUpdate` / `projectUpdate` with **only changed fields**.
 6. Refresh local `_server.*` from the mutation response (Linear normalizes
@@ -466,7 +620,7 @@ Bare `lebop push` pushes everything in the current repo's cache; passing IDs
 narrows the set. Field-level diff is load-bearing — don't clobber fields the
 agent didn't touch.
 
-### 6.3 `status` — git-like diff against `_server`
+### 6.5 `status` — git-like diff against `_server`
 
 ```
 On team: TEAM  (repo: /path/to/consumer-repo)
@@ -481,16 +635,17 @@ Clean (5):
   TEAM-103 TEAM-104 TEAM-105 TEAM-106 TEAM-107
 ```
 
-Computes local-vs-`_server` diffs only. (Detecting "stale: remote newer" is
-a v1.0 enhancement — currently you discover staleness at push time.)
+Computes local-vs-`_server` diffs and, unless `--no-remote` is passed,
+checks remote `updatedAt` so clean cached rows can surface as
+`stale (remote newer)` before push.
 
-### 6.4 `diff <ID>` — unified diff vs live remote
+### 6.6 `diff <ID>` — unified diff vs live remote
 
 Fetches fresh remote, renders a markdown-aware unified diff for one entity.
 Exits 1 on drift (script-friendly "is dirty?" signal). `--json` emits the
 structured patch.
 
-### 6.5 `show <ID>` — read inline, no cache write
+### 6.7 `show <ID>` — read inline, no cache write
 
 The right verb for "what is this issue about?" — `pull` is overkill when
 you're not going to edit. Default output is a compact header + title + tags
@@ -540,7 +695,7 @@ _server:
   project_name: Example Project
   parent_id: <uuid>
   parent_identifier: TEAM-100
-  updated_at: "2026-01-01T00:00:00Z"   # used for CAS
+  updated_at: "2026-01-01T00:00:00Z"   # used for the stale guard
 ```
 
 On push, everything under `_server:` is ignored except `updated_at` (the
@@ -557,11 +712,27 @@ Project long-form body.
 ```yaml
 name: Example Project
 description: "short project tagline (≤255 chars)"
+icon: Rocket
+start_date: 2026-06-01     # YYYY-MM-DD; `null` clears
+target_date: 2026-06-30    # YYYY-MM-DD; `null` clears
 state: started
 _server:
   id: <uuid>
+  url: https://linear.app/<workspace-slug>/project/...
+  state: started
+  name: Example Project
+  description: "short project tagline (≤255 chars)"
+  icon: Rocket
+  start_date: 2026-06-01
+  target_date: 2026-06-30
+  content_hash: <sha256>
   updated_at: "2026-01-01T00:00:00Z"
 ```
+
+On push, editable top-level project fields round-trip for `name`,
+`description`, `icon`, `state`, `start_date`, `target_date`, and
+`content.md`. Use `null` for `start_date` or `target_date` to clear the date in
+Linear. Everything under `_server:` is snapshot data; do not edit it.
 
 ### 7.5 Cache hashing + GC
 
@@ -575,7 +746,7 @@ Over time the cache accumulates hashes for repos the user no longer
 touches. `lebop cache gc` (and the matching `cache_gc` MCP tool) reports
 or removes stale per-repo subdirs. Defaults are conservative — dry-run
 on, current-repo preserved, age threshold 30 days, total-size cap 500 MB.
-See §8.13 for the full surface. The GC reads + writes only the
+See §8.29 for the full surface. The GC reads + writes only the
 `<repo-hash>/` subdirs; `auth.json`, `config.yaml`, and team caches are
 never touched.
 
@@ -587,15 +758,18 @@ repo dir, their entities share one `<repo-hash>/` subtree and
 one workspace per repo. If you need multi-workspace use against one
 codebase, work from sibling clones (`~/code/proj-foo/`,
 `~/code/proj-bar/`) — they hash to different `<repo-hash>` values and
-their caches stay separated. Workspace-keyed cache layout (and a
-migration path) may be revisited post-v0.0.2; tracked under §13.
+their caches stay separated. Workspace-keyed cache layout and a migration
+path can be revisited if the one-workspace-per-repo assumption changes.
 
 ---
 
 ## 8. CLI command reference
 
-All commands respect `--team <KEY>` (default from config) and `--json`
-(stable, versioned schema: `{ "schema_version": 1, ... }`).
+Remote commands that operate inside a team usually accept `--team <KEY>`
+(default from config); workspace-wide commands, auth/local utilities, and
+explicit all-team modes do not. Commands intended for agent composition usually
+accept `--json` with a stable schema (`{ "schema_version": 1, ... }`). Treat
+the signatures below as authoritative for exact `--team` / `--json` support.
 
 ### 8.1 `auth`
 
@@ -604,11 +778,16 @@ lebop auth login [--token TOKEN | --token-file FILE | --from-schpet]
 lebop auth logout [<slug>]
 lebop auth list [--json]
 lebop auth default [<slug>]
-lebop auth token [<slug>]
+lebop auth token [<slug>] [--unsafe]
 lebop auth whoami [<slug>] [--refresh] [--json]
+lebop auth set-default-team <workspace> <team> [--json]
 ```
 
 See §4.3 for selection rules and the multi-workspace data model.
+
+`auth token` prints a masked preview by default. Pass `--unsafe` only when
+you intentionally need the full secret, for example when piping directly to
+another process.
 
 ### 8.2 `list` — issue search
 
@@ -622,49 +801,53 @@ lebop list [--team KEY | --all-teams]
            [--updated-since 7d|24h|ISO] [--created-after 7d|24h|ISO]
            [--search TEXT]
            [--include-archived]
-           [--limit N | --limit 0] [--json]
+           [--limit N | --limit 0] [--cursor TOKEN] [--json]
 ```
 
 Default output: one line per issue, `IDENT  [STATE]  TITLE  (assignee)`.
 Default limit 50; `--limit 0` means "no user-specified cap" (the
 paginator's safety cap of 10k still applies).
+When output is truncated, JSON includes `next_cursor`; pass it back with the
+same filters to continue.
 
 `--search` runs full-text against `searchableContent` (title + body).
 `--unassigned` and `--assignee` are mutually exclusive. `--all-teams`
-drops the team filter for cross-workspace queries.
+drops the team filter for workspace-wide queries in the selected workspace.
 
-### 8.2a `mine` — your assigned work
+### 8.3 `mine` — your assigned work
 
 ```
 lebop mine [--team KEY | --all-teams]
            [--all-states] [--include-archived]
            [--state-type TYPE] [--label NAME ...] [--priority 0..4]
            [--cycle NAME-OR-ID] [--milestone NAME-OR-ID]
-           [--limit N] [--json]
+           [--limit N] [--cursor TOKEN] [--json]
 ```
 
 Shorthand for `list --assignee me` with a default state filter (active
 states only — anything that isn't `completed` or `canceled`). Pass
 `--all-states` to include those, or `--state-type` to narrow further.
+When output is truncated, JSON includes `next_cursor`; pass it back with the
+same filters to continue.
 
-### 8.3 `projects` / `teams` — discovery
+### 8.4 `projects` / `teams` — discovery
 
 ```
-lebop projects [--team KEY] [--state STATE] [--json]
+lebop projects [--team KEY | --all-teams] [--state STATE] [--include-archived] [--limit N] [--cursor TOKEN] [--json]
 lebop teams [--json]
 ```
 
 Useful for seeding `config.yaml` and discovering the right team key.
 
-### 8.4 `show <ID>` — read inline
+### 8.5 `show <ID>` — read inline
 
-See §6.5.
+See §6.7.
 
-### 8.5 `pull / push / status / diff / lint`
+### 8.6 `pull / push / status / diff / lint`
 
 See §6.
 
-### 8.6 `comment` — full CRUD
+### 8.7 `comment` — full CRUD
 
 ```
 lebop comment add <ID> [--body TEXT | --body-file FILE | --stdin]
@@ -672,7 +855,7 @@ lebop comment add <ID> [--body TEXT | --body-file FILE | --stdin]
                        [--json]
 lebop comment list <ID> [--json]
 lebop comment update <COMMENT-UUID> [--body TEXT | --body-file FILE | --stdin] [--json]
-lebop comment delete <COMMENT-UUID> [--json]
+lebop comment delete <COMMENT-UUID> [--yes] [--json]
 ```
 
 Direct mutations on comments; no cache round-trip. `add` is the new
@@ -680,22 +863,30 @@ canonical form for what was previously `lebop comment <id>` — the bare
 form is gone, prefix with `add`. `list` is paginated and chronological;
 `update`/`delete` take the comment's UUID (visible in `list` output).
 
-### 8.4a `project` — manage Linear projects (CRUD)
+### 8.8 `project` — manage Linear projects (CRUD)
 
 ```
-lebop project list [--team KEY | --all-teams] [--state NAME] [--limit N] [--json]
+lebop project list [--team KEY | --all-teams] [--state NAME] [--include-archived] [--limit N] [--cursor TOKEN] [--json]
 lebop project view <id> [--json]
-lebop project create <name> --team KEY [--description] [--content] [--state] [--start-date] [--target-date] [--json]
-lebop project update <id> [--name] [--description] [--content] [--state] [--start-date ISO|null] [--target-date ISO|null] [--json]
-lebop project delete <id> [--json]
+lebop project create <name> [--team KEY] [--team-key KEY ...] [--team-id UUID ...] [--description] [--content] [--icon NAME] [--state] [--start-date] [--target-date] [--json]
+lebop project update <id> [--name] [--description] [--content] [--icon NAME|null] [--state] [--start-date ISO|null] [--target-date ISO|null] [--json]
+lebop project delete <id> [--yes] [--json]
 ```
 
-Full project CRUD. `update --start-date null` clears the date.
-`view` shows description + content + lead + teams + dates.
+Full project CRUD. `project create` accepts a single `--team KEY`,
+repeatable `--team-key KEY`, repeatable `--team-id UUID`, or the configured
+default team when no selector is supplied. Multiple selectors create a
+multi-team Linear project. `--icon` takes Linear's internal icon name such as
+`BarChart`, `Rocket`, or `Target`; emoji are rejected because Linear stores
+icon names, not Unicode emoji. `update --icon null` clears the icon.
+`update --start-date null` clears the date. `view` shows description +
+content + lead + teams + icon + dates.
 The legacy `lebop projects` (plural, list-only) is kept as an alias for
-`lebop project list`.
+`lebop project list`, including `--all-teams`, `--state`,
+`--include-archived`, `--limit`, `--cursor`, and the structured JSON
+envelope.
 
-### 8.4b `project-update` — project status updates with health
+### 8.9 `project-update` — project status updates with health
 
 ```
 lebop project-update create <project> [--body | --body-file | --stdin] [--health onTrack|atRisk|offTrack] [--json]
@@ -705,18 +896,18 @@ lebop project-update list <project> [--json]
 `<project>` accepts a name or UUID. `--health` is the standard Linear
 status flag (mirrors linear-cli).
 
-### 8.4c `initiative` — org-level planning units (CRUD)
+### 8.10 `initiative` — org-level planning units (CRUD)
 
 ```
-lebop initiative list [--status NAME] [--include-archived] [--limit N] [--json]
+lebop initiative list [--status NAME] [--owner-id UUID] [--include-archived] [--limit N] [--json]
 lebop initiative view <id-or-name> [--json]
 lebop initiative create <name> [--description] [--status] [--owner-id UUID] [--target-date ISO] [--color HEX] [--icon NAME] [--json]
-lebop initiative update <id-or-name> [--name] [--description] [--status] [--owner-id] [--target-date ISO|null] [--color] [--icon] [--json]
-lebop initiative archive <id-or-name>      # reversible
+lebop initiative update <id-or-name> [--name] [--description] [--status] [--owner-id UUID] [--clear-owner] [--target-date ISO|null] [--color] [--icon] [--json]
+lebop initiative archive <id-or-name> [--yes]      # reversible
 lebop initiative unarchive <id-or-name>
-lebop initiative delete <id-or-name>       # permanent
+lebop initiative delete <id-or-name> [--yes]       # permanent
 lebop initiative add-project <initiative> <project> [--sort-order N] [--json]
-lebop initiative remove-project <initiative> <project> [--json]
+lebop initiative remove-project <initiative> <project> [--yes] [--json]
 ```
 
 All six initiative lifecycle commands (`view`/`update`/`archive`/`unarchive`/
@@ -724,8 +915,10 @@ All six initiative lifecycle commands (`view`/`update`/`archive`/`unarchive`/
 or exact initiative name, resolved via `resolveInitiativeId`. Name lookup
 also surfaces archived initiatives (the `unarchive` and `delete` paths
 need this).
+`initiative update --clear-owner` clears the owner. It is mutually exclusive
+with `--owner-id`.
 
-### 8.4d `initiative-update` — initiative status updates with health
+### 8.11 `initiative-update` — initiative status updates with health
 
 ```
 lebop initiative-update create <initiative> [--body | --body-file | --stdin] [--health onTrack|atRisk|offTrack] [--json]
@@ -734,7 +927,7 @@ lebop initiative-update list <initiative> [--json]
 
 Same shape as `project-update`. `<initiative>` accepts a name or UUID.
 
-### 8.4e `cycle` — Linear cycles (iterations)
+### 8.12 `cycle` — Linear cycles (iterations)
 
 ```
 lebop cycle list [--team KEY | --all-teams] [--limit N] [--json]
@@ -743,20 +936,25 @@ lebop cycle view <id> [--json]
 
 Read-only. Cycle scheduling lives in the Linear UI.
 
-### 8.4f `document` — Linear documents (CRUD)
+### 8.13 `document` — Linear documents (CRUD)
 
 ```
 lebop document list [--project NAME-OR-ID] [--limit N] [--json]
 lebop document view <id> [--json]
-lebop document create <title> --project NAME-OR-ID [--content | --content-file | --stdin] [--icon NAME] [--json]
+lebop document create <title> (--project NAME-OR-ID | --project-id UUID) [--content | --content-file | --stdin] [--icon NAME] [--json]
 lebop document update <id> [--title] [--content | --content-file | --stdin] [--icon] [--json]
-lebop document delete <id> [--json]
+lebop document delete <id> [--yes] [--json]
 ```
 
-Documents must be attached to a project (Linear's API requires `projectId`
-on create). `view` includes the full content body.
+First-class lebop document CRUD is project-scoped: `create` requires exactly
+one project selector. `--project` accepts a project name or UUID; `--project-id`
+is UUID-only and skips name lookup. `view` includes the full content body. Linear also
+supports issue-scoped documents; lebop exposes those on the research side via
+`workspace explore /issues/<id>/documents` and
+`workspace fetch /issues/<id>/documents`, but issue/workspace document
+creation is not a first-class command.
 
-### 8.4g `agent-session` — Linear agent sessions (read-only)
+### 8.14 `agent-session` — Linear agent sessions (read-only)
 
 ```
 lebop agent-session list [--status NAME] [--issue-id UUID] [--limit N] [--json]
@@ -766,7 +964,7 @@ lebop agent-session view <id> [--json]
 Read-only access to Linear's first-class agent-activity surface. lebop
 doesn't create or end sessions; that's the agent's job.
 
-### 8.4h `team` — team-scoped operations
+### 8.15 `team` — team-scoped operations
 
 ```
 lebop team members [team-key] [--all] [--json]
@@ -781,38 +979,41 @@ Cancelled), useful for resolving `--state` arguments. `team create /
 delete / autolinks` are managed in the Linear UI. Plural `lebop teams`
 remains the canonical workspace-wide list.
 
-### 8.5a `label` — manage Linear labels
+### 8.16 `label` — manage Linear labels
 
 ```
 lebop label list [--team KEY | --workspace-only | --all] [--json]
-lebop label create <name> [--team KEY | --workspace] [--color HEX] [--description TEXT] [--json]
-lebop label delete <name-or-id> [--team KEY] [--json]
+lebop label create <name> [--team KEY | --workspace-scoped] [--color HEX] [--description TEXT] [--json]
+lebop label delete <name-or-id> [--team KEY] [--scope team|workspace] [--yes] [--json]
 ```
 
 Labels are either team-scoped (have a `team`) or workspace-scoped (no team).
 `list` defaults to the resolved team plus its visible workspace labels;
 `--workspace-only` filters to labels with no team scope; `--all` shows
-everything the token can see. `delete` accepts either a name (looked up in
-the resolved team scope) or a UUID directly.
+everything the token can see. `delete` accepts either a name or a UUID
+directly. Name lookup defaults to the resolved team scope; pass
+`--scope workspace` for workspace-scoped labels.
 
-### 8.5b `milestone` — project milestones
+### 8.17 `milestone` — project milestones
 
 ```
-lebop milestone list [--project NAME-OR-ID] [--json]
+lebop milestone list [--project NAME-OR-ID] [--include-archived] [--json]
 lebop milestone view <id> [--json]
-lebop milestone create <name> --project NAME-OR-ID [--description TEXT] [--target-date ISO] [--sort-order N] [--json]
+lebop milestone create <name> (--project NAME-OR-ID | --project-id UUID) [--description TEXT] [--target-date ISO] [--sort-order N] [--json]
 lebop milestone update <id> [--name TEXT] [--description TEXT] [--target-date ISO|null] [--sort-order N] [--project NAME-OR-ID] [--json]
-lebop milestone delete <id> [--json]
+lebop milestone delete <id> [--yes] [--json]
 ```
 
-Milestones belong to exactly one project. `update --target-date null` clears
+Milestones belong to exactly one project. `create` requires exactly one
+project selector. `--project` accepts a project name or UUID; `--project-id`
+is UUID-only and skips name lookup. `update --target-date null` clears
 the date. `update --project NAME-OR-ID` moves a milestone between projects.
 
-### 8.6a `relation` — first-class link mutations
+### 8.18 `relation` — first-class link mutations
 
 ```
-lebop relation add <id> <kind> <other> [--json]
-lebop relation delete <id> <kind> <other> [--json]
+lebop relation add <id> <kind> <other> [--yes] [--json]
+lebop relation delete <id> <kind> <other> [--yes] [--json]
 lebop relation list <id> [--json]
 ```
 
@@ -821,10 +1022,12 @@ for one-offs and a cleaner shape for MCP tools. Kinds:
 `blocks | blocked-by | duplicates | duplicated-by | related`. Use
 `lebop raw` for the undocumented `similar` kind.
 
-### 8.7 `set <field> <ID> <value...>`
+### 8.19 `set <field> <ID> <value...>`
 
-Single-shot point edit. Resolves names → UUIDs; uses fresh server-side
-`updatedAt` for CAS. No local-cache round-trip.
+Single-shot point edit. Resolves names → UUIDs and writes directly to Linear.
+There is no local-cache `updatedAt` snapshot or stale-cache guard on these direct
+mutations; use `pull` → edit → `push` or reviewed publish when the user needs
+the `_server.updated_at` staleness boundary.
 
 | Field | Example | Notes |
 |---|---|---|
@@ -835,22 +1038,37 @@ Single-shot point edit. Resolves names → UUIDs; uses fresh server-side
 | `assignee` | `set assignee TEAM-1 @me` | `@me`, email, name, or `null` |
 | `labels` | `set labels TEAM-1 +urgent -area:backend` | **delta syntax** (default); `=foo,bar` exact-replace |
 | `parent` | `set parent TEAM-1 TEAM-100` | TEAM-NN identifier; `null` clears |
-| `links` | `set links TEAM-1 +blocks:TEAM-2 -related:TEAM-3` | five kinds: `blocks\|blocked-by\|related\|duplicates\|duplicated-by` |
+| `description` | `set description TEAM-1 --description-file ./body.md` | positional value, `--description`, `--description-file`, or `--stdin`; no cache stale guard |
+| `project` | `set project TEAM-1 "Project Name"` | project name/UUID; `null` detaches |
+| `milestone` | `set milestone TEAM-1 "Milestone"` | milestone name/UUID; `null` clears |
+| `cycle` | `set cycle TEAM-1 "Cycle 1"` | cycle name/UUID; `null` clears |
+| `links` | `set links TEAM-1 --yes +blocks:TEAM-2 -related:TEAM-3` | five kinds: `blocks\|blocked-by\|related\|duplicates\|duplicated-by`; negative deltas require `--yes` |
 
-Refuses `description` / `content` — those need pull → edit → push because
-single-shot makes no sense for multi-line bodies. (`set links` v1.0 will
-gain a first-class `relation add/delete/list` verb in addition.)
+Refuses `content`; issue descriptions can be edited directly with
+`set description` when the caller accepts the no-stale-guard direct-write tradeoff.
+Use pull → edit → push or reviewed publish for larger description edits that
+need the local `_server.updated_at` stale-write boundary. For issue relations,
+use compact `set links` deltas or the first-class `relation add/delete/list`
+verb.
 
-**Negative-delta syntax:** `lebop set labels TEAM-1 -foo` Just Works —
+MCP `update_issue` supports the same direct issue-update fields as CLI `set`
+except `links`, and can set multiple fields in one JSON-RPC call. Use
+`labels` for exact label replacement or `labels_add` / `labels_remove` for
+label deltas; do not mix exact labels with deltas. CLI `set` edits one field
+per invocation and keeps `set links` as relation delta syntax.
+
+**Negative-delta syntax:** `lebop set labels TEAM-1 -foo` Just Works.
+`lebop set links TEAM-1 --yes -related:TEAM-2` uses the same parser handling,
+but link removals require `--yes` because they delete a relation object.
 `argvPrep.ts` auto-inserts a `--` before the first unknown `-TOKEN` so
 commander doesn't parse it as an option flag.
 
-### 8.8 `new` — create one issue
+### 8.20 `new` — create one issue
 
 ```
 lebop new --title TEXT [--team KEY] [--project NAME|--project-id UUID]
           [--state NAME] [--priority NAME|0..4] [--label NAME ...]
-          [--assignee me|EMAIL|NAME]
+          [--estimate POINTS] [--assignee me|EMAIL|NAME]
           [--description TEXT | --description-file FILE | --stdin]
           [--json]
 ```
@@ -863,33 +1081,72 @@ typically `Backlog`, but `Triage` on teams that have triage enabled.
 Pass an explicit `--state` (e.g. `--state Backlog`) to avoid the
 Triage hop on triage-enabled teams.
 
-(v1.0 will add `--estimate`, `--parent`, `--milestone`, `--cycle`,
-`--due-date`.)
+Direct-create flags for parent, milestone, and cycle remain planned; create
+the issue first, then use `set`, `pull`/`push`, or the reviewed publish
+workflow when those fields are needed immediately after creation. Due date is
+not shipped as a first-class issue field; use `raw` only when explicitly
+needed and after verifying Linear's current mutation shape for the workspace.
 
-### 8.9 `archive` / `unarchive`
+### 8.21 `archive` / `unarchive`
 
 ```
-lebop archive [IDS...] [--bulk-file FILE | --bulk-stdin] [--json]
+lebop archive [IDS...] [--bulk-file FILE | --bulk-stdin] [--yes] [--json]
 lebop unarchive <IDS...> [--json]
 ```
 
 Archive supports three input shapes (combinable):
 
-- Positional: `lebop archive TEAM-101 TEAM-102 TEAM-103..TEAM-110`
+- Positional: `lebop archive TEAM-101 TEAM-102 TEAM-103..TEAM-110 --yes`
 - `--bulk-file <path>`: whitespace-separated IDs, one or many per line.
   Lines starting with `#` are treated as comments.
 - `--bulk-stdin`: same shape, read from stdin (good for piping from
-  `lebop list --json | jq -r '.issues[].identifier' | lebop archive --bulk-stdin`).
+  `lebop list --json | jq -r '.issues[].identifier' | lebop archive --bulk-stdin --yes`).
 
 Per-id status tracking — partial failures don't stop the run. Ranges
 (`TEAM-101..TEAM-105`) work in any source. Unarchive keeps the simpler
 positional-only shape (less common bulk use case).
 
-### 8.10 `plan` — declarative authoring
+### 8.22 `bulk update` — batch issue field updates
+
+```
+lebop bulk update <IDS...> [--team KEY]
+                  [--state NAME] [--priority NAME|0..4]
+                  [--label NAME ...]
+                  [--assignee @me|me|EMAIL|NAME|null]
+                  [--estimate N|null]
+                  [--project NAME|UUID|null]
+                  [--milestone NAME|UUID|null]
+                  [--cycle NAME|UUID|null]
+                  [--dry-run] [--yes|--confirm] [--json]
+```
+
+Applies one identical patch to many issues through Linear's
+`issueBatchUpdate`. `--dry-run` resolves IDs and field names but does not
+mutate Linear and does not require confirmation. Real mutations require
+`--yes` or `--confirm`.
+
+`--label` replaces the full label set with the provided names. Use `set labels`
+or MCP `update_issue labels_add` / `labels_remove` for per-issue label deltas.
+`--assignee null`, `--estimate null`, `--project null`, `--milestone null`, and
+`--cycle null` clear those fields. Team-scoped names (`state`, `label`,
+non-viewer assignee, cycle) use the derived team from identifiers unless
+`--team` is supplied. If identifiers span multiple teams and the patch needs
+team-scoped resolution, pass `--team` explicitly or split the batch by team.
+
+JSON output is a partial-success envelope with `results`, `summary`, and
+`cache` refresh status. Successful rows refresh any matching local issue cache
+entry; cache refresh failures are reported separately so callers can run
+`lebop pull <id> --refresh --yes` after confirming local overwrite is
+intended.
+
+`bulk update --from-file` / `--stdin` are not shipped. Use shell expansion,
+`jq`, or `archive --bulk-file` for bulk archive-specific file input.
+
+### 8.23 `plan` — declarative authoring
 
 See §9.
 
-### 8.9a `link` — attach a URL to an issue
+### 8.24 `link` — attach a URL to an issue
 
 ```
 lebop link <issue> <url> [--title TEXT] [--json]
@@ -899,7 +1156,19 @@ Creates an Attachment on the issue with the URL as its target. Common
 use: link a PR, design doc, or external bug tracker. `--title` defaults
 to the URL.
 
-### 8.10a `schema` — dump Linear's GraphQL schema
+### 8.25 `attachment` — list/update/delete URL attachments
+
+```
+lebop attachment list <issue> [--json]
+lebop attachment update <id> [--title TEXT] [--json]
+lebop attachment delete <id> --yes [--json]
+```
+
+Linear's `AttachmentUpdateInput` supports title changes, not URL changes.
+To change an attachment URL, delete the old attachment and create a new one
+with `lebop link`.
+
+### 8.26 `schema` — dump Linear's GraphQL schema
 
 ```
 lebop schema [-o FILE | --out FILE] [--json]
@@ -910,18 +1179,23 @@ JSON with `--json`). Pairs with `lebop raw` for offline schema-aware
 development: dump once, point your editor at the SDL, write queries, then
 send them via `raw`.
 
-### 8.11 `raw` — GraphQL escape hatch
+### 8.27 `raw` — GraphQL escape hatch
 
 ```
 lebop raw <query> [--variables-json FILE | -]
                   [--variable k=v]            # repeatable; @file or JSON-coerced
                   [--query-file FILE]
                   [--paginate]                # auto-walk connections
+                  [--allow-mutation]          # required for GraphQL mutations
+                  [--yes|--confirm]           # required with --allow-mutation
 ```
 
-Executes any GraphQL query/mutation through the authenticated client. The
+Executes any GraphQL query through the authenticated client. GraphQL mutations
+are blocked unless the caller passes `--allow-mutation` plus `--yes` or
+`--confirm`. The
 explicit-opt-in for edge-case Linear operations (custom fields, audit
-history, attachments lebop doesn't wrap) — but the most common needs now
+history, file/comment attachments, or newly released fields lebop doesn't
+wrap) — but the most common needs now
 have first-class verbs.
 
 ```sh
@@ -932,13 +1206,14 @@ lebop raw 'query{teams(first:$first){nodes{id key}pageInfo{hasNextPage endCursor
 
 # `--variable` accepts JSON literals (numbers/booleans/objects) and `@file` paths
 lebop raw 'mutation($input:IssueCreateInput!){issueCreate(input:$input){success}}' \
-  --variable input=@payload.json
+  --variable input=@payload.json \
+  --allow-mutation --yes
 ```
 
 Output is the raw JSON response (or merged `nodes[]` when `--paginate`
 walks a connection).
 
-### 8.12 `completions <bash|zsh|fish>` — shell completion
+### 8.28 `completions <bash|zsh|fish>` — shell completion
 
 ```
 lebop completions bash > /usr/local/etc/bash_completion.d/lebop
@@ -949,7 +1224,7 @@ lebop completions fish > ~/.config/fish/completions/lebop.fish
 Emits a completion script for the requested shell on stdout. The script
 understands **two levels** of the commander tree — top-level commands
 (`lebop <TAB>`) and their direct subcommands (`lebop auth <TAB>` →
-`login logout list default token whoami migrate`). Names + descriptions
+`login logout list default token whoami set-default-team`). Names + descriptions
 are pulled from the live commander tree at runtime, so the script stays
 in sync with whatever's registered. Beyond level 2 (positional args, flag
 values), completion falls back to file paths.
@@ -959,18 +1234,24 @@ The bash script soft-depends on the `bash-completion` package for
 the same compgen-only path. macOS users with Homebrew already have it
 (`brew install bash-completion@2`); most Linux distros ship it.
 
-### 8.13 `cache` — inspect and maintain the local cache
+### 8.29 `cache` — inspect and maintain the local cache
 
 ```
+lebop cache status [--team KEY] [--no-remote] [--json]
 lebop cache gc [--max-age <days>] [--max-size <MB>] [--hash <H>]
-               [--no-dry-run] [--no-preserve-cwd] [--json]
+               [--no-dry-run] [--yes] [--no-preserve-cwd] [--json]
 ```
+
+`cache status` is an alias of top-level `lebop status`. It reports the
+current repo's cached issue/project rows, local modifications, and remote
+staleness unless `--no-remote` is supplied. Use `--json` for the same
+structured status envelope as `lebop status --json`.
 
 Garbage-collects stale per-repo subdirs under `~/.lebop/cache/`.
 **Safe by default**: dry-run mode reports candidates without removing, and
 the current repo's hash is preserved even if it would otherwise qualify.
-Pass `--no-dry-run` to actually delete; pass `--no-preserve-cwd` to allow
-eviction of the cwd's repo cache.
+Pass `--no-dry-run --yes` to actually delete; pass `--no-preserve-cwd` to
+allow eviction of the cwd's repo cache.
 
 Selection rules:
 
@@ -984,6 +1265,20 @@ Output lists each candidate with hash + reason (`age` / `size` /
 emits `{ schema_version, dry_run, candidates, removed, totalSizeBeforeMb,
 totalSizeAfterMb }`. The same surface is available over MCP as the
 `cache_gc` tool.
+
+### 8.30 `lookup` — resolve small Linear identifiers
+
+```
+lebop lookup state <team> <name> [--json]
+lebop lookup user <email> [--json]
+```
+
+Read-only resolvers for agent workflows that need UUIDs before composing
+lower-level mutations. State lookup is team-scoped and exact-name
+case-sensitive because Linear workflow states live under teams. User lookup
+is workspace-scoped by email. Human output exits 1 on miss; `--json` emits
+`{ schema_version, state }` or `{ schema_version, user }` with a `null`
+payload on miss.
 
 ---
 
@@ -1025,6 +1320,7 @@ for reading order only.
 ---
 name: Some Initiative
 description: "tagline ≤ 255 chars"
+icon: Rocket                         # Linear icon name; optional
 state: backlog                       # backlog | planned | started | completed | canceled
 team: TEAM                           # team KEY (not UUID)
 linear_id: 88377408-…                # written back by lebop after first apply
@@ -1034,8 +1330,9 @@ linear_id: 88377408-…                # written back by lebop after first apply
 Full markdown; same as what `lebop pull --project` would produce.
 ```
 
-Required: `name`, `team`. Optional: `description`, `state`, `linear_id`
-(written back). Body optional.
+Required: `name`, `team`. Optional: `description`, `icon`, `state`,
+`linear_id` (written back). Body optional. `icon` is a Linear internal icon
+name, not emoji.
 
 ### 9.4 Issue files
 
@@ -1097,7 +1394,7 @@ The validator warns if a slug accidentally matches the identifier regex
 
 ### 9.6 Apply semantics
 
-`lebop plan apply <dir> [--dry-run] [--strict]` runs:
+`lebop plan apply <dir> [--dry-run] [--strict] [--force] [--yes|--confirm]` runs:
 
 1. **Parse + validate.** Frontmatter + body. Fails fast on missing
    `_project.md`, missing required fields, duplicate slugs, malformed
@@ -1112,7 +1409,8 @@ The validator warns if a slug accidentally matches the identifier regex
 3. **Issue upsert** (topological — parents first). Per file:
    - No `linear_id` → `issueCreate`, write returned identifier back.
    - Has `linear_id` → fetch remote, diff, `issueUpdate` only on
-     differences. CAS via `updatedAt`; refuse on stale (use `--force`).
+    differences. Uses the `updatedAt` stale guard; refuse on stale (use
+    `--force --yes`).
    - `--strict` + lint warnings on a body → skip with status
      `lint-blocked`.
 
@@ -1141,7 +1439,7 @@ The validator warns if a slug accidentally matches the identifier regex
 ```
 lebop plan validate <dir> [--team KEY] [--json]
 lebop plan diff     <dir> [--team KEY] [--json]
-lebop plan pull     <dir> [--force] [--include-new] [--team KEY] [--json]
+lebop plan pull     <dir> [--force] [--yes|--confirm] [--include-new] [--team KEY] [--json]
 lebop plan lint     <dir> [--fix] [--strict] [--team KEY] [--json]
 ```
 
@@ -1154,7 +1452,7 @@ lebop plan lint     <dir> [--fix] [--strict] [--team KEY] [--json]
   aren't in the plan (separate from drift; `--include-new` resolves them).
   Exit 1 on in-plan drift; extra-remote issues do NOT cause exit 1.
 - **`pull`** — overwrite local files with remote state. Refuses on in-plan
-  drift unless `--force`. `--include-new` imports remote-only issues
+  drift unless `--force --yes`. `--include-new` imports remote-only issues
   (slug derived from title). Preserves `linear_id`, `team`, and explicit
   `slug:`; replaces all other fields + body. Rewrites link fields to match
   Linear's current relation graph (makes implicit inverses explicit).
@@ -1190,9 +1488,12 @@ Workflow for shared plans:
 4. From then on, `apply`/`diff`/`pull` by anyone targets the same Linear
    entities.
 
-Recovery if two people already applied in parallel: archive one set via
-`lebop archive <ids...>` + `lebop raw projectArchive`, then rewrite the
-plan files to reference the keepers' `linear_id`s.
+Recovery if two people already applied in parallel: archive one issue set via
+`lebop archive <ids...> --yes`; clean duplicate projects with `lebop project
+delete <project-id> --yes` or MCP `delete_project` with `confirm: true` when
+appropriate. Use raw GraphQL only as an escape hatch when no first-class
+surface fits. Then rewrite the plan files to reference the keepers'
+`linear_id`s.
 
 ### 9.10 Out of scope (today)
 
@@ -1200,18 +1501,16 @@ plan files to reference the keepers' `linear_id`s.
 - Issue archiving via plan (delete-a-file is **warn-and-ignore**; use
   `lebop archive` for explicit disposal)
 - Comment seeding via plan
-- Custom fields, cycles, attachments — escape via `lebop raw`
+- Custom fields, cycle mutations, and file/comment attachments — escape via
+  `lebop raw`
 - Moving issues between projects via plan
-- Whole-graph one-relation-per-pair enforcement at validate time (relies on
-  Linear's server behavior + last-write-wins)
-
 ### 9.11 Relationship to the cache
 
 | Concept | Plan apply shares? |
 |---|---|
 | `~/.lebop/cache/` | **No.** Plan files live wherever the user puts them; they don't participate in `lebop status` / `lebop push`. |
 | `_server:` snapshot | **No.** Drift detection uses live remote fetch, not a cached snapshot. |
-| CAS via `updatedAt` | **Yes.** Same mechanism on per-issue update. |
+| `updatedAt` stale guard | **Yes.** Same mechanism on per-issue update. |
 | Linter (`lebop lint`) | **Yes.** Run on each body; `--strict` gates. |
 | Mutation plumbing | **Yes.** Plan apply composes `issueCreate` + `issueRelationCreate` calls; shares lib code. |
 
@@ -1244,7 +1543,7 @@ in the cache by default; explicit paths override; plan dirs walked by
 
 | ID | Rule | Source | Auto-fix |
 |---|---|---|---|
-| `L004` | Issue ref `TEAM-XXX` not bracketed as a markdown link | `conventions.bracket_issue_refs: true` + `workspaces.<team>.url_prefix` | rewrite to `[TEAM-XXX](<url-prefix>/issue/TEAM-XXX)` |
+| `L004` | Issue ref `TEAM-XXX` not bracketed as a markdown link | `conventions.bracket_issue_refs: true` + `workspaces.<workspace-slug>.url_prefix` | rewrite to `[TEAM-XXX](<url-prefix>/issue/TEAM-XXX)` |
 | `R001` | `path_rewrites` — matched `from:` substring needs `to:` prefix | `repos.<path>.path_rewrites` | apply prefix |
 | `R002` | Required identifier formats | `repos.<path>.required_formats` (regex `pattern` + `suggest` with `$1`-style groups) | per-rule rewrite |
 
@@ -1397,10 +1696,10 @@ Facts that cost time on first encounter. **Check here before re-deriving.**
   "TEAM-NN")` accepts either UUID or identifier. See
   `lib/pullQuery.ts::buildPullIssuesQuery`.
 - **`@linear/sdk` `accessToken` vs `apiKey`** — see §11.1.
-- **`updatedAt` CAS is entity-level, not field-level.** Any edit bumps it,
-  so CAS refusal can be a false positive when two callers edited unrelated
-  fields between pull and push. Accepted trade-off; `--force` is the
-  escape.
+- **The `updatedAt` stale guard is entity-level, not field-level.** Any edit
+  bumps it, so stale refusal can be a false positive when two callers edited
+  unrelated fields between pull and push. Accepted trade-off; `--force --yes`
+  is the escape.
 - **`issueUpdate.input.labelIds` REPLACES.** See §11.3.
 - **Linear's `viewer.name` may equal their email.** Don't assume `name` is
   distinct from `email`.
@@ -1428,7 +1727,7 @@ Facts that cost time on first encounter. **Check here before re-deriving.**
   dividers; `text\n---` reparsed as `## text` setext H2. `push` writes the
   server's normalized form to disk so `_server.*_hash` matches the file
   immediately — earlier versions kept hash drift that pinned `status` on
-  "modified" until `--refresh`.
+  "modified" until `--refresh --yes`.
 - **Team metadata has a 1h TTL** and doesn't auto-refresh when lebop
   creates new projects/labels/states. Worked around via
   `withFreshMetadataOnMiss` in `lib/resolve.ts` — name → UUID lookups in
@@ -1492,15 +1791,12 @@ Facts that cost time on first encounter. **Check here before re-deriving.**
 
 ---
 
-## 13. Roadmap to public release
+## 13. Release surface and validation
 
-The shipped surface in §3 is functional and used in production by the
-author. The work below polishes lebop into a public open-source tool with
-**full feature parity** vs `@schpet/linear-cli` (modulo deliberately-skipped
-interactive-only ergonomics — see §3 out-of-scope) and a complete MCP server
-that exceeds what Linear's hosted MCP exposes.
-
-Versioning ramps to 1.0.0 only when this section is complete.
+The shipped surface in §3 is the public release surface for the `0.0.3`
+line: agent-oriented CLI + MCP tooling, reviewed publish, context
+materialization, cache/stale-guard workflows, and deliberately skipped
+interactive-only ergonomics (see §3 out-of-scope).
 
 ### 13.1 Robustness & internal foundations
 
@@ -1510,28 +1806,38 @@ Versioning ramps to 1.0.0 only when this section is complete.
   The MCP server consumes lib directly.
 - ✅ **Structured error taxonomy** — `LebopError` base + `AuthError`,
   `ConfigError`, `ValidationError`, `CASError`, `NetworkError`,
-  `RateLimitError`, `NotFoundError`, `InvalidArgumentsError` (round-6 /
-  H11, MCP-only — emitted by the envelope-validator when zod input
-  validation rejects unknown keys or type mismatches; carries an
-  `issues[]` array of per-field detail). Stable `code` field on every
+  `RateLimitError`, `PermissionError`, `NotFoundError`,
+  `InvalidArgumentsError` (MCP-only,
+  emitted by the envelope validator when zod input validation rejects
+  unknown keys or type mismatches; carries an `issues[]` array of per-field
+  detail). Stable `code` field on every
   error (`"auth_error" | "config_error" | "validation_error" |
-  "cas_error" | "network_error" | "rate_limit_error" | "not_found" |
-  "invalid_arguments"`) for programmatic consumers; optional `hint` for
+  "cas_error" | "network_error" | "rate_limit_error" |
+  "permission_error" | "not_found" | "invalid_arguments"`) for programmatic consumers; optional `hint` for
   user-facing remediation. SDK-boundary
   `mapSdkError` (in `lib/errors.ts`) classifies raw `@linear/sdk` failures
   by structured `extensions.code` first, then by message regex — so
-  callers don't grep error strings. CLI handler renders
+  callers don't grep error strings. `PermissionError` covers Linear
+  permission failures such as `FORBIDDEN`, `PERMISSION_DENIED`,
+  `INSUFFICIENT_PERMISSIONS`, `ACCESS_DENIED`, HTTP 403, and common
+  permission-message fallbacks. CLI handler renders
   `error[code]: msg` + `hint:` line; MCP server maps to MCP error
   responses preserving `code` + `hint`.
-- ✅ **Cursor pagination everywhere** — `lib/paginate.ts` exposes
-  `paginateConnection` (SDK) and `paginateRaw` (GraphQL). All list ops walk
-  pages; comments fragment bumped 100→250 with overflow warning.
+- ✅ **Cursor-safe pagination primitives and surfaced continuations** —
+  `lib/paginate.ts` exposes `paginateConnection` (SDK) and `paginateRaw`
+  (GraphQL). Cursor-backed issue, project, and workspace discovery surfaces
+  expose continuation tokens. Some PM-object list commands remain bounded by
+  `--limit` without a user-facing cursor; those surfaces should be treated as
+  capped result sets, not complete inventories.
 - ✅ **Retry + rate-limit handling** at the SDK boundary — `lib/retry.ts`
   classifies thrown errors (`rate-limit` / `transient` / `non-retryable`)
-  and applies exponential backoff with ±20% jitter on the first two.
+  and applies `Retry-After` / reset-aware delays where Linear provides them,
+  falling back to exponential backoff with ±20% jitter on the first two.
   Every SDK call routed through `withClient` in `lib/sdk.ts` gets it for
-  free. `RateLimitError` after the retry budget is exhausted;
-  `NetworkError` for transient failures.
+  free. The SDK transport hook observes rate-limit/complexity headers for
+  both raw GraphQL calls and generated SDK model calls. `RateLimitError`
+  after the retry budget is exhausted includes structured `details` when
+  Linear exposed budget headers; `NetworkError` for transient failures.
 - ✅ **`status` shows "stale (remote newer)"** — `lebop status` queries
   remote `updatedAt` for every clean entry (`--no-remote` to skip);
   staleness surfaces as its own bucket in human + JSON output. Same path
@@ -1541,33 +1847,38 @@ Versioning ramps to 1.0.0 only when this section is complete.
   out to the built CLI through a process-spawning harness, exercising
   auth/error/exit-code/JSON shapes. Adds ~30 CLI-level tests on top of
   the lib suite.
-- ⬜ **Per-issue paginated comment fetch** — for the rare >250-comments-per-
-  issue case. Today: warning emitted; full pagination is a follow-up.
+- ✅ **Per-issue paginated comment fetch** — comment list/fetch paths page
+  through issue comments instead of stopping at the first Linear connection
+  page; truncated workspace dossiers include child continuations.
 
-### 13.2 Feature parity with `@schpet/linear-cli`
+### 13.2 Shipped parity and explicit remaining gaps
 
-Full parity except interactive-only ergonomics deliberately out of scope (§3).
+The rows below describe the current shipped CLI/MCP surface. Planned gaps are
+called out explicitly so agents do not select commands or flags that do not
+exist yet. Interactive-only ergonomics remain deliberately out of scope (§3).
 
-| Surface | Add |
-|---|---|
-| **Auth** | `auth list`, `auth default`, `auth token`, `auth migrate`, system keyring credential storage with `--plaintext` opt-out, `--workspace <slug>` on every command |
-| **Issues** | `mine`, `unarchive`, `set` accepts `estimate` / `parent` / `project` / `milestone` / `cycle` / `due-date`, `new` same. `set description --description-file` (currently refused). |
-| **Issue attach + link** | `issue attach <id> <file> [--title --comment]` (file upload), `issue link <id> <url> [--title]` (URL attach) |
-| **List filters** | `--search`, `--search-comments`, `--unassigned`, `--cycle`, `--milestone`, `--created-after`, `--include-archived`, `--all-teams`, `--all-states` |
-| **Relations** | First-class verb: `relation add\|delete\|list <id> blocks\|blocked-by\|related\|duplicate <other>` (in addition to existing `set links` delta syntax) |
-| **Comments** | `comment list`, `comment update`, `comment delete`, `comment add --parent` (replies), `comment add --attach`, `comment --body-file` |
-| **Bulk** | `archive --bulk-file`, `archive --bulk-stdin` |
-| **Labels** | `label list\|create\|delete` (workspace + team-scoped) |
-| **Projects** | `project create\|update\|delete\|view`, `project-update create\|list --health` |
-| **Milestones** | `milestone list\|view\|create\|update\|delete --project` |
-| **Initiatives** | `initiative list\|view\|create\|update\|delete\|archive\|unarchive\|add-project\|remove-project`, `initiative-update create\|list --health` |
-| **Cycles** | `cycle list\|view` (CRUD via `raw` for now) |
-| **Documents** | `document list\|view\|create\|update\|delete` (workspace, project, issue scoped; `--edit` opens `$EDITOR`) |
-| **Agent sessions** | `agent-session list\|view` — Linear's first-class agent feature |
-| **Teams** | `team members [team-key] [--all]` (lists active + optional inactive members) |
-| **Schema** | `lebop schema [-o file]` (offline GraphQL schema dump) |
-| **Raw** | `--paginate`, `--variable k=v` (with `@file` for file-backed values) |
-| **Completions** | `lebop completions bash\|zsh\|fish` |
+| Surface | Shipped now | Remaining / planned |
+|---|---|---|
+| **Auth** | `auth login`, `auth logout`, `auth list`, `auth default`, `auth token`, `auth whoami`, `auth set-default-team`, top-level `--workspace <slug>` | System keyring storage / `--plaintext` are not shipped; use mode-0600 auth JSON. `auth migrate` is not a command; v1 files auto-migrate on read. |
+| **Issues** | `mine`, `unarchive`, `new`, `set` for title/description/state/priority/estimate/assignee/labels/parent/project/milestone/cycle/links; `new` accepts project/state/priority/estimate/labels/assignee/description; MCP `update_issue` supports the same direct issue fields except links, including exact labels plus `labels_add` / `labels_remove`, and can update multiple fields in one call | CLI `set due-date` and direct `set content` are not shipped as point edits. |
+| **Issue attachments + links** | `link <issue> <url> [--title]`; `attachment list\|update\|delete` for Linear URL attachments | File upload attachment creation is not shipped. Attachment URL updates are not supported by Linear's update input; delete + relink instead. |
+| **List filters** | `--search`, `--unassigned`, `--cycle`, `--milestone`, `--created-after`, `--updated-since`, `--include-archived`, `--all-teams`, `--state-type`; `mine --all-states` | `--search-comments` is not shipped. |
+| **Relations** | First-class verb: `relation add\|delete\|list <id> blocks\|blocked-by\|related\|duplicates\|duplicated-by <other>` plus existing `set links` delta syntax; MCP `update_relations` is the one-call batch equivalent for relation deltas | `similar` is intentionally left to `raw`. |
+| **Comments** | `comment list`, `comment update`, `comment delete`, `comment add --parent`, `comment add --body-file`, `comment add --stdin` | Comment attachments are not shipped. |
+| **Bulk** | `archive --bulk-file`, `archive --bulk-stdin`; `bulk update <identifiers...> --state/--priority/--label/--assignee/--estimate/--project/--milestone/--cycle [--dry-run] [--yes\|--confirm]` | `bulk update --from-file` / `--stdin` is not shipped. Real bulk mutations require `--yes` or `--confirm`; use `--dry-run` to preview without confirmation. |
+| **Labels** | `label list\|create\|delete` (workspace + team-scoped) | |
+| **Projects** | `project create\|update\|delete\|view`, `project-update create\|list --health` | |
+| **Milestones** | `milestone list\|view\|create\|update\|delete --project` | |
+| **Initiatives** | `initiative list\|view\|create\|update\|delete\|archive\|unarchive\|add-project\|remove-project`, `initiative-update create\|list --health` | |
+| **Cycles** | `cycle list\|view` | Cycle create/update/delete remain via `raw` for now. |
+| **Documents** | `document list\|view\|create\|update\|delete` for project-scoped documents; workspace context can explore/fetch issue-scoped documents | Workspace/issue scoped document creation and `--edit` are not shipped. |
+| **Workspace context** | `workspace explore`, `workspace fetch` for ls-style discovery and local context dossiers | |
+| **Publish workflow** | `publish review --plan <dir>`, `publish review --cache [IDS...] [--project-id UUID...] [--all-modified]`, `publish apply <review-id>` for reviewed plan/cache publishing | |
+| **Agent sessions** | `agent-session list\|view` — Linear's first-class agent feature | |
+| **Teams** | `teams`, `team members [team-key] [--all]`, `team get <key-or-id>`, `team workflow-states [team-key]` | Team create/delete/autolinks are UI-managed; use raw GraphQL only when explicitly requested. |
+| **Schema** | `lebop schema [-o file]` (offline GraphQL schema dump) | |
+| **Raw** | `--paginate`, `--variable k=v` (with `@file` for file-backed values) | |
+| **Completions** | `lebop completions bash\|zsh\|fish` | |
 
 ### 13.3 MCP server (`lebop mcp`) — ✅ shipped
 
@@ -1575,29 +1886,75 @@ Full parity except interactive-only ergonomics deliberately out of scope (§3).
 distribution and matches Cursor / Claude Desktop / Windsurf expectations.
 HTTP+SSE transport is post-release for hosted/multi-user setups.
 
+Minimal MCP client config, using an absolute binary path:
+
+```json
+{
+  "mcpServers": {
+    "lebop": {
+      "command": "/Users/you/.local/bin/lebop",
+      "args": ["mcp"],
+      "env": {
+        "LEBOP_WORKSPACE": "noxor"
+      }
+    }
+  }
+}
+```
+
+Cursor project config (`.cursor/mcp.json`) uses the same command shape:
+
+```json
+{
+  "mcpServers": {
+    "lebop": {
+      "command": "/Users/you/.local/bin/lebop",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
 - **Auth**: bearer-token via existing `~/.lebop/auth.json`. OAuth dynamic
   client registration (like Linear's hosted MCP) is post-release.
-- **Layout**: `src/mcp/server.ts` registers tools that delegate directly
-  to `lib/` functions — no logic duplication. Uses
-  `@modelcontextprotocol/sdk`.
-- **Per-call workspace selection**: every tool accepts an optional
-  `workspace` arg. The shared `safe()` decorator captures the prior
-  `LEBOP_WORKSPACE` env on entry, applies the override if provided, and
-  restores in `finally` — preventing one tool call from leaking workspace
-  state into the next.
+- **Layout**: `src/mcp/server.ts` registers tools over shared `lib/`
+  behavior, with remaining adapter/workflow duplication being migrated
+  through domain surface contracts. Uses `@modelcontextprotocol/sdk`.
+- **Per-call workspace selection**: Linear remote tools accept an optional
+  `workspace` arg, except local/auth helpers where a workspace override
+  would be misleading (`lint_text`, `cache_gc`, `list_workspaces`,
+  `set_default_workspace`) and `set_workspace_default_team`, which names
+  the target with `workspace_slug`. The shared `safe()` decorator applies
+  the override for the duration of one tool call so workspace state does
+  not leak into the next call.
+- **Repo boundary**: per-call `workspace` is for selecting the authenticated
+  Linear workspace for that one request. The local cache/context key is still
+  the repo path, so a normal repo checkout should target one Linear workspace;
+  use sibling clones when the same codebase must be operated against multiple
+  Linear workspaces.
 - **Errors**: every tool handler is wrapped with `safe()`, which catches
   thrown errors and serializes via `formatToolError` into
   `{content: [{type, text}], isError: true}` with `LebopError.code` +
   `hint` preserved. MCP clients see the structured taxonomy.
 
-#### Shipped tools (73)
+#### Shipped tools (85)
 
-**Issues — list** (1): `list_issues`
+**Workspace context** (2): `explore_linear_workspace`,
+`fetch_linear_workspace`
+
+**Publish workflow** (2): `review_linear_changes`,
+`publish_linear_changes`
+
+**Issues — list** (1): `list_issues` — matches the CLI list command; pass
+assignee "me" plus active_only true for mine semantics in one MCP call, or
+pass all_states true / explicit state type filters to change that
+active-work default.
 
 **Issues — lifecycle** (5): `get_issue`, `create_issue`, `update_issue`,
 `archive_issue`, `unarchive_issue`
 
-**Relations** (2): `add_relation`, `list_relations`
+**Relations** (4): `add_relation`, `update_relations`, `list_relations`,
+`delete_relation`
 
 **Comments** (4): `list_comments`, `add_comment`, `update_comment`,
 `delete_comment`
@@ -1625,23 +1982,23 @@ HTTP+SSE transport is post-release for hosted/multi-user setups.
 
 **Agent sessions** (2): `list_agent_sessions`, `get_agent_session`
 
-**Teams** (2): `list_team_members`, `get_team`
+**Teams** (3): `list_teams`, `list_team_members`, `get_team`
 
 **Attachments** (3): `list_attachments`, `update_attachment`,
 `delete_attachment`
 
-**Cache loop** (5): `pull_issues`, `push_changes`, `cache_status`,
-`diff_issue`, `cache_gc`
+**Cache loop** (7): `pull_issues`, `pull_project`, `push_changes`,
+`cache_status`, `diff_issue`, `diff_project`, `cache_gc`
 
-**Plan workflow** (4): `plan_validate`, `plan_apply`, `plan_diff`,
-`plan_pull`
+**Plan workflow** (5): `plan_validate`, `plan_lint`, `plan_apply`,
+`plan_diff`, `plan_pull`
 
-**Workspace mgmt** (4): `list_workspaces`, `set_default_workspace`,
-`whoami`, `set_workspace_default_team`
+**Workspace mgmt** (5): `list_workspaces`, `set_default_workspace`,
+`whoami`, `refresh_whoami`, `set_workspace_default_team`
 
-**Bulk** (1): `bulk_update_issues` — partial-success batch update with
-per-row result; the patch is resolved once and applied to every
-identifier.
+**Bulk** (1): `bulk_update_issues` — dry-run preview or partial-success batch
+update with per-row result; the patch is resolved once and applied to every
+identifier. Real mutations require `confirm: true`.
 
 **Lookups** (2): `lookup_state_by_name`, `lookup_user_by_email`
 
@@ -1651,63 +2008,157 @@ identifier.
 
 **GraphQL escape hatch** (1): `raw_graphql`
 
-**Differentiator** (1): `lint_text` — runs the full rule set
-(L001-L006 universal + R001-R002 repo-scoped) against arbitrary
-markdown. Neither linear-cli nor Linear's hosted MCP exposes this.
+**Linter** (2): `lint_files` mirrors `lebop lint` for explicit local markdown
+paths or cached markdown for the resolved repo/team, including fix and strict
+modes. With `fix: true`, `lint_files` writes safe file fixes and reports
+remaining post-fix warnings. `lint_text` runs the in-memory renderer rule set
+(`L001`, `L002`, `L003`, `L005`, `L006`) against arbitrary markdown content.
+With `fix: true`, `lint_text` returns fixed content, fix pass count, remaining
+warning count, and remaining warnings without touching files.
 
-#### MCP tool inventory (73 tools)
+#### MCP tool inventory (85 tools)
 
-The MCP server is **self-sufficient** — agents (especially in fully
-sandboxed containers / VMs where Linear's hosted OAuth-based MCP isn't
-reachable) can drive every lebop feature without shelling out to the
-CLI.
+The MCP server is intended to be self-sufficient for shipped agent workflows —
+agents, including fully sandboxed containers / VMs where Linear's hosted
+OAuth-based MCP is not reachable, can drive the main read/context, cache,
+publish, plan, and direct-mutation flows without shelling out to the CLI.
+Known parity gaps and CLI-only conveniences are called out in this spec rather
+than hidden behind broad "every feature" claims.
+
+For list tools with a team scope, omitted `team` resolves the same
+configured default team as the CLI. Pass `all_teams: true` on
+`list_issues`, `list_projects`, or `list_cycles` when the intended scope is
+workspace-wide. `list_labels` defaults to the resolved team scope; pass
+`all: true` for every visible label or `workspace_only: true` for workspace
+labels only. List responses include explicit scope fields so agents can see
+the resolved scope without an extra config call.
+
+Manifest-marked destructive tools require `confirm: true` in addition to host
+annotations. This keeps destructive MCP calls deterministic across hosts;
+already-absent targets still return their idempotent status after confirmation.
+
+Always-confirm destructive tools include delete tools plus non-delete
+destructive tools such as `archive_issue`, `archive_initiative`, and
+`initiative_remove_project`. Some otherwise-normal tools require confirmation
+only for modes that can overwrite local files, bypass review/staleness checks,
+or remove cached state:
+
+| MCP tool | `confirm: true` required when |
+|---|---|
+| `pull_issues` | `refresh: true` because cached local edits may be overwritten |
+| `pull_project` | `refresh: true` because cached project or issue edits may be overwritten |
+| `push_changes` | `force: true` and `dry_run` is not true, because staleness protection is bypassed |
+| `plan_apply` | `force: true` and `dry_run` is not true, because reviewed remote freshness checks are bypassed for existing entities |
+| `plan_pull` | `force: true` because plan files may be overwritten |
+| `cache_gc` | `dry_run: false` because cached rows/directories are removed |
+| `bulk_update_issues` | `dry_run` is not true because remote issues are mutated |
+| `add_relation` | Preflight reports a relation replacement or duplicate side-effect hazard |
+| `update_relations` | Any remove delta; add deltas when preflight reports replacement or duplicate side-effect hazards |
+| `raw_graphql` | GraphQL mutation operations because they bypass first-class review/validation |
 
 Issue lifecycle: `get_issue`, `create_issue`, `update_issue`,
-`archive_issue`, `unarchive_issue`.
+`archive_issue`, `unarchive_issue`. `update_issue` maps to CLI `set` for
+point edits. It supports the same direct issue-update fields as CLI `set`
+except `links`, and can update several fields in one call. Like CLI direct
+point edits, it writes directly and does not use the local cache `updatedAt`
+snapshot.
+When inline relation summaries overflow, `get_issue.completeness.relations`
+includes a continuation pointing at `list_relations` with the issue identifier.
+
+Workspace context: `explore_linear_workspace`,
+`fetch_linear_workspace`. These are the MCP equivalents of `lebop workspace
+explore` and `lebop workspace fetch`. `explore_linear_workspace` returns
+concise paths and next paths for Linear workspace discovery/search; it does
+not return long bodies. Collection/team paths are marked `fetchable: false`;
+concrete project, issue, initiative, document, cycle, milestone, and
+agent-session paths are fetchable. Top-level project/initiative/issue listings, supported child
+listings, and workspace search return `has_more`, `next_cursor`, and page
+metadata for cursor continuation. Non-cursor-backed capped collections return
+`page.bounded.continuation: "not_available"` so agents know the result is
+bounded, not complete. `fetch_linear_workspace` writes bounded project,
+issue, initiative, document, cycle, milestone, or agent-session dossiers under
+`~/.lebop/context/<repo-hash>/` (or the caller's `to` directory) and
+returns a compact manifest. Omitted `include` uses defaults, explicit
+`include: []` fetches only the root entity shell, omitted `depth` defaults
+to `full`, and truncated manifests include `continuations` with exact
+follow-up tool arguments.
+
+Publish workflow: `review_linear_changes`, `publish_linear_changes`.
+`review_linear_changes` validates, lints, diffs, dry-runs, and stores a
+review record for a plan directory or modified cache rows. Cache sources
+use `source: { kind: "cache", identifiers?, project_ids?, all_modified?,
+repo_root? }`; pass `identifiers`, `project_ids`, or `all_modified: true`.
+Do not combine `all_modified: true` with explicit target selectors.
+`publish_linear_changes` accepts the returned `review_id`, refuses if the
+reviewed local hash or remote `updatedAt` snapshot changed after review,
+publishes through the shared plan/cache apply path, and verifies by
+default.
 
 Comments: `list_comments`, `add_comment`, `update_comment`,
 `delete_comment`.
 
-Cache loop: `pull_issues`, `push_changes`, `cache_status`, `diff_issue`.
-All accept an optional `repo_root` path arg; default behavior uses the
-MCP server's cwd → git-root resolution (same as the CLI).
-**Note**: `push_changes` over MCP currently handles `title` +
-`description` field updates; state/priority/labels/assignee/parent
-require team-metadata resolution and route through `update_issue` (with
-explicit `team` arg) for the MCP path. The CLI `lebop push` continues to
-handle every field type.
+Cache loop: `pull_issues`, `pull_project`, `push_changes`,
+`cache_status`, `diff_issue`, `diff_project`. All accept an optional `repo_root` path
+arg; default behavior uses the MCP server's cwd → git-root resolution
+(same as the CLI). `pull_issues` accepts CLI-style identifier ranges such as
+`NOX-1..NOX-3`. Both `pull_issues` and `pull_project` also accept `to` to use
+the same export-only filesystem mode as CLI `pull --to` instead of writing the
+cache. `pull_project` mirrors `lebop pull --project-id / --project`: project
+names resolve through the live paginated project list for the resolved team,
+then the tool writes project metadata/content plus all child issues in one tool
+call. `pull_project.extra_identifiers` accepts issue identifiers or ranges to
+pull alongside the project in that same call, which is the one-call
+project-plus-extra-issues path for agents. `push_changes` handles both issue
+and project cache rows;
+issue pushes share the CLI field resolver for title, description, state,
+priority, estimate, labels, assignee, and parent, while project pushes
+cover name, description, icon, state, start date, target date, and content.
 
-Plan workflow: `plan_validate`, `plan_apply`, `plan_diff`, `plan_pull`.
+Plan workflow: `plan_validate`, `plan_lint`, `plan_apply`, `plan_diff`,
+`plan_pull`.
 All take a `dir` path arg — canonical filesystem-MCP pattern. Since
 lebop's MCP is stdio-only, the server runs in the same filesystem
 context as the agent; passing absolute or cwd-relative paths just
 works.
 
-Project / Initiative / Label / Milestone / Document / Cycle /
-Agent-session / Team-member CRUD: shipped in earlier rounds (see git
-history for the §13.3 reconciliation).
+PM object coverage: project CRUD, initiative CRUD, label list/create/delete,
+milestone CRUD, project-scoped document CRUD, cycle list/view, agent-session
+list/view, and team list/detail/member tools (`list_teams`, `get_team`,
+`list_team_members`) are shipped in the current release surface; see the
+command reference and MCP inventory for exact arguments.
 
 GraphQL escape hatch: `raw_graphql` (with optional `paginate` to walk
-top-level connections).
+top-level connections). Mutations require `allow_mutation: true` and
+`confirm: true`. MCP always
+returns `{schema_version, data}`; with `paginate: true`, `data` is the merged
+GraphQL response data after walking the selected top-level connection.
 
 Workspace management: `list_workspaces`, `set_default_workspace`,
-`whoami`.
+`set_workspace_default_team`, `whoami`, `refresh_whoami`. `whoami` is
+read-only cached auth metadata; `refresh_whoami` revalidates against Linear
+and persists refreshed viewer/workspace metadata.
 
 Cache maintenance: `cache_gc` — mirrors `lebop cache gc`; reports or
 removes stale per-repo subdirs under `~/.lebop/cache/`, dry-run by
 default, cwd-repo preserved.
 
-Linter: `lint_text` — the lebop-only differentiator that catches Linear
-markdown-renderer quirks (L001–L006 universal + R001–R002 repo-scoped)
-before push. Invalid repo-scoped regex configs now surface as their own
-`R002` warning at line 1 instead of being silently dropped.
+Linter: `lint_files` mirrors `lebop lint` for explicit local markdown paths or
+cached markdown in the resolved repo/team, including `fix` and `strict`.
+`lint_text` remains the content-string helper for MCP callers that need
+in-memory `L001`, `L002`, `L003`, `L005`, and `L006` checks without touching
+files. Repo-scoped rules such as `L004`, `R001`, and `R002` require path/repo
+context and run through `lint_files` / CLI file lint.
 
-#### CLI-only by design (3 commands)
+#### CLI-only / exception surfaces (6 commands)
 
 These genuinely don't make sense over JSON-RPC:
 
 - `auth login` — interactive hidden-input prompt for the PAK; MCP can't
   render password input.
+- `auth logout` — local credential teardown; keep it an explicit shell-side
+  action rather than a remote MCP tool.
+- `auth token` — secret-printing escape hatch; intentionally CLI-only.
+- `schema` — offline GraphQL schema export for local files/tooling.
 - `completions <shell>` — generates a shell script to source.
 - `mcp` — the MCP server itself.
 
@@ -1724,38 +2175,62 @@ Shipped:
 - `LICENSE` (MIT), `CONTRIBUTING.md`
 - `.github/workflows/ci.yml` (bun install → biome → tsc → vitest on
   every push/PR)
-- `.github/workflows/canary.yml` — nightly smoke against the noxor
-  sandbox workspace (read-paths + MCP handshake). Catches Linear API
-  schema drift within ~24h. Requires `LEBOP_NOXOR_TOKEN` repo secret
-  scoped to a sandbox workspace.
+- `.github/workflows/canary.yml` — daily read smoke against the noxor
+  sandbox workspace (read-paths + MCP handshake), plus a write-enabled
+  full-surface harness on Monday schedules and `workflow_dispatch` with
+  strict JSON report validation. Requires `LEBOP_NOXOR_TOKEN` repo secret
+  scoped to the sandbox workspace.
+- `bun scripts/live-nox-surface-smoke.mjs` —
+  source-checkout-only full-surface live validation harness for the NOX/Noxor
+  sandbox.
+  Writes reports under ignored `docs/local/` and best-effort
+  archives/deletes resources it creates. The harness now records semantic
+  assertions for high-risk publish/context/write operations, including
+  milestone issue context paths backed by issues it creates during the run.
+  Fixture gaps are hard failures for full-surface release runs. The harness
+  has an explicit gap allowlist with reasons and expiry dates, but the
+  allowlist is for triage only: a release-valid report still requires zero
+  gaps.
+- `bun scripts/live-nox-surface-smoke.mjs --validate-report <report.json>` —
+  source-checkout-only validator for a full live report completed with zero
+  failed steps, zero gaps, zero cleanup failures,
+  complete required CLI/MCP coverage, complete required semantic assertion
+  coverage, and any supplied provenance expectations
+  (`LEBOP_LIVE_EXPECT_WORKSPACE`, `LEBOP_LIVE_EXPECT_TEAM`,
+  `LEBOP_LIVE_EXPECT_STAMP`, `LEBOP_LIVE_EXPECT_BIN_MODE`,
+  `LEBOP_LIVE_EXPECT_VERSION`, `LEBOP_LIVE_EXPECT_BIN_SHA256`).
+- `src/lib/toolSurfaceManifest.ts` and `src/lib/toolBehaviorContracts.ts` —
+  source-controlled CLI/MCP parity plus high-risk behavior contracts used by
+  local tests and live report validation.
 - `.github/workflows/release.yml` — tag-triggered, builds 4 platform
   binaries (`bun build --compile --target=bun-{darwin,linux}-{x64,arm64}`),
-  attaches them to a GitHub release with aggregated `SHA256SUMS`
+  gates release builds on the full Noxor live report validator, runs the
+  compiled Linux x64 full live smoke with `LEBOP_LIVE_EXPECT_BIN_MODE:
+  compiled-binary`, validates exact workspace/team/stamp plus binary
+  provenance (`version`, SHA-256, `size_bytes`, platform, arch), and attaches
+  binaries to a GitHub release with aggregated `SHA256SUMS`
 - `.github/ISSUE_TEMPLATE/{bug.yml,feature.yml}` +
   `PULL_REQUEST_TEMPLATE.md`
 - `package.json` publish fields: `license`, `author`, `repository`,
-  `homepage`, `bugs`, `keywords`, `files`, `publishConfig`,
-  `typecheck` script
+  `homepage`, `bugs`, `keywords`, `files`, `typecheck` script
 - `scripts/install.sh` — one-liner installer: detects OS+arch, downloads
   the matching binary, verifies SHA256 against `SHA256SUMS`, drops in
   `~/.local/bin` (or `/usr/local/bin` with sudo). Honors
   `LEBOP_VERSION`, `LEBOP_INSTALL_DIR`, `LEBOP_REPO`.
 - README badges (CI status, latest release, license, runtime)
-- `lebop completions <bash|zsh|fish>` (see §8.12)
+- `lebop completions <bash|zsh|fish>` (see §8.28)
 
-Deferred (post-first-release):
+Deferred:
 
-- asciinema cast or animated demo in README — needs a working public
-  release to record against
 - npm publish + Homebrew tap — GitHub Releases + install script is the
-  single distribution path at first release. npm + brew are follow-ups
-  after public adoption signal.
+  current distribution path. npm + brew are follow-ups after public
+  adoption signal.
 
 ---
 
-## 14. Out of scope post-public-release
+## 14. Future / out of scope
 
-These are genuinely future, not pre-release:
+These are deliberately future work:
 
 - **App-actor OAuth** — register a Linear OAuth app; use `actor=app` so
   agent mutations attribute to the app identity (separate from the human
@@ -1765,11 +2240,13 @@ These are genuinely future, not pre-release:
 - **`lebop new --from <template>`** — template-driven scaffolding.
 - **Sort control** on `list` — minor ergonomics.
 - **Default-template handling** on `new` (`--no-use-default-template`).
-- **`team create` / `delete` / `autolinks`** — rare ops; `raw` covers.
+- **`team create` / `delete` / `autolinks`** — rare UI-managed ops; use raw
+  GraphQL only when explicitly requested.
 - **Comment edit on existing comment via cache** — comments stay read-only
   in the cache; mutate via `comment update` direct command.
-- **Per-field CAS** — Linear API doesn't expose per-field versioning;
-  entity-level CAS is the safe failure mode.
+- **Per-field or server-side CAS** — Linear API doesn't expose per-field
+  versioning or an update precondition; entity-level stale refusal is the safe
+  failure mode.
 - **Watch mode / autopush** — explicit action only.
 
 ---
@@ -1782,7 +2259,7 @@ These are genuinely future, not pre-release:
 - ~30 ms cold start vs ~150 ms for `tsx`/`ts-node`. Matters for repeated
   `lebop status` invocations.
 - `Bun.file` / `Bun.write` for atomic I/O; fewer dependencies.
-- `bun build --compile` produces single-file binaries — the public-release
+- `bun build --compile` produces single-file binaries — the GitHub Releases
   distribution path.
 - `tsconfig.json` is strict: `noUncheckedIndexedAccess`, `module:
   "Preserve"`, `moduleResolution: "bundler"`.
@@ -1813,33 +2290,43 @@ Deterministic, short, keeps multi-repo caches separated.
 All cache writes go via temp-file + `rename`. No partial writes visible to a
 concurrent reader.
 
-### 15.5 CAS edge cases
+### 15.5 Stale-guard edge cases
 
 - `updatedAt` bumps on any field edit → false-positive conflicts possible
   if someone edits an unrelated field between pull and push. Accepted —
   safer to over-refuse than clobber.
-- CAS is **entity-level, not field-level**. Linear's API doesn't expose
-  per-field version tokens, so there's no way to say "abort only if *this*
-  field changed remotely." Over-refusal is the safe failure mode; tighten
-  if/when Linear ships per-field versioning.
-- `--force` is the escape hatch.
+- The guard is **entity-level, not field-level**. Linear's API doesn't expose
+  per-field version tokens or mutation-level `expectedUpdatedAt`, so there's
+  no way to say "abort only if *this* field changed remotely" or make the
+  compare-and-update atomic. Over-refusal is the safe failure mode; tighten
+  if/when Linear ships server-side preconditions.
+- `--force --yes` is the escape hatch for mutating CLI commands.
 
 ### 15.6 JSON output
 
-Every read command (`list`, `projects`, `teams`, `show`, `pull` summary,
-`status`, `diff`, `whoami`) accepts `--json`. Default is human-readable;
-`--json` emits a stable, versioned schema (`{ "schema_version": 1, ... }`)
-suitable for programmatic composition. Write commands respect `--json` by
-emitting per-entity result objects.
+Commands intended for agent composition accept `--json` unless their
+signature says otherwise. Default CLI output is human-readable; `--json`
+emits stable structured output suitable for programmatic composition. The
+tool-surface manifest and behavior contract tests define the expected CLI/MCP
+pairs and any required payload invariants.
 
-**Intentional CLI/MCP asymmetry — `raw` / `raw_graphql`:** every other
-paired CLI/MCP operation emits the same envelope on both surfaces. `lebop
-raw` is the documented exception: it prints Linear's raw `response.data`
-with NO `schema_version` wrap so callers can pipe directly to `jq`. The
-MCP `raw_graphql` tool wraps `{schema_version, data}` like every other
-MCP tool. If you're consuming the JSON programmatically across both
-surfaces, account for this one field of drift; for everything else the
-envelopes are identical.
+CLI and MCP should expose equivalent behavior, but callers should not assume
+byte-identical envelopes across mediums unless a specific command/tool
+contract says so. Known transport-shaped differences include not-found/error
+envelopes and several list/view wrappers while those contracts are being
+tightened.
+
+Some JSON/MCP responses include optional `_meta` sidecars. `_meta.linear_api`
+is emitted only when Linear response headers exposed API budget data during
+that command/tool call. It is additive, may be absent, and must not be used as
+a replacement for domain fields such as `has_more`, `next_cursor`,
+`truncated`, `completeness`, or fetch `continuations`.
+
+**Intentional CLI/MCP asymmetry — `raw` / `raw_graphql`:** `lebop raw`
+prints Linear's raw `response.data` with no `schema_version` wrapper so
+callers can pipe directly to `jq`. The MCP `raw_graphql` tool wraps its
+payload in an MCP-safe structured response, including `paginate: true`
+responses.
 
 ### 15.7 Exit code convention
 
@@ -1849,7 +2336,7 @@ lebop follows a `gh`-style two-code split:
 - **`1`** — runtime or validation failure that surfaced after the CLI
   parser accepted the invocation. Covers `LebopError` subtypes
   (`AuthError`, `ConfigError`, `ValidationError`, `NotFoundError`,
-  `RateLimitError`, `NetworkError`, `CASError`,
+  `RateLimitError`, `PermissionError`, `NetworkError`, `CASError`,
   `InvalidArgumentsError`), Linear API rejections, and explicit
   `process.exitCode = 1` paths like the destructive-delete `--yes`
   gate. This is the default for anything thrown out of an action
@@ -1857,7 +2344,7 @@ lebop follows a `gh`-style two-code split:
 - **`2`** — command-syntax error rejected by commander's parser
   before any action body ran. Unknown subcommand, unknown option,
   missing required argument, wrong-arity positionals. Routed via
-  `exitOverride` in `cli.ts` (round-8 / R8-LOW-7).
+  `exitOverride` in `cli.ts`.
 
 Scripts that only care "did it succeed" should check `$? -eq 0`. Scripts
 that want to distinguish "I mis-typed the command" from "the command ran
@@ -1877,7 +2364,7 @@ if commander rejected it, you'll see 2. `--help` and `--version` exit 0.
 ## 16. Why not just `@schpet/linear-cli` or the Linear MCP?
 
 **Best for agents, sufficient for humans.** lebop is built around the agent
-use case — bulk markdown editing, declarative plans, lint, CAS, MCP. A
+use case — bulk markdown editing, declarative plans, lint, stale guards, MCP. A
 human using lebop interactively gets a competent CLI, but lebop intentionally
 skips ergonomics linear-cli does well: `issue start` (state change + branch
 creation), `pull-request` (gh-cli wrapper), browser-open shortcuts, jj/git-
@@ -1885,7 +2372,7 @@ aware issue inference.
 
 **For agent-driven work**, lebop replaces both `@schpet/linear-cli` and the
 official Linear MCP server. **For solo human work**, pair lebop (bulk + plan
-+ agent + CAS) with linear-cli (interactive single-issue flows it specializes
++ agent + stale guard) with linear-cli (interactive single-issue flows it specializes
 in).
 
 | | `@schpet/linear-cli` | Linear MCP server | lebop |
@@ -1894,19 +2381,19 @@ in).
 | Input | Flags per field | Per-tool params | Markdown files, flags, MCP — caller's choice |
 | Round-trip | Per-command | Per-tool-call | Pull → edit → push, plan → diff → pull |
 | Mutation batching | Sequential CLI | Sequential tool calls | One call per plan or one multi-alias push |
-| CAS / staleness | None | None | `updatedAt` check; `--force` to bypass |
-| Markdown lint | None | None | 8 rules (L001–L006 universal + R001–R002 repo-scoped) |
+| Staleness guard | None | None | `updatedAt` check; `--force --yes` to bypass |
+| Markdown lint | None | None | 8 rules (in-memory L001/L002/L003/L005/L006 + repo-scoped L004/R001/R002) |
 | Declarative planning | Not a goal | Not exposed | **Hero feature** (`plan apply`) |
 | GraphQL escape hatch | Yes (`api`) | No | Yes (`raw`) |
 | Local cache | No | No | Yes (`~/.lebop/cache/`) |
 | Distribution | npm | Hosted | Bun-compiled binaries via GitHub Releases |
 | `issue start` / branch creation / `pr` | Yes | No | **Deliberately skipped** — use linear-cli |
-| Multi-workspace `--workspace` flag | Yes | N/A (per-server) | Yes (post-pre-release work) |
-| File / URL attachments | Yes | No | Yes (post-pre-release work) |
-| Initiatives + agent-sessions | Yes | No | Yes (post-pre-release work) |
+| Multi-workspace `--workspace` flag | Yes | N/A (per-server) | Yes |
+| File / URL attachments | Yes | No | URL attachment lifecycle; file upload creation remains planned |
+| Initiatives + agent-sessions | Yes | No | Yes |
 
 The Linear MCP server's strength is zero-install OAuth in any MCP-aware
 tool; lebop's MCP server runs over stdio with bearer-token auth from
 `~/.lebop/auth.json`, exposing a wider tool surface including the
-differentiators (`raw_graphql`, `plan_*`, `lint_text`, `pull_issue`,
-`push_changes` with CAS).
+differentiators (`raw_graphql`, `plan_*`, `lint_text`, `pull_issues`,
+`push_changes` with the stale guard).

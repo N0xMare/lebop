@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { ValidationError } from "../src/lib/errors.ts";
 
 let mockResponse: unknown = null;
+let mockResponses: unknown[] = [];
 let lastCall: { query: string; variables: unknown } | null = null;
 
 vi.mock("../src/lib/sdk.ts", () => ({
@@ -10,14 +11,30 @@ vi.mock("../src/lib/sdk.ts", () => ({
       client: {
         rawRequest: async (query: string, variables: unknown) => {
           lastCall = { query, variables };
-          return mockResponse;
+          return mockResponses.length > 0 ? mockResponses.shift() : mockResponse;
         },
       },
     }),
-  linear: async () => ({ client: { rawRequest: async () => mockResponse } }),
+  linear: async () => ({
+    client: {
+      rawRequest: async (query: string, variables: unknown) => {
+        lastCall = { query, variables };
+        return mockResponses.length > 0 ? mockResponses.shift() : mockResponse;
+      },
+    },
+  }),
 }));
 
-import { findLink, LINK_KINDS, parseLinkToken } from "../src/lib/relations.ts";
+import {
+  assertRelationCreateConfirmed,
+  deleteLink,
+  findLink,
+  LINK_KINDS,
+  listRelations,
+  listRelationsPage,
+  parseLinkToken,
+  preflightCreateLink,
+} from "../src/lib/relations.ts";
 
 describe("parseLinkToken", () => {
   it("parses +blocks:UE-101", () => {
@@ -54,6 +71,10 @@ describe("parseLinkToken", () => {
 
   it("uppercases lowercase identifiers", () => {
     expect(parseLinkToken("+blocks:ue-101").target).toBe("UE-101");
+  });
+
+  it("accepts digit-bearing team keys", () => {
+    expect(parseLinkToken("+blocks:a1-42").target).toBe("A1-42");
   });
 
   it("rejects tokens without +/-", () => {
@@ -257,6 +278,27 @@ describe("findLink — round-6 / H4 case-folding regression coverage", () => {
     expect(id).toBe("rel-inv-1");
   });
 
+  it("related deletion lookup matches inbound related edges", async () => {
+    mockResponse = {
+      data: {
+        issue: {
+          relations: { nodes: [] },
+          inverseRelations: {
+            nodes: [
+              {
+                id: "rel-related-inbound",
+                type: "related",
+                issue: { id: "uuid-target", identifier: "NOX-303" },
+              },
+            ],
+          },
+        },
+      },
+    };
+
+    await expect(findLink("NOX-1", "nox-303", "related")).resolves.toBe("rel-related-inbound");
+  });
+
   it("returns null when no relation matches (regardless of case)", async () => {
     mockResponse = {
       data: {
@@ -281,5 +323,207 @@ describe("findLink — round-6 / H4 case-folding regression coverage", () => {
     lastCall = null;
     await findLink("NOX-1", "NOX-101", "blocks");
     expect((lastCall as { variables: { id: string } } | null)?.variables.id).toBe("NOX-1");
+  });
+
+  it("walks relation pages before declaring a link absent", async () => {
+    mockResponses = [
+      {
+        data: {
+          issue: {
+            relations: {
+              nodes: [{ id: "rel-other", type: "blocks", relatedIssue: { identifier: "NOX-100" } }],
+              pageInfo: { hasNextPage: true, endCursor: "outbound-cursor-1" },
+            },
+            inverseRelations: {
+              nodes: [],
+              pageInfo: { hasNextPage: false, endCursor: null },
+            },
+          },
+        },
+      },
+      {
+        data: {
+          issue: {
+            relations: {
+              nodes: [
+                { id: "rel-target", type: "blocks", relatedIssue: { identifier: "NOX-101" } },
+              ],
+              pageInfo: { hasNextPage: false, endCursor: null },
+            },
+            inverseRelations: {
+              nodes: [],
+              pageInfo: { hasNextPage: false, endCursor: null },
+            },
+          },
+        },
+      },
+    ];
+
+    await expect(findLink("NOX-1", "NOX-101", "blocks")).resolves.toBe("rel-target");
+    expect(lastCall).toMatchObject({
+      variables: expect.objectContaining({ outboundAfter: "outbound-cursor-1" }),
+    });
+    mockResponses = [];
+  });
+});
+
+describe("relation create preflight", () => {
+  it("does not require confirmation for an exact existing relation", async () => {
+    mockResponse = {
+      data: {
+        issue: {
+          relations: {
+            nodes: [{ id: "rel-existing", type: "blocks", relatedIssue: { identifier: "NOX-2" } }],
+            pageInfo: { hasNextPage: false, endCursor: null },
+          },
+          inverseRelations: {
+            nodes: [],
+            pageInfo: { hasNextPage: false, endCursor: null },
+          },
+        },
+      },
+    };
+
+    const preflight = await preflightCreateLink("NOX-1", "NOX-2", "blocks");
+
+    expect(preflight.exact?.id).toBe("rel-existing");
+    expect(preflight.needsConfirmation).toBe(false);
+    expect(() => assertRelationCreateConfirmed(preflight, false)).not.toThrow();
+  });
+
+  it("requires confirmation when a different same-pair relation would be replaced", async () => {
+    mockResponse = {
+      data: {
+        issue: {
+          relations: {
+            nodes: [{ id: "rel-related", type: "related", relatedIssue: { identifier: "NOX-2" } }],
+            pageInfo: { hasNextPage: false, endCursor: null },
+          },
+          inverseRelations: {
+            nodes: [],
+            pageInfo: { hasNextPage: false, endCursor: null },
+          },
+        },
+      },
+    };
+
+    const preflight = await preflightCreateLink("NOX-1", "NOX-2", "blocks");
+
+    expect(preflight.wouldReplace).toBe(true);
+    expect(preflight.needsConfirmation).toBe(true);
+    expect(() => assertRelationCreateConfirmed(preflight, false)).toThrow(/requires confirmation/);
+    expect(() => assertRelationCreateConfirmed(preflight, true)).not.toThrow();
+  });
+
+  it("requires confirmation for new duplicate relations because Linear can move issue state", async () => {
+    mockResponse = {
+      data: {
+        issue: {
+          relations: {
+            nodes: [],
+            pageInfo: { hasNextPage: false, endCursor: null },
+          },
+          inverseRelations: {
+            nodes: [],
+            pageInfo: { hasNextPage: false, endCursor: null },
+          },
+        },
+      },
+    };
+
+    const preflight = await preflightCreateLink("NOX-1", "NOX-2", "duplicates");
+
+    expect(preflight.duplicateSideEffect).toBe(true);
+    expect(preflight.needsConfirmation).toBe(true);
+    expect(() => assertRelationCreateConfirmed(preflight, false)).toThrow(/requires confirmation/);
+  });
+});
+
+describe("listRelations", () => {
+  it("rejects repeated outbound cursors while walking relation pages", async () => {
+    mockResponses = [
+      {
+        data: {
+          issue: {
+            relations: {
+              nodes: [{ id: "rel-1", type: "blocks", relatedIssue: { identifier: "NOX-2" } }],
+              pageInfo: { hasNextPage: true, endCursor: "outbound-cursor-1" },
+            },
+            inverseRelations: {
+              nodes: [],
+              pageInfo: { hasNextPage: false, endCursor: null },
+            },
+          },
+        },
+      },
+      {
+        data: {
+          issue: {
+            relations: {
+              nodes: [{ id: "rel-2", type: "blocks", relatedIssue: { identifier: "NOX-3" } }],
+              pageInfo: { hasNextPage: true, endCursor: "outbound-cursor-1" },
+            },
+          },
+        },
+      },
+    ];
+
+    await expect(listRelations("NOX-1")).rejects.toThrow(/outbound cursor did not advance/);
+    expect(lastCall?.variables).toMatchObject({
+      outboundAfter: "outbound-cursor-1",
+      includeOutbound: true,
+      includeInbound: false,
+    });
+    mockResponses = [];
+  });
+});
+
+describe("deleteLink", () => {
+  it("throws when Linear returns success:false", async () => {
+    mockResponse = { data: { issueRelationDelete: { success: false } } };
+
+    await expect(deleteLink("relation-1")).rejects.toThrow("issueRelationDelete failed");
+    expect(lastCall).toMatchObject({
+      variables: { id: "relation-1" },
+    });
+  });
+});
+
+describe("listRelationsPage", () => {
+  it("returns outbound and inbound relation page cursors", async () => {
+    mockResponse = {
+      data: {
+        issue: {
+          relations: {
+            nodes: [{ id: "rel-out", type: "blocks", relatedIssue: { identifier: "NOX-2" } }],
+            pageInfo: { hasNextPage: true, endCursor: "outbound-cursor-1" },
+          },
+          inverseRelations: {
+            nodes: [{ id: "rel-in", type: "related", issue: { identifier: "NOX-3" } }],
+            pageInfo: { hasNextPage: false, endCursor: null },
+          },
+        },
+      },
+    };
+
+    const page = await listRelationsPage("NOX-1", {
+      first: 1,
+      outboundAfter: "outbound-prior",
+      inboundAfter: "inbound-prior",
+    });
+
+    expect(page.outbound).toEqual([{ id: "rel-out", type: "blocks", otherIdentifier: "NOX-2" }]);
+    expect(page.inbound).toEqual([{ id: "rel-in", type: "related", otherIdentifier: "NOX-3" }]);
+    expect(page.complete).toBe(false);
+    expect(page.pageInfo.outbound).toEqual({
+      hasNextPage: true,
+      endCursor: "outbound-cursor-1",
+    });
+    expect(lastCall?.variables).toMatchObject({
+      id: "NOX-1",
+      first: 1,
+      outboundAfter: "outbound-prior",
+      inboundAfter: "inbound-prior",
+    });
   });
 });

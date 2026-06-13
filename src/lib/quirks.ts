@@ -11,6 +11,7 @@
  * Repo-scoped rules self-skip when their enabling config is absent in ctx.
  */
 
+import { ISSUE_REFERENCE_PATTERN } from "./issueIdentifiers.ts";
 import type { RepoConfig } from "./types.ts";
 
 export type Severity = "warn" | "info" | "error";
@@ -226,9 +227,6 @@ const L006: Rule = {
 
 // ---------- L004: bracket issue refs (repo-scoped) ----------
 
-/** Global `TEAM-NN` regex used by L004 to find unbracketed refs. */
-const ISSUE_REF_RE = /\b[A-Z]+-\d+\b/g;
-
 const L004: Rule = {
   id: "L004",
   description:
@@ -252,7 +250,7 @@ const L004: Rule = {
       const codeRanges = findBacktickRanges(line);
 
       let rewrote = false;
-      const fixed = line.replace(ISSUE_REF_RE, (ref, ...args) => {
+      const fixed = line.replace(ISSUE_REFERENCE_PATTERN, (ref, ...args) => {
         const offset = args[args.length - 2] as number;
         if (inAny(linkRanges, offset)) return ref;
         if (inAny(codeRanges, offset)) return ref;

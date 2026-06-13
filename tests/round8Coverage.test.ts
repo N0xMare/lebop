@@ -1,16 +1,16 @@
 /**
- * Round-8 coverage-gap tests. Round-7 review surfaced 8 fixes lacking direct
- * coverage; this file batches the small additions in one place rather than
- * scattering single-test patches across half a dozen existing files.
+ * Focused regression coverage for small Linear object-surface edge cases.
+ * This file batches related additions in one place rather than scattering
+ * single-test patches across half a dozen existing files.
  *
  * Covers:
- *   - Q2 archived_at pre-flight in deleteDocument / deleteInitiative /
+ *   - archived_at pre-flight in deleteDocument / deleteInitiative /
  *     deleteProject (Linear's `*Delete` mutations are soft-delete; pre-flight
  *     `archived_at !== null` check makes `tryIdempotentDelete` see a
  *     NotFoundError so the wrapper emits `{status: "already-absent"}`).
- *   - HIGH-2 listMilestones `includeArchived` flag plumbing.
- *   - MED-1 `ListedProject.archived_at` surfaces on listProjects output.
- *   - MED-5 mutual-exclusion rejection for milestone/document create when
+ *   - listMilestones `includeArchived` flag plumbing.
+ *   - `ListedProject.archived_at` surfaces on listProjects output.
+ *   - mutual-exclusion rejection for milestone/document create when
  *     both `--project` and `--project-id` are passed.
  */
 
@@ -68,7 +68,7 @@ function reset() {
   calls = [];
 }
 
-describe("Q2 / round-7 — deleteDocument pre-flight detects soft-deleted entity", () => {
+describe("deleteDocument pre-flight detects soft-deleted entity", () => {
   it("throws NotFoundError when getDocument returns archived_at !== null", async () => {
     // Pre-fix Linear's documentDelete returned success:true even on an
     // already-soft-deleted doc, so tryIdempotentDelete reported `deleted`
@@ -135,7 +135,7 @@ describe("Q2 / round-7 — deleteDocument pre-flight detects soft-deleted entity
   });
 });
 
-describe("Q2 / round-7 — deleteInitiative pre-flight detects soft-deleted entity", () => {
+describe("deleteInitiative pre-flight detects soft-deleted entity", () => {
   it("throws NotFoundError when getInitiative returns archived_at !== null", async () => {
     reset();
     // Initiative pre-flight uses the list-shape archive-resilient query.
@@ -194,7 +194,7 @@ describe("Q2 / round-7 — deleteInitiative pre-flight detects soft-deleted enti
   });
 });
 
-describe("Q2 / round-7 — deleteProject pre-flight detects soft-deleted entity", () => {
+describe("deleteProject pre-flight detects soft-deleted entity", () => {
   it("throws NotFoundError when getProject returns archived_at !== null", async () => {
     reset();
     mockResponses.push({
@@ -204,6 +204,7 @@ describe("Q2 / round-7 — deleteProject pre-flight detects soft-deleted entity"
           name: "soft-deleted-proj",
           description: null,
           content: null,
+          icon: null,
           state: "completed",
           url: "x",
           updatedAt: "2026-01-01T00:00:00Z",
@@ -221,7 +222,7 @@ describe("Q2 / round-7 — deleteProject pre-flight detects soft-deleted entity"
   });
 });
 
-describe("HIGH-2 / round-7 — listMilestones includeArchived flag plumbing", () => {
+describe("listMilestones includeArchived flag plumbing", () => {
   it("passes includeArchived: true through to the query variables", async () => {
     reset();
     mockResponses.push({
@@ -251,7 +252,7 @@ describe("HIGH-2 / round-7 — listMilestones includeArchived flag plumbing", ()
   });
 });
 
-describe("MED-1 / round-7 — ListedProject surfaces archived_at", () => {
+describe("ListedProject surfaces archived_at", () => {
   // Mocks team.projects() to return SDK-shaped records (with `archivedAt`
   // as a Date or null), then asserts shapeProject emits the snake_case
   // `archived_at` field.

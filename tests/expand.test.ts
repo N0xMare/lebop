@@ -31,6 +31,20 @@ describe("expandIds", () => {
     expect(expandIds(["ue-1..ue-3"])).toEqual(["UE-1", "UE-2", "UE-3"]);
   });
 
+  it("accepts digit-bearing team keys in single identifiers and ranges", () => {
+    expect(expandIds(["a1-4", "a1-5..a1-6"])).toEqual(["A1-4", "A1-5", "A1-6"]);
+  });
+
+  it("preserves UUID inputs for pull/show surfaces that accept them", () => {
+    expect(expandIds(["11111111-2222-3333-4444-555555555555"])).toEqual([
+      "11111111-2222-3333-4444-555555555555",
+    ]);
+  });
+
+  it("throws on malformed single identifiers", () => {
+    expect(() => expandIds(["not-an-id"])).toThrow(ValidationError);
+  });
+
   it("throws on mismatched team prefixes", () => {
     expect(() => expandIds(["UE-1..XY-3"])).toThrow(/prefixes must match/);
   });

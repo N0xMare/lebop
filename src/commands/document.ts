@@ -1,5 +1,6 @@
 import chalk from "chalk";
 import type { Command } from "commander";
+import { parseCliLimit } from "../lib/cliOptions.ts";
 import {
   createDocument,
   deleteDocument,
@@ -8,9 +9,9 @@ import {
   updateDocument,
 } from "../lib/documents.ts";
 import { envelope } from "../lib/envelope.ts";
-import { NotFoundError, tryIdempotentDelete } from "../lib/errors.ts";
+import { NotFoundError, tryIdempotentDelete, ValidationError } from "../lib/errors.ts";
 import { resolveContent } from "../lib/io.ts";
-import { resolveProjectId } from "../lib/milestones.ts";
+import { resolveExistingProjectId, resolveProjectId } from "../lib/milestones.ts";
 
 export function registerDocument(program: Command): void {
   const cmd = program.command("document").description("manage Linear documents");
@@ -24,12 +25,11 @@ export function registerDocument(program: Command): void {
     .action(async (opts: { project?: string; limit?: string; json?: boolean }) => {
       let projectId: string | undefined;
       if (opts.project) {
-        const resolved = await resolveProjectId(opts.project);
+        const resolved = await resolveExistingProjectId(opts.project);
         if (!resolved) throw new NotFoundError(`project not found: ${opts.project}`);
         projectId = resolved;
       }
-      const requested = Number.parseInt(opts.limit ?? "50", 10);
-      const max = requested === 0 ? Number.POSITIVE_INFINITY : Math.max(1, requested);
+      const max = parseCliLimit(opts.limit, { defaultValue: 50, zeroMeansInfinity: true });
       const documents = await listDocuments({ projectId, max });
 
       if (opts.json) {
@@ -99,10 +99,16 @@ export function registerDocument(program: Command): void {
         // Round-7 / MED-5: mutual-exclusion (round-6 H17 silently let
         // --project-id win when both passed).
         if (opts.project && opts.projectId) {
-          throw new Error("pass exactly one of --project / --project-id, not both");
+          throw new ValidationError(
+            "pass exactly one of --project / --project-id, not both",
+            "choose one project selector",
+          );
         }
         if (!opts.project && !opts.projectId) {
-          throw new Error("either --project <name-or-id> or --project-id <uuid> is required");
+          throw new ValidationError(
+            "either --project <name-or-id> or --project-id <uuid> is required",
+            "documents must be created inside a project",
+          );
         }
         const projectId = opts.projectId ?? (await resolveProjectId(opts.project as string));
         if (!projectId) throw new NotFoundError(`project not found: ${opts.project}`);
@@ -151,7 +157,10 @@ export function registerDocument(program: Command): void {
         const provided = [opts.content, opts.contentFile, opts.stdin].filter(Boolean).length;
         if (provided > 0) input.content = await resolveContent(opts);
         if (Object.keys(input).length === 0) {
-          throw new Error("nothing to update — pass at least one field");
+          throw new ValidationError(
+            "nothing to update — pass at least one field",
+            "pass --title, --content, --content-file, --stdin, or --icon",
+          );
         }
         const updated = await updateDocument(id, input);
         if (opts.json) {
@@ -171,12 +180,10 @@ export function registerDocument(program: Command): void {
     .option("--json", "emit structured result")
     .action(async (id: string, opts: { yes?: boolean; json?: boolean }) => {
       if (!opts.yes) {
-        process.stderr.write(
-          `${chalk.red("error:")} refusing to delete document ${chalk.bold(id)} without --yes\n` +
-            `  ${chalk.cyan("hint:")} re-run with --yes to confirm. This operation is irreversible.\n`,
+        throw new ValidationError(
+          `refusing to delete document ${id} without --yes`,
+          "re-run with --yes to confirm. This operation is irreversible.",
         );
-        process.exitCode = 1;
-        return;
       }
       // Round-8 / N2: discriminated union — narrow via `r.status`.
       const r = await tryIdempotentDelete(() => deleteDocument(id));

@@ -142,6 +142,13 @@ describe("L004 — bracket issue refs", () => {
     expect(w).toHaveLength(1);
   });
 
+  it("flags bare refs with digit-bearing team keys", () => {
+    const content = "See A1-42 for context.";
+    const w = lintContent(content, ctx).warnings.filter((x) => x.rule === "L004");
+    expect(w).toHaveLength(1);
+    expect(w[0]?.message).toContain("A1-42");
+  });
+
   it("autofix wraps bare refs in markdown links with workspace URL", () => {
     const content = "See UE-321 for context.";
     const { warnings } = lintContent(content, ctx);

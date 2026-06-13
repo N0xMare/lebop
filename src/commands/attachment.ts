@@ -2,7 +2,7 @@ import chalk from "chalk";
 import type { Command } from "commander";
 import { deleteAttachment, listAttachments, updateAttachment } from "../lib/attachments.ts";
 import { envelope } from "../lib/envelope.ts";
-import { tryIdempotentDelete } from "../lib/errors.ts";
+import { tryIdempotentDelete, ValidationError } from "../lib/errors.ts";
 
 /**
  * `lebop attachment list|update|delete` — symmetric CRUD over Linear
@@ -41,7 +41,7 @@ export function registerAttachment(program: Command): void {
 
   cmd
     .command("update <id>")
-    .description("update an attachment's title or URL")
+    .description("update an attachment's title; URL changes require delete + relink")
     .option("--title <text>")
     .option("--url <url>")
     .option("--json", "emit structured result")
@@ -50,9 +50,7 @@ export function registerAttachment(program: Command): void {
       if (opts.title !== undefined) input.title = opts.title;
       if (opts.url !== undefined) input.url = opts.url;
       if (Object.keys(input).length === 0) {
-        process.stderr.write(`${chalk.red("nothing to update.")} pass --title or --url\n`);
-        process.exitCode = 1;
-        return;
+        throw new ValidationError("nothing to update", "pass --title or --url");
       }
       const attachment = await updateAttachment(id, input);
       if (opts.json) {
@@ -74,12 +72,10 @@ export function registerAttachment(program: Command): void {
       // destructive delete) and adopt tryIdempotentDelete for status field
       // parity. Pre-fix this was the only delete command without --yes.
       if (!opts.yes) {
-        process.stderr.write(
-          `${chalk.red("error:")} refusing to delete attachment ${chalk.bold(id)} without --yes\n` +
-            `  ${chalk.cyan("hint:")} re-run with --yes to confirm. This operation is irreversible.\n`,
+        throw new ValidationError(
+          `refusing to delete attachment ${id} without --yes`,
+          "re-run with --yes to confirm. This operation is irreversible.",
         );
-        process.exitCode = 1;
-        return;
       }
       // Round-8 / N2: tryIdempotentDelete now returns a discriminated union
       // — `result.result` only exists on the "deleted" branch (typed as the

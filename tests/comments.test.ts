@@ -5,7 +5,7 @@ import { NotFoundError, ValidationError } from "../src/lib/errors.ts";
 let mockRawResponses: Array<{ data: unknown }> = [];
 let mockCreateCommentResult: {
   success: boolean;
-  comment: { id: string; createdAt: Date | string };
+  comment: { id?: string; createdAt?: Date | string } | null;
 } | null = null;
 let calls: Array<{ query: string; variables: unknown }> = [];
 let createCommentArgs: Array<unknown> = [];
@@ -51,7 +51,13 @@ vi.mock("../src/lib/sdk.ts", () => ({
   }),
 }));
 
-import { addComment, deleteComment, listComments, updateComment } from "../src/lib/comments.ts";
+import {
+  addComment,
+  deleteComment,
+  listComments,
+  listCommentsPage,
+  updateComment,
+} from "../src/lib/comments.ts";
 
 function reset() {
   mockRawResponses = [];
@@ -101,15 +107,58 @@ describe("listComments", () => {
     expect(calls[0]?.variables).toMatchObject({ id: "NOX-1" });
   });
 
-  it("returns empty array when issue is missing (paginateRaw nullable)", async () => {
+  it("throws NotFoundError when issue is missing", async () => {
     reset();
     mockRawResponses.push({ data: { issue: null } });
-    const comments = await listComments("NOX-X");
-    expect(comments).toEqual([]);
+    const err = await listComments("NOX-X").catch((e) => e);
+    expect(err).toBeInstanceOf(NotFoundError);
+    expect(err.code).toBe("not_found");
+    expect(err.message).toMatch(/issue not found: NOX-X/);
+  });
+
+  it("returns one comment page with Linear cursor metadata", async () => {
+    reset();
+    mockRawResponses.push({
+      data: {
+        issue: {
+          comments: {
+            nodes: [
+              {
+                id: "c1",
+                body: "first",
+                createdAt: "2026-01-01T00:00:00Z",
+                updatedAt: "2026-01-01T00:00:00Z",
+                user: null,
+                parent: null,
+              },
+            ],
+            pageInfo: { hasNextPage: true, endCursor: "comment-cursor-1" },
+          },
+        },
+      },
+    });
+
+    const page = await listCommentsPage("nox-1", { first: 1, after: "prior-cursor" });
+
+    expect(page.comments).toHaveLength(1);
+    expect(page.pageInfo).toEqual({ hasNextPage: true, endCursor: "comment-cursor-1" });
+    expect(calls[0]?.variables).toMatchObject({
+      id: "NOX-1",
+      first: 1,
+      after: "prior-cursor",
+    });
   });
 });
 
 describe("addComment", () => {
+  it("rejects empty bodies before resolving the issue or mutating", async () => {
+    reset();
+    const err = await addComment({ identifier: "NOX-1", body: " \n\t " }).catch((e) => e);
+    expect(err).toBeInstanceOf(ValidationError);
+    expect(err.message).toBe("empty comment body");
+    expect(createCommentArgs).toHaveLength(0);
+  });
+
   it("resolves identifier → UUID, then posts via createComment", async () => {
     reset();
     mockCreateCommentResult = {
@@ -174,6 +223,16 @@ describe("addComment", () => {
     expect(err.hint).toMatch(/archived|valid/);
   });
 
+  it("throws ValidationError when commentCreate succeeds without a comment entity", async () => {
+    reset();
+    mockCreateCommentResult = { success: true, comment: null };
+
+    const err = await addComment({ identifier: "NOX-1", body: "x" }).catch((e) => e);
+
+    expect(err).toBeInstanceOf(ValidationError);
+    expect(err.message).toBe("commentCreate did not return comment");
+  });
+
   it("throws NotFoundError when the issue identifier doesn't resolve", async () => {
     // The lib's `issue not found:` raw error is also part of wave 2 cleanup
     // (issues.ts had the same shape). Verify the structured form here too.
@@ -187,6 +246,14 @@ describe("addComment", () => {
 });
 
 describe("updateComment", () => {
+  it("rejects empty bodies before mutating", async () => {
+    reset();
+    const err = await updateComment("c-empty", " \n\t ").catch((e) => e);
+    expect(err).toBeInstanceOf(ValidationError);
+    expect(err.message).toBe("empty comment body");
+    expect(calls).toEqual([]);
+  });
+
   it("calls commentUpdate with id + input.body and returns the A26-aligned shape (round-7 / H-MCP-2)", async () => {
     // Round-7 / H-MCP-2: updateComment response now includes body, url, user
     // (parity with addComment's A26 work). Pre-fix it returned only
@@ -244,14 +311,45 @@ describe("updateComment", () => {
     expect(result.url).toBeNull();
     expect(result.user).toBeNull();
   });
+
+  it("rejects success:false before shaping the update", async () => {
+    reset();
+    mockRawResponses.push({
+      data: {
+        commentUpdate: {
+          success: false,
+          comment: {
+            id: "c3",
+            body: "edited body",
+            url: "https://linear.app/test/comment/c3",
+            updatedAt: "2026-05-10T01:00:00Z",
+            user: null,
+          },
+        },
+      },
+    });
+
+    const err = await updateComment("c3", "edited body").catch((e) => e);
+
+    expect(err).toBeInstanceOf(ValidationError);
+    expect(err.message).toBe("commentUpdate failed");
+  });
 });
 
 describe("deleteComment", () => {
-  it("returns the success flag", async () => {
+  it("returns true for a successful delete", async () => {
     reset();
     mockRawResponses.push({ data: { commentDelete: { success: true } } });
     expect(await deleteComment("c1")).toBe(true);
+  });
+
+  it("rejects success:false", async () => {
+    reset();
     mockRawResponses.push({ data: { commentDelete: { success: false } } });
-    expect(await deleteComment("c2")).toBe(false);
+
+    const err = await deleteComment("c2").catch((e) => e);
+
+    expect(err).toBeInstanceOf(ValidationError);
+    expect(err.message).toBe("commentDelete failed");
   });
 });

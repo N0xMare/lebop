@@ -1,15 +1,39 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { TeamMetadata } from "../src/lib/cache.ts";
 import { ValidationError } from "../src/lib/errors.ts";
+import { normalizeIssueIdentifier, parseIssueIdentifier } from "../src/lib/issueIdentifiers.ts";
+
+const sdkMock = vi.hoisted(() => ({
+  rawResponses: [] as { data: unknown }[],
+  calls: [] as { query: string; variables: unknown }[],
+}));
+
+vi.mock("../src/lib/sdk.ts", () => ({
+  withClient: async <T>(fn: (client: unknown) => Promise<T>): Promise<T> =>
+    fn({
+      client: {
+        rawRequest: async (query: string, variables: unknown) => {
+          sdkMock.calls.push({ query, variables });
+          const next = sdkMock.rawResponses.shift();
+          if (!next) throw new Error(`mock exhausted: ${query.slice(0, 80)}`);
+          return next;
+        },
+      },
+    }),
+}));
+
 import {
   deriveTeamFromIdentifiers,
   labelNameById,
   memberById,
   priorityName,
   ResolveError,
+  resolveAssigneeId,
   resolveLabelId,
   resolveLabelIds,
+  resolveMilestoneIdByName,
   resolvePriority,
+  resolveProjectIdByName,
   resolveStateId,
   stateNameById,
 } from "../src/lib/resolve.ts";
@@ -34,6 +58,11 @@ const metadata: TeamMetadata = {
   ],
   projects: [{ id: "pr-1", name: "Example", state: "started" }],
 };
+
+beforeEach(() => {
+  sdkMock.rawResponses = [];
+  sdkMock.calls = [];
+});
 
 describe("resolveStateId", () => {
   it("resolves exact name", () => {
@@ -75,6 +104,35 @@ describe("resolveLabelIds", () => {
 
   it("throws on the first unknown label", () => {
     expect(() => resolveLabelIds(metadata, ["type:test", "nope"])).toThrow(ResolveError);
+  });
+});
+
+describe("resolveAssigneeId", () => {
+  it("prefers exact email even when display names are duplicated", async () => {
+    const duplicateNames: TeamMetadata = {
+      ...metadata,
+      members: [
+        { id: "m-sam-1", name: "Sam", email: "sam.one@example.com" },
+        { id: "m-sam-2", name: "Sam", email: "sam.two@example.com" },
+      ],
+    };
+
+    await expect(resolveAssigneeId(duplicateNames, "sam.two@example.com")).resolves.toBe("m-sam-2");
+  });
+
+  it("rejects duplicate exact display-name matches instead of taking the first", async () => {
+    const duplicateNames: TeamMetadata = {
+      ...metadata,
+      members: [
+        { id: "m-sam-1", name: "Sam", email: "sam.one@example.com" },
+        { id: "m-sam-2", name: "Sam", email: "sam.two@example.com" },
+      ],
+    };
+
+    await expect(resolveAssigneeId(duplicateNames, "sam")).rejects.toThrow(ResolveError);
+    await expect(resolveAssigneeId(duplicateNames, "sam")).rejects.toThrow(
+      /ambiguous assignee "sam".*sam.one@example.com.*sam.two@example.com/,
+    );
   });
 });
 
@@ -131,6 +189,12 @@ describe("resolvePriority", () => {
     expect(() => resolvePriority(1.5)).toThrow(ResolveError);
   });
 
+  it("rejects malformed numeric strings", () => {
+    for (const value of ["3abc", "3.7", "0x3", " 3", "3 "]) {
+      expect(() => resolvePriority(value)).toThrow(ResolveError);
+    }
+  });
+
   it("rejects unknown name", () => {
     expect(() => resolvePriority("critical")).toThrow(ResolveError);
   });
@@ -161,8 +225,17 @@ describe("deriveTeamFromIdentifiers", () => {
     expect(deriveTeamFromIdentifiers(["nox-1", "Nox-2"])).toBe("NOX");
   });
 
-  it("accepts multi-letter and digit-suffix team keys", () => {
-    expect(deriveTeamFromIdentifiers(["UE_X1-7"])).toBe("UE_X1");
+  it("accepts digit-bearing team keys", () => {
+    expect(deriveTeamFromIdentifiers(["A1-7"])).toBe("A1");
+  });
+
+  it("uses the shared issue identifier parser", () => {
+    expect(parseIssueIdentifier("a1-42")).toEqual({
+      identifier: "A1-42",
+      teamKey: "A1",
+      number: 42,
+    });
+    expect(normalizeIssueIdentifier("nox-34")).toBe("NOX-34");
   });
 
   it("throws ValidationError on mixed teams", () => {
@@ -173,5 +246,69 @@ describe("deriveTeamFromIdentifiers", () => {
   it("throws ValidationError on malformed identifier", () => {
     expect(() => deriveTeamFromIdentifiers(["NOX1"])).toThrow(ValidationError);
     expect(() => deriveTeamFromIdentifiers([""])).toThrow(ValidationError);
+    expect(() => deriveTeamFromIdentifiers(["UE_X1-7"])).toThrow(ValidationError);
+  });
+});
+
+describe("resolveProjectIdByName", () => {
+  it("rejects duplicate workspace project names instead of taking the first row", async () => {
+    sdkMock.rawResponses.push({
+      data: {
+        projects: {
+          nodes: [
+            { id: "project-nox", name: "Shared Name", teams: { nodes: [{ key: "NOX" }] } },
+            { id: "project-eng", name: "Shared Name", teams: { nodes: [{ key: "ENG" }] } },
+          ],
+        },
+      },
+    });
+
+    await expect(resolveProjectIdByName("Shared Name")).rejects.toThrow(/ambiguous project name/);
+    expect(sdkMock.calls[0]?.query).toContain("first: 2");
+    expect(sdkMock.calls[0]?.variables).toEqual({ name: "Shared Name" });
+  });
+
+  it("honors explicit team scope and reports a team-scoped miss", async () => {
+    sdkMock.rawResponses.push({ data: { projects: { nodes: [] } } });
+
+    await expect(resolveProjectIdByName("Shared Name", { teamKey: "NOX" })).rejects.toThrow(
+      /project not found: Shared Name \(team NOX\)/,
+    );
+    expect(sdkMock.calls[0]?.query).toContain("accessibleTeams");
+    expect(sdkMock.calls[0]?.variables).toEqual({ name: "Shared Name", teamKey: "NOX" });
+  });
+});
+
+describe("resolveMilestoneIdByName", () => {
+  it("scopes milestone names to a project when projectId is supplied", async () => {
+    sdkMock.rawResponses.push({
+      data: {
+        projectMilestones: {
+          nodes: [{ id: "milestone-1", name: "Beta", project: { id: "project-1", name: "P1" } }],
+        },
+      },
+    });
+
+    await expect(resolveMilestoneIdByName("Beta", { projectId: "project-1" })).resolves.toBe(
+      "milestone-1",
+    );
+    expect(sdkMock.calls[0]?.query).toContain("$projectId: ID!");
+    expect(sdkMock.calls[0]?.variables).toEqual({ name: "Beta", projectId: "project-1" });
+  });
+
+  it("rejects ambiguous unscoped milestone names", async () => {
+    sdkMock.rawResponses.push({
+      data: {
+        projectMilestones: {
+          nodes: [
+            { id: "milestone-1", name: "Beta", project: { id: "project-1", name: "P1" } },
+            { id: "milestone-2", name: "Beta", project: { id: "project-2", name: "P2" } },
+          ],
+        },
+      },
+    });
+
+    await expect(resolveMilestoneIdByName("Beta")).rejects.toThrow(/ambiguous milestone name/);
+    expect(sdkMock.calls[0]?.query).toContain("first: 2");
   });
 });

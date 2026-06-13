@@ -25,12 +25,16 @@ interface ContentOpts {
 /**
  * Resolve a required body string. Throws if zero providers are set and
  * stdin is a TTY (no piped input), or if more than one provider is set.
- * Trims trailing whitespace.
+ * Trims trailing whitespace while preserving leading indentation.
  */
 export async function resolveBody(opts: BodyOpts): Promise<string> {
-  const provided = [opts.body, opts.bodyFile, opts.stdin].filter(Boolean).length;
+  const provided = [
+    opts.body !== undefined,
+    opts.bodyFile !== undefined,
+    opts.stdin === true,
+  ].filter(Boolean).length;
   if (provided === 0) {
-    if (!process.stdin.isTTY) return (await Bun.stdin.text()).trim();
+    if (!process.stdin.isTTY) return (await Bun.stdin.text()).trimEnd();
     throw new ValidationError(
       "no body — pass --body, --body-file, or pipe to stdin",
       "supply the body inline via --body, from a file via --body-file, or by piping to stdin",
@@ -42,9 +46,9 @@ export async function resolveBody(opts: BodyOpts): Promise<string> {
       "the three body sources are mutually exclusive — pass exactly one",
     );
   }
-  if (opts.body) return opts.body;
-  if (opts.bodyFile) return (await Bun.file(opts.bodyFile).text()).trim();
-  return (await Bun.stdin.text()).trim();
+  if (opts.body !== undefined) return opts.body;
+  if (opts.bodyFile !== undefined) return (await Bun.file(opts.bodyFile).text()).trimEnd();
+  return (await Bun.stdin.text()).trimEnd();
 }
 
 /**
@@ -54,7 +58,11 @@ export async function resolveBody(opts: BodyOpts): Promise<string> {
  * indentation in markdown content.
  */
 export async function resolveContent(opts: ContentOpts): Promise<string | undefined> {
-  const provided = [opts.content, opts.contentFile, opts.stdin].filter(Boolean).length;
+  const provided = [
+    opts.content !== undefined,
+    opts.contentFile !== undefined,
+    opts.stdin === true,
+  ].filter(Boolean).length;
   if (provided > 1) {
     throw new ValidationError(
       "pick one of --content / --content-file / --stdin",
@@ -62,7 +70,7 @@ export async function resolveContent(opts: ContentOpts): Promise<string | undefi
     );
   }
   if (provided === 0) return undefined;
-  if (opts.content) return opts.content;
-  if (opts.contentFile) return (await Bun.file(opts.contentFile).text()).trimEnd();
+  if (opts.content !== undefined) return opts.content;
+  if (opts.contentFile !== undefined) return (await Bun.file(opts.contentFile).text()).trimEnd();
   return (await Bun.stdin.text()).trimEnd();
 }

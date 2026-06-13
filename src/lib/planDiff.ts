@@ -9,7 +9,8 @@ import {
   type FetchedProject,
   PULL_PROJECT_HEADER_QUERY,
 } from "./pullQuery.ts";
-import { resolveLabelIds, resolvePriority } from "./resolve.ts";
+import { type ListedRelationsPage, listRelations } from "./relations.ts";
+import { resolveAssigneeId, resolveLabelIds, resolvePriority } from "./resolve.ts";
 import { linear, withClient } from "./sdk.ts";
 
 export interface FieldDiff {
@@ -53,7 +54,10 @@ export interface PlanDiffResult {
   project: PlanProjectDiff;
   issues: PlanIssueDiff[];
   extra_remote_issues: { identifier: string; title: string }[]; // in remote project, not in plan
+  extra_remote_issues_error?: string;
   has_drift: boolean;
+  has_blockers: boolean;
+  has_incomplete_scan: boolean;
 }
 
 /**
@@ -99,6 +103,7 @@ export async function diffPlan(
 
   // Detect remote-only issues in the project (warning, not drift).
   const extraRemote: { identifier: string; title: string }[] = [];
+  let extraRemoteError: string | undefined;
   if (project.linear_id && project.status !== "missing-remote" && project.status !== "error") {
     try {
       // paginateRaw wraps each page with withRetry internally; don't double-wrap
@@ -125,8 +130,8 @@ export async function diffPlan(
           extraRemote.push({ identifier: node.identifier, title: node.title });
         }
       }
-    } catch {
-      /* non-fatal — extra-remote detection is best-effort */
+    } catch (err) {
+      extraRemoteError = (err as Error).message;
     }
   }
 
@@ -136,8 +141,20 @@ export async function diffPlan(
   const hasDrift =
     project.status === "drift" ||
     issues.some((i) => i.status === "drift" || i.status === "not-yet-applied");
+  const hasBlockers =
+    project.status === "missing-remote" ||
+    project.status === "error" ||
+    issues.some((i) => i.status === "missing-remote" || i.status === "error");
 
-  return { project, issues, extra_remote_issues: extraRemote, has_drift: hasDrift };
+  return {
+    project,
+    issues,
+    extra_remote_issues: extraRemote,
+    ...(extraRemoteError ? { extra_remote_issues_error: extraRemoteError } : {}),
+    has_drift: hasDrift,
+    has_blockers: hasBlockers,
+    has_incomplete_scan: Boolean(extraRemoteError),
+  };
 }
 
 // ---------- project ----------
@@ -174,6 +191,23 @@ async function diffProject(project: ProjectFile): Promise<PlanProjectDiff> {
         field: "description",
         local: fm.description ?? "",
         remote: remote.description ?? "",
+      });
+    }
+    if (fm.icon !== undefined && (remote.icon ?? null) !== (fm.icon ?? null)) {
+      fields.push({ field: "icon", local: fm.icon ?? null, remote: remote.icon ?? null });
+    }
+    if (fm.start_date !== undefined && (remote.startDate ?? null) !== (fm.start_date ?? null)) {
+      fields.push({
+        field: "start_date",
+        local: fm.start_date ?? null,
+        remote: remote.startDate ?? null,
+      });
+    }
+    if (fm.target_date !== undefined && (remote.targetDate ?? null) !== (fm.target_date ?? null)) {
+      fields.push({
+        field: "target_date",
+        local: fm.target_date ?? null,
+        remote: remote.targetDate ?? null,
       });
     }
     if (fm.state && remote.state !== fm.state) {
@@ -235,7 +269,7 @@ async function diffIssue(
   }
 
   try {
-    const query = buildPullIssuesQuery([fm.linear_id], false, true);
+    const query = buildPullIssuesQuery([fm.linear_id], false, false);
     const resp = (await withClient((c) => c.client.rawRequest(query))) as {
       data: Record<string, FetchedIssue | null>;
     };
@@ -283,16 +317,21 @@ async function diffIssue(
       if (JSON.stringify(localIds) !== JSON.stringify(remoteIds)) {
         fields.push({
           field: "labels",
-          local: fm.labels.sort(),
+          local: [...fm.labels].sort(),
           remote: remote.labels.nodes.map((l) => l.name).sort(),
         });
       }
     }
     if (fm.assignee !== undefined) {
-      const remoteAssignee = remote.assignee?.email ?? null;
-      const localAssignee = fm.assignee ?? null;
-      if (remoteAssignee !== localAssignee) {
-        fields.push({ field: "assignee", local: localAssignee, remote: remoteAssignee });
+      const remoteAssigneeId = remote.assignee?.id ?? null;
+      const localAssigneeId =
+        typeof fm.assignee === "string" ? await resolveAssigneeId(teamMetadata, fm.assignee) : null;
+      if (remoteAssigneeId !== localAssigneeId) {
+        fields.push({
+          field: "assignee",
+          local: fm.assignee ?? null,
+          remote: remote.assignee?.email ?? null,
+        });
       }
     }
 
@@ -314,7 +353,7 @@ async function diffIssue(
     const bodyChanged = patchHasChanges(patch);
 
     // Relations diff: planEdges comes pre-computed with inverse/symmetric normalization.
-    const remoteEdges = remoteEdgeSet(remote);
+    const remoteEdges = remoteEdgeSetFromRelations(await listRelations(fm.linear_id));
     const missing: RelationEdge[] = [];
     const extra: RelationEdge[] = [];
     for (const e of planEdges) if (!remoteEdges.has(e)) missing.push(parseEdge(e));
@@ -407,20 +446,17 @@ function invertKind(k: LinkKey): LinkKey {
   }
 }
 
-/** Remote edges for an issue, encoded same way. */
-function remoteEdgeSet(issue: FetchedIssue): Set<string> {
+function remoteEdgeSetFromRelations(relations: ListedRelationsPage): Set<string> {
   const set = new Set<string>();
-  for (const r of issue.relations?.nodes ?? []) {
+  for (const r of relations.outbound) {
     const key: LinkKey =
       r.type === "blocks" ? "blocks" : r.type === "duplicate" ? "duplicates" : "related";
-    if (r.type === "similar") continue;
-    set.add(`${key}:${r.relatedIssue.identifier}`);
+    set.add(`${key}:${r.otherIdentifier}`);
   }
-  for (const r of issue.inverseRelations?.nodes ?? []) {
-    if (r.type === "similar") continue;
+  for (const r of relations.inbound) {
     const key: LinkKey =
-      r.type === "blocks" ? "blocked_by" : r.type === "duplicate" ? "duplicated_by" : "related"; // symmetric — same key as forward
-    set.add(`${key}:${r.issue.identifier}`);
+      r.type === "blocks" ? "blocked_by" : r.type === "duplicate" ? "duplicated_by" : "related";
+    set.add(`${key}:${r.otherIdentifier}`);
   }
   return set;
 }

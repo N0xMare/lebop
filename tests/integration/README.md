@@ -2,8 +2,8 @@
 
 These tests spawn `bin/lebop` as a child process and assert against
 real stdout / stderr / exit codes. The harness mocks Linear's GraphQL
-endpoint via a local `node:http` server (so it works under both
-`vitest run` and `bun test`); the SDK is pointed at it via
+endpoint via a local `node:http` server under the supported
+`vitest run` runner; the SDK is pointed at it via
 `LEBOP_API_URL`. Auth is faked by writing a valid `auth.json` to a temp
 `LEBOP_HOME`.
 
@@ -60,6 +60,15 @@ const r = await runLebop(["teams"], { LEBOP_HOME: home, LEBOP_API_URL: mock.url 
 expect(r.stderr).toContain("error[auth_error]:");
 ```
 
+## Pattern: surface contracts
+
+CLI/MCP parity and high-risk behavior rules live in
+`src/lib/toolSurfaceManifest.ts` and `src/lib/toolBehaviorContracts.ts`.
+When adding a command or MCP tool, update the manifest and add focused local
+coverage for the contract it touches. The live Noxor harness then adds
+semantic assertions for release-critical operations instead of only proving
+that a command was invoked.
+
 ## Why spawn the binary?
 
 Module-level mocks are faster but miss CLI plumbing — commander wiring,
@@ -74,9 +83,15 @@ Each test should leave the harness clean for the next. Pattern:
 
 ```ts
 afterEach(() => {
-  mock.reset();   // clear queued responses + request log
+  try {
+    mock.assertNoPendingResponses();
+  } finally {
+    mock.reset({ allowPendingResponses: true });
+  }
 });
 ```
 
-Without this, a test that queues 3 responses but consumes 2 leaks the
-third into the next test.
+Without the assertion, a test that queues 3 responses but consumes 2 can pass
+while proving less than it claims. Use `allowPendingResponses: true` only after
+that assertion path has run, or in a test that deliberately queues optional
+responses and explains why.

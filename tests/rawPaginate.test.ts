@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { ValidationError } from "../src/lib/errors.ts";
 import { findConnectionKey, isConnection, paginateRawQuery } from "../src/lib/rawPaginate.ts";
 
@@ -69,6 +69,13 @@ describe("findConnectionKey", () => {
 });
 
 describe("paginateRawQuery", () => {
+  const previousMaxItems = process.env.LEBOP_MAX_ITEMS;
+
+  afterEach(() => {
+    if (previousMaxItems === undefined) delete process.env.LEBOP_MAX_ITEMS;
+    else process.env.LEBOP_MAX_ITEMS = previousMaxItems;
+  });
+
   it("walks until hasNextPage is false and merges nodes", async () => {
     const { fetch, calls } = makeFetcher([
       { issues: { nodes: ["a", "b"], pageInfo: { hasNextPage: true, endCursor: "c1" } } },
@@ -141,12 +148,11 @@ describe("paginateRawQuery", () => {
     expect(err).toMatchObject({ code: "validation_error", hint: expect.any(String) });
   });
 
-  it("stops on hasNextPage:true with null endCursor (defensive)", async () => {
+  it("throws on hasNextPage:true with null endCursor (non-continuable page)", async () => {
     const { fetch, calls } = makeFetcher([
       { issues: { nodes: ["a"], pageInfo: { hasNextPage: true, endCursor: null } } },
     ]);
-    const result = (await paginateRawQuery({}, fetch)) as { issues: Page<string> };
-    expect(result.issues.nodes).toEqual(["a"]);
+    await expect(paginateRawQuery({}, fetch)).rejects.toThrow(/hasNextPage without endCursor/);
     expect(calls).toHaveLength(1);
   });
 
@@ -161,5 +167,26 @@ describe("paginateRawQuery", () => {
     ]);
     const result = (await paginateRawQuery({}, fetch)) as { teams: Page<string> };
     expect(result.teams.nodes).toEqual(["T1", "T2"]);
+  });
+
+  it("honors LEBOP_MAX_ITEMS as a hard safety cap", async () => {
+    process.env.LEBOP_MAX_ITEMS = "2";
+    const { fetch } = makeFetcher([
+      { issues: { nodes: ["a", "b"], pageInfo: { hasNextPage: true, endCursor: "c1" } } },
+    ]);
+    const err = await paginateRawQuery({}, fetch).catch((e) => e);
+    expect(err).toBeInstanceOf(ValidationError);
+    expect((err as ValidationError).message).toContain("safety cap of 2");
+  });
+
+  it("detects repeated cursors before replaying a page forever", async () => {
+    const { fetch, calls } = makeFetcher([
+      { issues: { nodes: ["a"], pageInfo: { hasNextPage: true, endCursor: "same" } } },
+      { issues: { nodes: ["b"], pageInfo: { hasNextPage: true, endCursor: "same" } } },
+    ]);
+    const err = await paginateRawQuery({}, fetch).catch((e) => e);
+    expect(err).toBeInstanceOf(ValidationError);
+    expect((err as ValidationError).message).toContain("repeated cursor");
+    expect(calls).toHaveLength(2);
   });
 });

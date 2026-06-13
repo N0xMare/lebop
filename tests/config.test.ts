@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { findGitRoot, hashRepoRoot, loadUserConfig, resolveConfig } from "../src/lib/config.ts";
 import { ConfigError } from "../src/lib/errors.ts";
+import { runWithRequestContext } from "../src/lib/requestContext.ts";
 
 describe("hashRepoRoot", () => {
   it("returns 12-char hex", () => {
@@ -82,6 +83,30 @@ describe("loadUserConfig (structured errors)", () => {
     expect(err).toBeInstanceOf(ConfigError);
     expect(err).toMatchObject({ code: "config_error", hint: expect.any(String) });
   });
+
+  it("throws ConfigError when the YAML is a top-level array", async () => {
+    (globalThis as { Bun?: unknown }).Bun = {
+      file: () => ({
+        exists: async () => true,
+        text: async () => "- default_team\n",
+      }),
+    };
+    const err = await loadUserConfig().catch((e) => e);
+    expect(err).toBeInstanceOf(ConfigError);
+    expect(err.message).toContain("expected a YAML object");
+  });
+
+  it("throws ConfigError for wrong known field types", async () => {
+    (globalThis as { Bun?: unknown }).Bun = {
+      file: () => ({
+        exists: async () => true,
+        text: async () => "default_team: [NOX]\nworkspaces:\n  NOX:\n    url_prefix: 1\n",
+      }),
+    };
+    const err = await loadUserConfig().catch((e) => e);
+    expect(err).toBeInstanceOf(ConfigError);
+    expect(err.message).toContain("default_team");
+  });
 });
 
 describe("resolveConfig (structured errors)", () => {
@@ -118,5 +143,83 @@ describe("resolveConfig (structured errors)", () => {
     const err = await resolveConfig({ cwd: tmp }).catch((e) => e);
     expect(err).toBeInstanceOf(ConfigError);
     expect(err).toMatchObject({ code: "config_error", hint: expect.any(String) });
+  });
+
+  it("uses request-local team override without mutating LEBOP_TEAM", async () => {
+    (globalThis as { Bun?: unknown }).Bun = {
+      file: () => ({
+        exists: async () => false,
+        text: async () => "",
+      }),
+    };
+
+    const config = await runWithRequestContext({ team: "NOX" }, () => resolveConfig({ cwd: tmp }));
+
+    expect(config.team).toBe("NOX");
+    expect(process.env.LEBOP_TEAM).toBeUndefined();
+  });
+
+  it("prefers workspace-slug url_prefix while preserving team-key fallback", async () => {
+    (globalThis as { Bun?: unknown }).Bun = {
+      file: (path: string) => ({
+        exists: async () => String(path).endsWith("config.yaml"),
+        text: async () =>
+          [
+            "default_team: NOX",
+            "workspaces:",
+            "  test-workspace:",
+            "    url_prefix: https://linear.app/workspace-slug",
+            "  NOX:",
+            "    url_prefix: https://linear.app/team-key",
+            "",
+          ].join("\n"),
+      }),
+    };
+
+    const config = await runWithRequestContext({ workspace: "test-workspace" }, () =>
+      resolveConfig({ cwd: tmp }),
+    );
+
+    expect(config.workspaceUrlPrefix).toBe("https://linear.app/workspace-slug");
+  });
+
+  it("falls back to team-key url_prefix for legacy configs", async () => {
+    (globalThis as { Bun?: unknown }).Bun = {
+      file: (path: string) => ({
+        exists: async () => String(path).endsWith("config.yaml"),
+        text: async () =>
+          [
+            "default_team: NOX",
+            "workspaces:",
+            "  NOX:",
+            "    url_prefix: https://linear.app/team-key",
+            "",
+          ].join("\n"),
+      }),
+    };
+
+    const config = await runWithRequestContext({ workspace: "test-workspace" }, () =>
+      resolveConfig({ cwd: tmp }),
+    );
+
+    expect(config.workspaceUrlPrefix).toBe("https://linear.app/team-key");
+  });
+
+  it("can require an explicit cwd to be inside a git repo", async () => {
+    (globalThis as { Bun?: unknown }).Bun = {
+      file: () => ({
+        exists: async () => false,
+        text: async () => "",
+      }),
+    };
+
+    const err = await resolveConfig({
+      cwd: tmp,
+      teamOverride: "NOX",
+      requireGitRoot: true,
+    }).catch((e) => e);
+
+    expect(err).toMatchObject({ code: "validation_error" });
+    expect(err.message).toContain("repo_root is not inside a git repository");
   });
 });

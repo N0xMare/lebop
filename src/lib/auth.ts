@@ -1,12 +1,13 @@
 import { execSync } from "node:child_process";
-import { chmodSync, existsSync, unlinkSync } from "node:fs";
-import { mkdir } from "node:fs/promises";
+import { chmodSync, existsSync, lstatSync, unlinkSync } from "node:fs";
+import { mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { LinearClient } from "@linear/sdk";
-import { writeAtomic } from "./cache.ts";
-import { AuthError, LebopError, mapSdkError } from "./errors.ts";
+import { AuthError, LebopError, mapSdkError, ValidationError } from "./errors.ts";
 import { AUTH_FILE, LEBOP_HOME } from "./paths.ts";
+import { activeWorkspaceOverride } from "./requestContext.ts";
 import { withRetry } from "./retry.ts";
+import { authStateSafetyError, ensureLebopHomeForWrite } from "./stateSafety.ts";
 import type { AuthFile, AuthFileV1, Viewer, WorkspaceAuth } from "./types.ts";
 
 const AUTH_SCHEMA_VERSION = 2 as const;
@@ -19,6 +20,7 @@ const AUTH_SCHEMA_VERSION = 2 as const;
 export async function loadAuth(): Promise<AuthFile | null> {
   const file = Bun.file(AUTH_FILE);
   if (!(await file.exists())) return null;
+  secureExistingAuthForRead();
   let data: unknown;
   try {
     data = await file.json();
@@ -45,6 +47,34 @@ export async function loadAuth(): Promise<AuthFile | null> {
   );
 }
 
+function secureExistingAuthForRead(): void {
+  try {
+    const homeStat = lstatSync(LEBOP_HOME);
+    if (homeStat.isSymbolicLink() || !homeStat.isDirectory()) {
+      throw new AuthError(
+        `refusing to read auth from unsafe directory: ${LEBOP_HOME}`,
+        "replace it with a normal directory owned by the current user",
+      );
+    }
+    chmodSync(LEBOP_HOME, 0o700);
+
+    const authStat = lstatSync(AUTH_FILE);
+    if (authStat.isSymbolicLink() || !authStat.isFile()) {
+      throw new AuthError(
+        `refusing to read auth from unsafe file: ${AUTH_FILE}`,
+        "replace it with a normal file, then run `lebop auth login` if needed",
+      );
+    }
+    chmodSync(AUTH_FILE, 0o600);
+  } catch (err) {
+    if (err instanceof AuthError) throw err;
+    throw new AuthError(
+      `failed to secure auth file permissions: ${(err as Error).message}`,
+      `set ${LEBOP_HOME} to mode 0700 and ${AUTH_FILE} to mode 0600, then retry`,
+    );
+  }
+}
+
 /**
  * Resolve which workspace's credentials to use for the current operation.
  * Selection order:
@@ -66,7 +96,8 @@ export async function loadAuthForWorkspace(slug?: string): Promise<WorkspaceAuth
     throw new AuthError("no Linear credentials configured", "run `lebop auth login` first");
   }
 
-  const requested = slug ?? process.env.LEBOP_WORKSPACE ?? auth.default;
+  const requested =
+    slug ?? activeWorkspaceOverride() ?? process.env.LEBOP_WORKSPACE ?? auth.default;
   if (requested) {
     const ws = auth.workspaces[requested];
     if (!ws) {
@@ -178,21 +209,49 @@ export async function setDefaultWorkspace(slug: string): Promise<void> {
   await writeAuth(auth);
 }
 
-export function deleteAuth(): boolean {
-  if (!existsSync(AUTH_FILE)) return false;
-  unlinkSync(AUTH_FILE);
-  return true;
-}
-
 export function linearClientFromToken(token: string): LinearClient {
   // PAKs start with `lin_api_` and go in Authorization header as-is.
   // OAuth bearer tokens need the `Bearer ` prefix, which @linear/sdk adds for `accessToken`.
   // `LEBOP_API_URL` env var overrides the default Linear endpoint — used by
   // integration tests pointing at a local mock server.
-  const apiUrl = process.env.LEBOP_API_URL;
+  const apiUrl = resolveLinearApiUrlOverride();
   return token.startsWith("lin_api_")
     ? new LinearClient(apiUrl ? { apiKey: token, apiUrl } : { apiKey: token })
     : new LinearClient(apiUrl ? { accessToken: token, apiUrl } : { accessToken: token });
+}
+
+export function resolveLinearApiUrlOverride(): string | undefined {
+  const apiUrl = process.env.LEBOP_API_URL?.trim();
+  if (!apiUrl) return undefined;
+
+  let parsed: URL;
+  try {
+    parsed = new URL(apiUrl);
+  } catch {
+    throw new ValidationError(
+      "LEBOP_API_URL must be a valid URL",
+      "unset LEBOP_API_URL for real Linear calls, or point it at a local test server",
+    );
+  }
+
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new ValidationError(
+      "LEBOP_API_URL must use http or https",
+      "unset LEBOP_API_URL for real Linear calls, or point it at an HTTP(S) test server",
+    );
+  }
+  if (isLocalLinearApiOverride(parsed)) return apiUrl;
+  if (process.env.LEBOP_ALLOW_CUSTOM_API_URL === "1") return apiUrl;
+
+  throw new ValidationError(
+    "refusing to send Linear credentials to custom LEBOP_API_URL without LEBOP_ALLOW_CUSTOM_API_URL=1",
+    "unset LEBOP_API_URL for real Linear calls, use a localhost test server, or set LEBOP_ALLOW_CUSTOM_API_URL=1 intentionally",
+  );
+}
+
+function isLocalLinearApiOverride(url: URL): boolean {
+  const host = url.hostname.toLowerCase();
+  return host === "localhost" || host === "127.0.0.1" || host === "::1" || host === "[::1]";
 }
 
 /**
@@ -312,44 +371,83 @@ async function migrateV1ToV2(v1: AuthFileV1): Promise<AuthFile> {
 }
 
 async function writeAuth(auth: AuthFile): Promise<void> {
-  // ~/.lebop/ must exist with mode 0700 before we drop the tmp file in it.
+  // ~/.lebop/ must exist with mode 0700 before we drop any token-bearing tmp
+  // file in it. mkdir's mode is ignored for an existing directory, so chmod
+  // first and fail closed if the directory cannot be secured.
+  ensureLebopHomeForWrite({ errorFactory: authStateSafetyError });
   await mkdir(dirname(AUTH_FILE), { recursive: true, mode: 0o700 });
-  // Atomic write (tmp + rename) so a crash mid-write can't leave a partial /
-  // 0-byte / half-flushed auth.json — which would block every future lebop
-  // run until the user re-authenticated. Matches the codebase's posture
-  // (cache.ts:writeAtomic, configWrite.ts).
-  await writeAtomic(AUTH_FILE, `${JSON.stringify(auth, null, 2)}\n`);
-  // Defense in depth on top of the parent-dir 0700 (which is what actually
-  // prevents other local users from reading). chmodSync may briefly race
-  // with the rename above on exotic filesystems; the parent dir is the
-  // real guard so this is belt-and-suspenders.
-  chmodSync(AUTH_FILE, 0o600);
-  chmodSync(LEBOP_HOME, 0o700);
+  try {
+    chmodSync(LEBOP_HOME, 0o700);
+  } catch (err) {
+    throw new AuthError(
+      `failed to secure auth directory permissions: ${(err as Error).message}`,
+      `set ${LEBOP_HOME} to mode 0700, then retry`,
+    );
+  }
+
+  const tmp = `${AUTH_FILE}.tmp-${process.pid}-${Date.now()}-${Math.random()
+    .toString(16)
+    .slice(2)}`;
+  try {
+    await writeFile(tmp, `${JSON.stringify(auth, null, 2)}\n`, { flag: "wx", mode: 0o600 });
+    await rename(tmp, AUTH_FILE);
+    chmodSync(AUTH_FILE, 0o600);
+  } catch (err) {
+    await rm(tmp, { force: true }).catch(() => {});
+    throw new AuthError(
+      `failed to write auth file securely: ${(err as Error).message}`,
+      `set ${LEBOP_HOME} to mode 0700 and ${AUTH_FILE} to mode 0600, then retry`,
+    );
+  }
 }
 
 function isAuthFileV1(value: unknown): value is AuthFileV1 {
-  if (typeof value !== "object" || value === null) return false;
+  if (!isPlainRecord(value)) return false;
   const v = value as Record<string, unknown>;
   if (v.schema_version !== 1) return false;
   if (typeof v.token !== "string") return false;
   if (typeof v.created_at !== "string") return false;
   const viewer = v.viewer as Record<string, unknown> | undefined;
-  if (!viewer || typeof viewer.id !== "string") return false;
+  if (!isViewerRecord(viewer)) return false;
   return true;
 }
 
 function isAuthFileV2(value: unknown): value is AuthFile {
-  if (typeof value !== "object" || value === null) return false;
+  if (!isPlainRecord(value)) return false;
   const v = value as Record<string, unknown>;
   if (v.schema_version !== 2) return false;
-  if (typeof v.workspaces !== "object" || v.workspaces === null) return false;
+  if (!isPlainRecord(v.workspaces)) return false;
   if (v.default !== undefined && typeof v.default !== "string") return false;
+  const workspaces = v.workspaces as Record<string, unknown>;
+  for (const [slug, record] of Object.entries(workspaces)) {
+    if (!isWorkspaceAuthRecord(record)) return false;
+    if ((record as WorkspaceAuth).slug !== slug) return false;
+  }
+  if (typeof v.default === "string" && !Object.hasOwn(workspaces, v.default)) return false;
   return true;
 }
 
-// Legacy alias — kept temporarily so other modules don't break during the
-// transition. Replaces the v1 `saveAuth` / single-workspace contract.
-export async function saveAuth(token: string, _viewer: Viewer): Promise<WorkspaceAuth> {
-  // Validate token + fetch organization, then write v2.
-  return addWorkspace(token);
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isViewerRecord(value: unknown): value is Viewer {
+  if (!isPlainRecord(value)) return false;
+  return (
+    typeof value.id === "string" &&
+    typeof value.email === "string" &&
+    typeof value.name === "string"
+  );
+}
+
+function isWorkspaceAuthRecord(value: unknown): value is WorkspaceAuth {
+  if (!isPlainRecord(value)) return false;
+  return (
+    typeof value.slug === "string" &&
+    typeof value.name === "string" &&
+    typeof value.url_key === "string" &&
+    typeof value.token === "string" &&
+    isViewerRecord(value.viewer) &&
+    typeof value.created_at === "string"
+  );
 }

@@ -1,61 +1,69 @@
 /**
- * Wave-2 / item #13 — sanity-check that every registered MCP tool in
- * `src/mcp/server.ts` declares an `annotations` block. We don't link against
- * the MCP SDK at test time (the registration helper is internal to the
- * server module), so the assertion is source-level: count
- * `server.registerTool(` calls and verify each has a matching `annotations:`
- * block before the corresponding `safe(` handler.
+ * Sanity-check that every registered MCP tool declares
+ * an `annotations` block. We don't link against the MCP SDK at test time (the
+ * registration helper is internal to the server module), so assertions use
+ * `collectMcpToolDefinitions()` instead of parsing registration source.
  *
- * The intent of the wave-2 work is that all 73 tools advertise hints — this
- * smoke test catches regressions where a newly-added tool forgets the
- * annotation block, *not* deep validation of the hint values.
+ * All MCP tools should advertise hints. This smoke test catches regressions
+ * where a newly-added tool forgets the annotation block; it is not deep
+ * validation of the hint values.
  */
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import {
+  CONDITIONAL_MCP_CONFIRM_TOOLS,
+  REQUIRED_MCP_CONFIRM_TOOLS,
+} from "../src/lib/toolSurfaceManifest.ts";
+import { collectMcpToolDefinitions } from "../src/mcp/server.ts";
+import { WORKSPACE_EXPLORE_SEARCH_KIND_INPUTS } from "../src/surface/workspace.ts";
 
-const serverPath = join(__dirname, "..", "src", "mcp", "server.ts");
-const src = readFileSync(serverPath, "utf8");
-
-const TOOL_PATTERN = /server\.registerTool\(\n\s+"([a-z_]+)",\n\s+\{/g;
+const specPath = join(__dirname, "..", "docs", "spec.md");
+const spec = readFileSync(specPath, "utf8");
+const mcpDefinitions = collectMcpToolDefinitions();
+const mcpDefinitionByName = new Map(
+  mcpDefinitions.map((definition) => [definition.name, definition]),
+);
 
 function listToolNames(): string[] {
-  const names: string[] = [];
-  for (const m of src.matchAll(TOOL_PATTERN)) {
-    names.push(m[1] as string);
-  }
-  return names;
+  return mcpDefinitions.map((definition) => definition.name);
 }
 
 function annotationFor(toolName: string): {
-  raw: string;
+  annotations: Record<string, unknown>;
   hints: Record<string, boolean>;
 } | null {
-  // Slice from the registration opener to the `},\n    safe(` closer.
-  const opener = `server.registerTool(\n    "${toolName}",\n    {`;
-  const startIdx = src.indexOf(opener);
-  if (startIdx === -1) return null;
-  const closeMarker = "\n    },\n    safe(";
-  const endIdx = src.indexOf(closeMarker, startIdx);
-  if (endIdx === -1) return null;
-  const block = src.slice(startIdx, endIdx);
-  const annMatch = /annotations:\s*\{([\s\S]*?)\n\s+\},/.exec(block);
-  if (!annMatch) return null;
-  const annBody = annMatch[1] as string;
+  const annotations = mcpDefinitionByName.get(toolName)?.config.annotations;
+  if (!annotations) return null;
   const hints: Record<string, boolean> = {};
   for (const hint of ["readOnlyHint", "destructiveHint", "idempotentHint", "openWorldHint"]) {
-    const m = new RegExp(`${hint}:\\s*(true|false)`).exec(annBody);
-    if (m) hints[hint] = m[1] === "true";
+    const value = annotations[hint];
+    if (typeof value === "boolean") hints[hint] = value;
   }
-  return { raw: annBody, hints };
+  return { annotations, hints };
 }
 
-describe("MCP tool annotations (wave-2 item #13)", () => {
+function inputDescription(toolName: string, field: string): string {
+  const schema = mcpDefinitionByName.get(toolName)?.config.inputSchema ?? {};
+  const fieldSchema = (schema as Record<string, { description?: string }>)[field];
+  return fieldSchema?.description ?? "";
+}
+
+describe("MCP tool annotations", () => {
   const allTools = listToolNames();
 
-  it("registers exactly 73 tools", () => {
-    expect(allTools.length).toBe(73);
+  it("registers exactly 85 tools", () => {
+    expect(allTools.length).toBe(85);
+  });
+
+  it("docs/spec.md shipped-tool inventory exactly matches server registrations", () => {
+    const section = /#### Shipped tools \(85\)([\s\S]*?)#### MCP tool inventory/.exec(spec)?.[1];
+    expect(section).toBeDefined();
+    const documented = Array.from(
+      new Set([...(section ?? "").matchAll(/`([a-z_]+)`/g)].map((m) => m[1])),
+    );
+    expect(documented.toSorted()).toEqual(allTools.toSorted());
   });
 
   it("every tool has an annotations block with a title", () => {
@@ -67,7 +75,7 @@ describe("MCP tool annotations (wave-2 item #13)", () => {
         missing.push(name);
         continue;
       }
-      if (!/title:\s*"/.test(ann.raw)) {
+      if (typeof ann.annotations.title !== "string") {
         noTitle.push(name);
       }
     }
@@ -82,11 +90,13 @@ describe("MCP tool annotations (wave-2 item #13)", () => {
       "list_issues",
       "get_issue",
       "list_labels",
-      "lint_text",
       "cache_status",
       "diff_issue",
+      "diff_project",
       "plan_validate",
+      "plan_diff",
       "list_workspaces",
+      "list_teams",
     ]) {
       const ann = annotationFor(name);
       expect(ann?.hints).toMatchObject({
@@ -94,6 +104,57 @@ describe("MCP tool annotations (wave-2 item #13)", () => {
         idempotentHint: true,
         openWorldHint: true,
       });
+    }
+  });
+
+  it("lint_text is local-only in-memory linting", () => {
+    const ann = annotationFor("lint_text");
+    expect(ann?.hints).toMatchObject({
+      readOnlyHint: true,
+      idempotentHint: true,
+      openWorldHint: false,
+    });
+  });
+
+  it("lint_files is local filesystem linting", () => {
+    const ann = annotationFor("lint_files");
+    expect(ann?.hints).toMatchObject({
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    });
+  });
+
+  it("explore_linear_workspace is read-only and idempotent", () => {
+    const ann = annotationFor("explore_linear_workspace");
+    expect(ann?.hints).toMatchObject({
+      readOnlyHint: true,
+      idempotentHint: true,
+      openWorldHint: true,
+    });
+  });
+
+  it("explore_linear_workspace accepts singular and plural search kinds", () => {
+    for (const kind of [
+      "project",
+      "projects",
+      "issue",
+      "issues",
+      "initiative",
+      "initiatives",
+      "document",
+      "documents",
+      "cycle",
+      "cycles",
+      "milestone",
+      "milestones",
+      "agent-session",
+      "agent-sessions",
+      "agent_session",
+      "agent_sessions",
+    ]) {
+      expect(WORKSPACE_EXPLORE_SEARCH_KIND_INPUTS).toContain(kind);
     }
   });
 
@@ -105,11 +166,50 @@ describe("MCP tool annotations (wave-2 item #13)", () => {
       "cache_gc",
       "initiative_remove_project",
       "archive_issue",
+      "delete_relation",
     ]) {
       const ann = annotationFor(name);
       expect(ann?.hints.destructiveHint).toBe(true);
       expect(ann?.hints.readOnlyHint).toBe(false);
     }
+  });
+
+  it("manifest-required destructive tools require an explicit confirm input", () => {
+    for (const name of REQUIRED_MCP_CONFIRM_TOOLS) {
+      const schema = mcpDefinitionByName.get(name)?.config.inputSchema ?? {};
+      expect(schema, `${name} missing confirm input`).toHaveProperty("confirm");
+      expect(inputDescription(name, "confirm"), `${name} missing confirm description`).toContain(
+        "Required true",
+      );
+    }
+  });
+
+  it("conditional destructive tools expose confirm input", () => {
+    for (const name of CONDITIONAL_MCP_CONFIRM_TOOLS) {
+      const schema = mcpDefinitionByName.get(name)?.config.inputSchema ?? {};
+      expect(schema, `${name} missing confirm input`).toHaveProperty("confirm");
+      expect(inputDescription(name, "confirm"), `${name} missing confirm description`).toContain(
+        "Required true",
+      );
+    }
+  });
+
+  it("conditional destructive tools advertise conservative destructive hints", () => {
+    for (const name of CONDITIONAL_MCP_CONFIRM_TOOLS) {
+      const ann = annotationFor(name);
+      expect(ann?.hints.destructiveHint, name).toBe(true);
+      expect(ann?.hints.readOnlyHint, name).toBe(false);
+    }
+  });
+
+  it("raw_graphql advertises conservative mutation-capable safety hints", () => {
+    const ann = annotationFor("raw_graphql");
+    expect(ann?.hints).toMatchObject({
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: true,
+    });
   });
 
   it("create_* tools are non-idempotent", () => {
@@ -135,9 +235,12 @@ describe("MCP tool annotations (wave-2 item #13)", () => {
       "update_document",
       "push_changes",
       "pull_issues",
+      "pull_project",
       "add_relation",
-      "plan_apply",
+      "update_relations",
       "plan_pull",
+      "plan_lint",
+      "refresh_whoami",
     ]) {
       const ann = annotationFor(name);
       expect(ann?.hints).toMatchObject({
@@ -145,5 +248,25 @@ describe("MCP tool annotations (wave-2 item #13)", () => {
         idempotentHint: true,
       });
     }
+  });
+
+  it("local-writing fetch and publish apply are non-idempotent", () => {
+    for (const name of ["fetch_linear_workspace", "publish_linear_changes", "plan_apply"]) {
+      const ann = annotationFor(name);
+      expect(ann?.hints).toMatchObject({
+        readOnlyHint: false,
+        idempotentHint: false,
+        openWorldHint: true,
+      });
+    }
+  });
+
+  it("review_linear_changes is not idempotent because it creates a review record", () => {
+    const ann = annotationFor("review_linear_changes");
+    expect(ann?.hints).toMatchObject({
+      readOnlyHint: false,
+      idempotentHint: false,
+      openWorldHint: true,
+    });
   });
 });

@@ -8,7 +8,15 @@
  * vitest runs under Node, not Bun.
  */
 
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -73,6 +81,23 @@ describe("setWorkspaceDefaultTeam", () => {
     expect(parsed.workspace_team_defaults).toEqual({ "unlink-xyz": "UE" });
   });
 
+  it("refuses a symlinked LEBOP_HOME before writing config.yaml", async () => {
+    const realHome = mkdtempSync(join(tmpdir(), "lebop-cw-real-"));
+    const linkHome = join(tmpdir(), `lebop-cw-link-${Date.now()}`);
+    rmSync(home, { recursive: true, force: true });
+    symlinkSync(realHome, linkHome, "dir");
+    home = linkHome;
+    process.env.LEBOP_HOME = linkHome;
+    await importFresh();
+
+    await expect(mod.setWorkspaceDefaultTeam("unlink-xyz", "UE")).rejects.toMatchObject({
+      code: "validation_error",
+      message: expect.stringContaining("unsafe state directory"),
+    });
+    expect(existsSync(join(realHome, "config.yaml"))).toBe(false);
+    rmSync(realHome, { recursive: true, force: true });
+  });
+
   it("preserves prior workspace entries and updates the named one in place", async () => {
     await mod.setWorkspaceDefaultTeam("a", "AAA");
     await mod.setWorkspaceDefaultTeam("b", "BBB");
@@ -82,6 +107,18 @@ describe("setWorkspaceDefaultTeam", () => {
       workspace_team_defaults: Record<string, string>;
     };
     expect(parsed.workspace_team_defaults).toEqual({ a: "AAA2", b: "BBB" });
+  });
+
+  it("serializes concurrent workspace default updates", async () => {
+    await Promise.all([
+      mod.setWorkspaceDefaultTeam("workspace-a", "AAA"),
+      mod.setWorkspaceDefaultTeam("workspace-b", "BBB"),
+    ]);
+
+    const parsed = parseYaml(readFileSync(paths.CONFIG_FILE, "utf8")) as {
+      workspace_team_defaults: Record<string, string>;
+    };
+    expect(parsed.workspace_team_defaults).toEqual({ "workspace-a": "AAA", "workspace-b": "BBB" });
   });
 
   it("throws structured ValidationError when existing config has malformed YAML", async () => {

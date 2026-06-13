@@ -84,13 +84,22 @@ describe("paginateConnection", () => {
     expect(calls[0]?.after).toBe("preset-cursor");
   });
 
-  it("stops on hasNextPage:true but null endCursor (defensive)", async () => {
+  it("throws on hasNextPage:true but null endCursor (non-continuable page)", async () => {
     const { fetch, calls } = stubFetcher([
       { nodes: ["a"], pageInfo: { hasNextPage: true, endCursor: null } },
     ]);
-    const result = await paginateConnection(fetch);
-    expect(result).toEqual(["a"]);
+    await expect(paginateConnection(fetch)).rejects.toThrow(/hasNextPage without endCursor/);
     expect(calls).toHaveLength(1);
+  });
+
+  it("throws when the connection cursor repeats", async () => {
+    const { fetch, calls } = stubFetcher([
+      { nodes: ["a"], pageInfo: { hasNextPage: true, endCursor: "same" } },
+      { nodes: ["b"], pageInfo: { hasNextPage: true, endCursor: "same" } },
+    ]);
+
+    await expect(paginateConnection(fetch)).rejects.toThrow(/repeated cursor/);
+    expect(calls).toHaveLength(2);
   });
 
   it("default pageSize is 250", async () => {
@@ -142,6 +151,25 @@ describe("paginateRaw", () => {
     ]);
     await paginateRaw(fetch, (r) => r.data.issues, { initialAfter: "from-here" });
     expect(calls[0]?.after).toBe("from-here");
+  });
+
+  it("throws on raw hasNextPage:true but null endCursor", async () => {
+    const { fetch } = wrappedStub<string>([
+      { nodes: ["a"], pageInfo: { hasNextPage: true, endCursor: null } },
+    ]);
+
+    await expect(paginateRaw(fetch, (r) => r.data.issues)).rejects.toThrow(
+      /hasNextPage without endCursor/,
+    );
+  });
+
+  it("throws when the raw connection cursor repeats", async () => {
+    const { fetch } = wrappedStub<string>([
+      { nodes: ["a"], pageInfo: { hasNextPage: true, endCursor: "same" } },
+      { nodes: ["b"], pageInfo: { hasNextPage: true, endCursor: "same" } },
+    ]);
+
+    await expect(paginateRaw(fetch, (r) => r.data.issues)).rejects.toThrow(/repeated cursor/);
   });
 });
 

@@ -15,3 +15,6 @@ auth.json
 # not for the repo. The tracked `claude/` (no dot) is the agent integration assets;
 # `.claude/` (with dot) is the harness's local config.
 .claude/
+
+# Local planning / scratch docs. Visible in the worktree, not tracked.
+docs/local/

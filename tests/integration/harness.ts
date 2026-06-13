@@ -1,6 +1,6 @@
 /**
  * Integration-test harness. Spins up a local mock for Linear's GraphQL
- * endpoint via `node:http` (works under both `vitest run` and `bun test`),
+ * endpoint via `node:http` under the supported `vitest run` test runner,
  * spawns `bin/lebop` as a child process with `LEBOP_HOME` and `LEBOP_API_URL`
  * overrides, captures stdout/stderr/exit, and returns everything for
  * assertion.
@@ -50,12 +50,18 @@ export interface MockResponse {
   errors?: { message: string; extensions?: Record<string, unknown> }[];
   /** HTTP status to return. Default 200. */
   status?: number;
+  /** Extra response headers. Header names are case-insensitive. */
+  headers?: Record<string, string>;
+  /** Optional test hook invoked after the request is logged and before the response is sent. */
+  beforeRespond?: () => void | Promise<void>;
 }
 
 export interface RunResult {
   stdout: string;
   stderr: string;
   exitCode: number | null;
+  timedOut?: boolean;
+  error?: string;
 }
 
 export interface MockServer {
@@ -65,16 +71,19 @@ export interface MockServer {
   respond: (response: MockResponse) => void;
   /** Get the body of the request that consumed `index`-th response. */
   requestAt: (index: number) => { query: string; variables: Record<string, unknown> } | undefined;
+  /** Number of queued responses that no request consumed yet. */
+  pendingResponseCount: () => number;
+  /** Assert that a test consumed exactly the responses it queued. */
+  assertNoPendingResponses: () => void;
   /** Reset the FIFO queue + request log. Use in `afterEach` to isolate tests. */
-  reset: () => void;
+  reset: (options?: { allowPendingResponses?: boolean }) => void;
   /** Stop the server. */
   stop: () => Promise<void>;
 }
 
 /**
  * Boot a `node:http` server that responds to GraphQL POST requests with
- * queued mock responses (FIFO). Works under both `vitest run` (Node) and
- * `bun test` (Bun). Each call to `respond()` enqueues one response; the
+ * queued mock responses (FIFO). Each call to `respond()` enqueues one response; the
  * next inbound request consumes it. Returns the server URL (for
  * `LEBOP_API_URL`) plus controls.
  */
@@ -90,7 +99,7 @@ export async function startMockLinear(): Promise<MockServer> {
     }
     const chunks: Buffer[] = [];
     req.on("data", (chunk: Buffer) => chunks.push(chunk));
-    req.on("end", () => {
+    req.on("end", async () => {
       const raw = Buffer.concat(chunks).toString("utf8");
       let body: { query?: string; variables?: Record<string, unknown> };
       try {
@@ -109,10 +118,24 @@ export async function startMockLinear(): Promise<MockServer> {
         );
         return;
       }
+      try {
+        await next.beforeRespond?.();
+      } catch (err) {
+        res.writeHead(500, { "content-type": "application/json" });
+        res.end(
+          JSON.stringify({
+            errors: [{ message: err instanceof Error ? err.message : String(err) }],
+          }),
+        );
+        return;
+      }
       const payload: Record<string, unknown> = {};
       if (next.data !== undefined) payload.data = next.data;
       if (next.errors !== undefined) payload.errors = next.errors;
-      res.writeHead(next.status ?? 200, { "content-type": "application/json" });
+      res.writeHead(next.status ?? 200, {
+        "content-type": "application/json",
+        ...(next.headers ?? {}),
+      });
       res.end(JSON.stringify(payload));
     });
   });
@@ -126,7 +149,20 @@ export async function startMockLinear(): Promise<MockServer> {
       queue.push(response);
     },
     requestAt: (index) => log[index],
-    reset: () => {
+    pendingResponseCount: () => queue.length,
+    assertNoPendingResponses: () => {
+      if (queue.length > 0) {
+        throw new Error(
+          `mock Linear server has ${queue.length} unused queued response(s). Tests must consume every queued response or call reset({ allowPendingResponses: true }) with an explicit reason.`,
+        );
+      }
+    },
+    reset: (options = {}) => {
+      if (!options.allowPendingResponses && queue.length > 0) {
+        throw new Error(
+          `mock Linear server reset with ${queue.length} unused queued response(s). Tests must consume every queued response or call reset({ allowPendingResponses: true }) with an explicit reason.`,
+        );
+      }
       queue.length = 0;
       log.length = 0;
     },
@@ -195,8 +231,23 @@ export async function runLebop(
   args: string[],
   env: Record<string, string> = {},
   cwd?: string,
+  timeoutMs = Number(process.env.LEBOP_TEST_TIMEOUT_MS ?? 30_000),
+  stdin?: string,
 ): Promise<RunResult> {
   return new Promise((resolve) => {
+    let finished = false;
+    let timedOut = false;
+    let stdout = "";
+    let stderr = "";
+    let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
+    let forceKillTimer: ReturnType<typeof setTimeout> | undefined;
+    const finish = (result: RunResult) => {
+      if (finished) return;
+      finished = true;
+      if (timeoutTimer) clearTimeout(timeoutTimer);
+      if (forceKillTimer) clearTimeout(forceKillTimer);
+      resolve(result);
+    };
     const child = spawn("bun", [LEBOP_BIN, ...args], {
       cwd,
       env: {
@@ -206,20 +257,69 @@ export async function runLebop(
         FORCE_COLOR: "0",
         ...env,
       },
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: [stdin === undefined ? "ignore" : "pipe", "pipe", "pipe"],
     });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (d) => {
+    const childStdout = child.stdout;
+    const childStderr = child.stderr;
+    if (!childStdout || !childStderr) {
+      finish({
+        stdout,
+        stderr: "failed to attach lebop child process stdout/stderr streams",
+        exitCode: null,
+        error: "missing child process stdio streams",
+      });
+      return;
+    }
+    if (stdin !== undefined) {
+      if (!child.stdin) {
+        finish({
+          stdout,
+          stderr: "failed to attach lebop child process stdin stream",
+          exitCode: null,
+          error: "missing child process stdin stream",
+        });
+        return;
+      }
+      child.stdin.end(stdin);
+    }
+    const command = `bun ${[LEBOP_BIN, ...args].join(" ")}`;
+    timeoutTimer = setTimeout(() => {
+      timedOut = true;
+      stderr += `${stderr ? "\n" : ""}${command} timed out after ${timeoutMs}ms`;
+      child.kill("SIGTERM");
+      forceKillTimer = setTimeout(() => {
+        child.kill("SIGKILL");
+        finish({ stdout, stderr, exitCode: null, timedOut: true });
+      }, 2_000);
+    }, timeoutMs);
+    childStdout.on("data", (d) => {
       stdout += d.toString();
     });
-    child.stderr.on("data", (d) => {
+    childStderr.on("data", (d) => {
       stderr += d.toString();
     });
+    child.on("error", (err) => {
+      finish({
+        stdout,
+        stderr: `${stderr}${stderr ? "\n" : ""}${err.message}`,
+        exitCode: null,
+        error: err.message,
+      });
+    });
     child.on("close", (code) => {
-      resolve({ stdout, stderr, exitCode: code });
+      finish({ stdout, stderr, exitCode: code, timedOut });
     });
   });
+}
+
+export function runLebopWithStdin(
+  args: string[],
+  stdin: string,
+  env: Record<string, string> = {},
+  cwd?: string,
+  timeoutMs = Number(process.env.LEBOP_TEST_TIMEOUT_MS ?? 30_000),
+): Promise<RunResult> {
+  return runLebop(args, env, cwd, timeoutMs, stdin);
 }
 
 // ============================================================================
@@ -260,6 +360,8 @@ export interface McpClient {
   listTools(): Promise<{ tools: McpToolDescriptor[] }>;
   /** Send JSON-RPC `tools/call` with `{name, arguments}`. */
   callTool(name: string, args: Record<string, unknown>): Promise<McpToolResult>;
+  /** Send JSON-RPC `tools/call` with no `arguments` field. */
+  callToolOmittingArguments(name: string): Promise<McpToolResult>;
   /** Close stdin and wait for the child to exit (or kill on timeout). */
   close(): Promise<void>;
   /** Captured stderr from the child (useful for debugging flakes). */
@@ -312,6 +414,16 @@ export async function startMcpClient(env: Record<string, string> = {}): Promise<
   >();
   let nextId = 1;
   let exited = false;
+  const stdoutProtocolErrors: string[] = [];
+
+  function failProtocol(message: string): void {
+    stdoutProtocolErrors.push(message);
+    for (const [, waiter] of pending) {
+      waiter.reject(new Error(`${message}\nstderr:\n${stderr || "(empty)"}`));
+    }
+    pending.clear();
+    child.kill("SIGTERM");
+  }
 
   child.stdout.on("data", (chunk: Buffer) => {
     buf += chunk.toString("utf8");
@@ -329,7 +441,8 @@ export async function startMcpClient(env: Record<string, string> = {}): Promise<
           }
           // Else: server notification or unknown id — ignore silently.
         } catch {
-          // Non-JSON line (shouldn't happen, but tolerate stray logging).
+          failProtocol(`MCP child wrote non-JSON stdout: ${JSON.stringify(line)}`);
+          return;
         }
       }
       nl = buf.indexOf("\n");
@@ -356,6 +469,9 @@ export async function startMcpClient(env: Record<string, string> = {}): Promise<
   });
 
   function send(method: string, params?: Record<string, unknown>): Promise<JsonRpcResponse> {
+    if (stdoutProtocolErrors.length > 0) {
+      return Promise.reject(new Error(stdoutProtocolErrors.join("\n")));
+    }
     if (exited) {
       return Promise.reject(new Error(`MCP child already exited. stderr:\n${stderr || "(empty)"}`));
     }
@@ -429,26 +545,21 @@ export async function startMcpClient(env: Record<string, string> = {}): Promise<
       return res.result as { tools: McpToolDescriptor[] };
     },
     async callTool(name, args) {
-      const res = await send("tools/call", { name, arguments: args });
-      if (res.error) {
-        // Protocol-level error (e.g. unknown tool). Surface as thrown Error
-        // so tests can distinguish from tool-level `isError: true`.
-        throw new Error(`MCP tools/call protocol error: ${res.error.message}`);
-      }
-      const raw = res.result as { content: McpToolContent[]; isError?: boolean };
-      let parsed: unknown = null;
-      const first = raw.content?.[0];
-      if (first?.type === "text") {
-        try {
-          parsed = JSON.parse(first.text);
-        } catch {
-          parsed = null;
-        }
-      }
-      return { ...raw, parsed };
+      return callToolWithParams({ name, arguments: args });
+    },
+    async callToolOmittingArguments(name) {
+      return callToolWithParams({ name });
     },
     async close() {
-      if (exited) return;
+      if (exited) {
+        if (buf.trim().length > 0) {
+          throw new Error(`MCP child left unterminated stdout: ${JSON.stringify(buf.trim())}`);
+        }
+        if (stdoutProtocolErrors.length > 0) {
+          throw new Error(stdoutProtocolErrors.join("\n"));
+        }
+        return;
+      }
       // Closing stdin signals EOF; the server's stdio transport resolves and
       // the process exits cleanly. Fall back to a kill if it doesn't.
       child.stdin.end();
@@ -462,6 +573,32 @@ export async function startMcpClient(env: Record<string, string> = {}): Promise<
           resolve();
         });
       });
+      if (buf.trim().length > 0) {
+        throw new Error(`MCP child left unterminated stdout: ${JSON.stringify(buf.trim())}`);
+      }
+      if (stdoutProtocolErrors.length > 0) {
+        throw new Error(stdoutProtocolErrors.join("\n"));
+      }
     },
   };
+
+  async function callToolWithParams(params: Record<string, unknown>): Promise<McpToolResult> {
+    const res = await send("tools/call", params);
+    if (res.error) {
+      // Protocol-level error (e.g. unknown tool). Surface as thrown Error
+      // so tests can distinguish from tool-level `isError: true`.
+      throw new Error(`MCP tools/call protocol error: ${res.error.message}`);
+    }
+    const raw = res.result as { content: McpToolContent[]; isError?: boolean };
+    let parsed: unknown = null;
+    const first = raw.content?.[0];
+    if (first?.type === "text") {
+      try {
+        parsed = JSON.parse(first.text);
+      } catch {
+        parsed = null;
+      }
+    }
+    return { ...raw, parsed };
+  }
 }

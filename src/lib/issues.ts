@@ -9,16 +9,24 @@
 
 import type { TeamMetadata } from "./cache.ts";
 import { NotFoundError, rewriteNotFound, tryMapToNull, ValidationError } from "./errors.ts";
-import { buildPullIssuesQuery, type FetchedIssue, type FetchedProject } from "./pullQuery.ts";
+import { requireMutationEntity, requireMutationSuccess } from "./mutationResult.ts";
+import {
+  buildPullIssuesQuery,
+  type FetchedIssue,
+  type FetchedProject,
+  ISSUE_FIELDS_FRAGMENT,
+} from "./pullQuery.ts";
 import {
   deriveTeamFromIdentifiers,
   getTeamMetadata,
   ResolveError,
   resolveAssigneeId,
   resolveCycleIdByName,
+  resolveLabelId,
   resolveLabelIds,
   resolveMilestoneIdByName,
   resolvePriority,
+  resolveProjectIdByName,
   resolveStateId,
   withFreshMetadataOnMiss,
 } from "./resolve.ts";
@@ -57,28 +65,6 @@ export interface CreatedIssue {
 }
 
 /**
- * Workspace-wide project name lookup. Used by updateIssue when the input
- * `project` is a name and the team-metadata cache doesn't carry it (rare,
- * but happens for cross-team projects). Returns the UUID or null.
- *
- * Wave 3: pulled into the lib alongside the new milestone/cycle resolvers
- * so updateIssue stays a single round-trip from the caller's perspective.
- */
-async function resolveProjectByWorkspaceName(name: string): Promise<string | null> {
-  const QUERY = /* GraphQL */ `
-    query ResolveProject($name: String!) {
-      projects(filter: { name: { eq: $name } }, first: 1) {
-        nodes { id name }
-      }
-    }
-  `;
-  const response = (await withClient((c) => c.client.rawRequest(QUERY, { name }))) as {
-    data: { projects: { nodes: { id: string }[] } };
-  };
-  return response.data.projects.nodes[0]?.id ?? null;
-}
-
-/**
  * Resolve a Linear issue identifier (e.g. "NOX-42") to a minimal
  * `{id, identifier}` shape via a hand-rolled query. Avoids the 60+ field
  * fragment that the SDK-typed `c.issue(id)` ships, which instantiates
@@ -89,17 +75,32 @@ async function resolveProjectByWorkspaceName(name: string): Promise<string | nul
  * Wave 3: introduced when updateIssue absorbed project/milestone/cycle so
  * the whole lib path is one identifier → UUID round-trip + one mutation.
  */
-async function resolveIssueIdByIdentifier(
-  identifier: string,
-): Promise<{ id: string; identifier: string } | null> {
+async function resolveIssueIdByIdentifier(identifier: string): Promise<{
+  id: string;
+  identifier: string;
+  project?: { id: string; name: string } | null;
+  labels?: { nodes: { id: string; name: string }[] } | null;
+} | null> {
   const QUERY = /* GraphQL */ `
     query ResolveIssueId($id: String!) {
-      issue(id: $id) { id identifier }
+      issue(id: $id) {
+        id
+        identifier
+        project { id name }
+        labels { nodes { id name } }
+      }
     }
   `;
   try {
     const response = (await withClient((c) => c.client.rawRequest(QUERY, { id: identifier }))) as {
-      data: { issue: { id: string; identifier: string } | null };
+      data: {
+        issue: {
+          id: string;
+          identifier: string;
+          project?: { id: string; name: string } | null;
+          labels?: { nodes: { id: string; name: string }[] } | null;
+        } | null;
+      };
     };
     return response.data.issue ?? null;
   } catch (err) {
@@ -133,14 +134,28 @@ function resolveProjectByName(
   projectName: string | undefined,
 ): string | undefined {
   if (!projectName) return undefined;
-  const match = teamMetadata.projects.find(
-    (p) => p.name.toLowerCase() === projectName.toLowerCase(),
-  );
-  if (!match) {
+  const match = resolveCachedProjectIdByName(teamMetadata, projectName);
+  if (match === null) {
     const names = teamMetadata.projects.map((p) => `"${p.name}"`).join(", ");
     throw new ResolveError(`unknown project "${projectName}". available: ${names}`);
   }
-  return match.id;
+  return match;
+}
+
+function resolveCachedProjectIdByName(
+  teamMetadata: { projects: { id: string; name: string }[] },
+  projectName: string,
+): string | null {
+  const lowerName = projectName.toLowerCase();
+  const matches = teamMetadata.projects.filter((p) => p.name.toLowerCase() === lowerName);
+  if (matches.length > 1) {
+    const candidates = matches.map((p) => `${p.name} (${p.id})`).join(", ");
+    throw new ResolveError(
+      `ambiguous project "${projectName}" in team cache matches: ${candidates}`,
+      "pass the project UUID instead of the project name",
+    );
+  }
+  return matches[0]?.id ?? null;
 }
 
 export async function createIssue(input: CreateIssueInput): Promise<CreatedIssue> {
@@ -175,7 +190,11 @@ export async function createIssue(input: CreateIssueInput): Promise<CreatedIssue
   const response = (await client.client.rawRequest(CREATE_MUTATION, { input: linearInput })) as {
     data: { issueCreate: { success: boolean; issue: CreatedIssue } };
   };
-  return response.data.issueCreate.issue;
+  return requireMutationEntity<CreatedIssue>(
+    "issueCreate",
+    response.data.issueCreate as unknown as { success?: boolean } & Record<string, unknown>,
+    "issue",
+  );
 }
 
 export interface UpdateIssueInput {
@@ -188,6 +207,10 @@ export interface UpdateIssueInput {
   priority?: string | number;
   estimate?: number | null;
   labels?: string[];
+  labelDeltas?: {
+    add?: string[];
+    remove?: string[];
+  };
   assignee?: string | null;
   parent?: string | null;
   /**
@@ -211,12 +234,68 @@ export interface UpdateIssueInput {
   cycle?: string | null;
 }
 
-export interface UpdatedIssue {
+export type UpdatedIssue = FetchedIssue;
+
+export interface IssueWriteProof {
   id: string;
   identifier: string;
-  url: string;
-  title: string;
-  state: { name: string };
+  url: string | null;
+  updated_at: string | null;
+  title: string | null;
+  description: string | null;
+  state: { id: string | null; name: string; type: string | null } | null;
+  priority: number | null;
+  estimate: number | null;
+  labels: { id: string; name: string }[];
+  assignee: { id: string; name: string; email: string } | null;
+  parent: { id: string; identifier: string } | null;
+  project: { id: string; name: string } | null;
+  milestone: { id: string; name: string } | null;
+  cycle: { id: string; name: string } | null;
+}
+
+type IssueWriteProofSource = {
+  id: string;
+  identifier: string;
+  url?: string | null;
+  updatedAt?: string | null;
+  title?: string | null;
+  description?: string | null;
+  state?: { id?: string | null; name: string; type?: string | null } | null;
+  priority?: number | null;
+  estimate?: number | null;
+  labels?: { nodes?: { id: string; name: string }[] } | null;
+  assignee?: { id: string; name: string; email: string } | null;
+  parent?: { id: string; identifier: string } | null;
+  project?: { id: string; name: string } | null;
+  projectMilestone?: { id: string; name: string } | null;
+  cycle?: { id: string; name: string } | null;
+};
+
+export function issueWriteProof(issue: IssueWriteProofSource): IssueWriteProof {
+  return {
+    id: issue.id,
+    identifier: issue.identifier,
+    url: issue.url ?? null,
+    updated_at: issue.updatedAt ?? null,
+    title: issue.title ?? null,
+    description: issue.description ?? null,
+    state: issue.state
+      ? {
+          id: issue.state.id ?? null,
+          name: issue.state.name,
+          type: issue.state.type ?? null,
+        }
+      : null,
+    priority: issue.priority ?? null,
+    estimate: issue.estimate ?? null,
+    labels: issue.labels?.nodes ?? [],
+    assignee: issue.assignee ?? null,
+    parent: issue.parent ?? null,
+    project: issue.project ?? null,
+    milestone: issue.projectMilestone ?? null,
+    cycle: issue.cycle ?? null,
+  };
 }
 
 const UPDATE_MUTATION = /* GraphQL */ `
@@ -224,19 +303,16 @@ const UPDATE_MUTATION = /* GraphQL */ `
     issueUpdate(id: $id, input: $input) {
       success
       issue {
-        id
-        identifier
-        url
-        title
-        state { name }
+        ...IssueFields
       }
     }
   }
+  ${ISSUE_FIELDS_FRAGMENT}
 `;
 
 export async function updateIssue(input: UpdateIssueInput): Promise<UpdatedIssue> {
   const repoHash = input.repoHash ?? "_global";
-  // Resolve issue identifier → UUID via a minimal raw query (idempotent read;
+  // Resolve issue identifier → UUID/current-project via a minimal raw query (idempotent read;
   // retry-wrapped via withClient). The SDK-typed `c.issue(id)` would request
   // a 60+ field fragment + instantiate IssueSharedAccess / etc., which is
   // overkill for a UUID lookup. We just need the id.
@@ -267,9 +343,9 @@ export async function updateIssue(input: UpdateIssueInput): Promise<UpdatedIssue
   const teamKey = input.team ?? derivedTeam ?? undefined;
 
   // Only state / labels / string-assignee require team metadata. parent is
-  // workspace-wide (resolveIssueIdByIdentifier), milestone is workspace-wide,
-  // cycle is checked separately (resolveCycleIdByName already throws loudly
-  // for name-without-team). Project-by-name has a workspace fallback below.
+  // workspace-wide (resolveIssueIdByIdentifier), milestone is scoped to the
+  // target/current project below, and cycle is checked separately
+  // (resolveCycleIdByName already throws loudly for name-without-team).
   // null-clear paths (assignee:null, labels:null, parent:null) don't need
   // team since they're "set to null" operations.
   // Round-7 / HIGH-1: `@me` and `me` don't need team scope — `resolveAssigneeId`
@@ -279,6 +355,7 @@ export async function updateIssue(input: UpdateIssueInput): Promise<UpdatedIssue
   const needsTeamScope =
     input.state !== undefined ||
     input.labels !== undefined ||
+    hasLabelDeltas(input.labelDeltas) ||
     (typeof input.assignee === "string" && input.assignee !== "@me" && input.assignee !== "me");
   if (needsTeamScope && !teamKey) {
     throw new ValidationError(
@@ -295,7 +372,14 @@ export async function updateIssue(input: UpdateIssueInput): Promise<UpdatedIssue
   } else if (input.parent === null) {
     parentId = null;
   } else {
-    parentId = (await resolveIssueIdByIdentifier(input.parent))?.id ?? null;
+    const parent = await resolveIssueIdByIdentifier(input.parent);
+    if (!parent) {
+      throw new NotFoundError(
+        `parent issue not found: ${input.parent}`,
+        "verify the parent issue identifier, or pass parent:null to clear the existing parent",
+      );
+    }
+    parentId = parent.id;
   }
 
   // Round-7 / HIGH-1: same hoist for `@me`/`me` assignee. `resolveAssigneeId`
@@ -319,10 +403,8 @@ export async function updateIssue(input: UpdateIssueInput): Promise<UpdatedIssue
   //     tests/issues.test.ts depends on this).
   //   - If `team` was only DERIVED from the identifier: enter only when one
   //     of the name-shaped fields actually needs it (state / labels /
-  //     string-assignee). Project-by-name has a workspace-wide fallback
-  //     below, so we skip the metadata fetch in that case — avoids an
-  //     unnecessary GraphQL round-trip + matches the wave-3 "no-team
-  //     extras-only" behavior (tests/integration/mcp.test.ts:260+).
+  //     string-assignee). Project-by-name uses a strict resolver below; a
+  //     derived identifier team is not treated as an explicit project scope.
   const enterTeamMetadata = !!teamKey && (input.team !== undefined || needsTeamScope);
   const { stateId, assigneeId, labelIds, projectIdFromName } =
     enterTeamMetadata && teamKey
@@ -346,15 +428,17 @@ export async function updateIssue(input: UpdateIssueInput): Promise<UpdatedIssue
                   : input.assignee
                     ? await resolveAssigneeId(md, input.assignee)
                     : undefined,
-            labelIds: input.labels ? resolveLabelIds(md, input.labels) : undefined,
-            // Project resolution prefers the team-scoped metadata cache when
-            // we're already fetching it. Falls back to the workspace-wide
-            // projects table below when the team cache doesn't match.
+            labelIds:
+              input.labels !== undefined
+                ? resolveLabelIds(md, input.labels)
+                : resolveLabelDeltas(md, issue.labels?.nodes ?? [], input.labelDeltas),
+            // Project resolution uses the team-scoped metadata cache only
+            // when the caller supplied `team` explicitly. A derived identifier
+            // team is not enough to disambiguate duplicate workspace names.
             projectIdFromName: ((): string | null | undefined => {
               const p = input.project;
-              if (typeof p !== "string" || isUuid(p)) return undefined;
-              const lc = p.toLowerCase();
-              return md.projects.find((proj) => proj.name.toLowerCase() === lc)?.id ?? null;
+              if (input.team === undefined || typeof p !== "string" || isUuid(p)) return undefined;
+              return resolveCachedProjectIdByName(md, p);
             })(),
           }),
         )
@@ -367,7 +451,8 @@ export async function updateIssue(input: UpdateIssueInput): Promise<UpdatedIssue
         };
 
   // Resolve project / milestone / cycle outside the team-metadata block so
-  // they also work when `team` isn't passed (UUID inputs only).
+  // all name lookups happen before any mutation. Cycle names use the derived
+  // TEAM-NN scope when available; UUID inputs skip that requirement.
   let projectId: string | null | undefined;
   if (input.project === undefined) {
     projectId = undefined;
@@ -376,21 +461,22 @@ export async function updateIssue(input: UpdateIssueInput): Promise<UpdatedIssue
   } else if (isUuid(input.project)) {
     projectId = input.project;
   } else {
-    // Name input — `projectIdFromName` is the team-scoped resolution. If it
-    // missed, fall back to the workspace-wide projects table (the legacy MCP
-    // path used `resolveProjectId` directly, no team scope).
+    // Name input — `projectIdFromName` is the explicit-team cache fast path.
+    // On miss, resolve live with the explicit team only if the caller supplied
+    // one. With no explicit team, workspace duplicate names fail loudly.
     if (projectIdFromName) {
       projectId = projectIdFromName;
     } else {
-      // Workspace-wide name lookup — Linear filters projects by name eq.
-      const pid = await resolveProjectByWorkspaceName(input.project);
-      if (!pid) {
-        throw new ValidationError(
-          `project not found: ${input.project}`,
-          "pass the project name (case-sensitive workspace lookup) or UUID",
-        );
+      try {
+        projectId = await resolveProjectIdByName(input.project, {
+          teamKey: input.team !== undefined ? teamKey : undefined,
+        });
+      } catch (err) {
+        if (err instanceof ResolveError) {
+          throw new ValidationError(err.message, err.hint);
+        }
+        throw err;
       }
-      projectId = pid;
     }
   }
 
@@ -400,7 +486,17 @@ export async function updateIssue(input: UpdateIssueInput): Promise<UpdatedIssue
   } else if (input.milestone === null) {
     milestoneId = null;
   } else {
-    milestoneId = await resolveMilestoneIdByName(input.milestone);
+    const milestoneProjectId =
+      projectId === null ? null : projectId !== undefined ? projectId : (issue.project?.id ?? null);
+    if (!isUuid(input.milestone) && !milestoneProjectId) {
+      throw new ResolveError(
+        `milestone name "${input.milestone}" requires a project scope`,
+        "set a project in the same call, keep the issue attached to a project, or use the milestone UUID",
+      );
+    }
+    milestoneId = await resolveMilestoneIdByName(input.milestone, {
+      projectId: milestoneProjectId,
+    });
   }
 
   let cycleId: string | null | undefined;
@@ -409,7 +505,7 @@ export async function updateIssue(input: UpdateIssueInput): Promise<UpdatedIssue
   } else if (input.cycle === null) {
     cycleId = null;
   } else {
-    cycleId = await resolveCycleIdByName(input.cycle, input.team);
+    cycleId = await resolveCycleIdByName(input.cycle, teamKey);
   }
 
   const priority = input.priority !== undefined ? resolvePriority(input.priority) : undefined;
@@ -443,10 +539,43 @@ export async function updateIssue(input: UpdateIssueInput): Promise<UpdatedIssue
     const response = (await withClient((c) =>
       c.client.rawRequest(UPDATE_MUTATION, { id: issue.id, input: linearInput }),
     )) as { data: { issueUpdate: { success: boolean; issue: UpdatedIssue } } };
-    return response.data.issueUpdate.issue;
+    return requireMutationEntity<UpdatedIssue>(
+      "issueUpdate",
+      response.data.issueUpdate as unknown as { success?: boolean } & Record<string, unknown>,
+      "issue",
+    );
   } catch (err) {
     throw rewriteNotFound(err, input.identifier);
   }
+}
+
+function hasLabelDeltas(input: UpdateIssueInput["labelDeltas"]): boolean {
+  return Boolean(input && ((input.add?.length ?? 0) > 0 || (input.remove?.length ?? 0) > 0));
+}
+
+function resolveLabelDeltas(
+  metadata: TeamMetadata,
+  currentLabels: { id: string; name: string }[],
+  deltas: UpdateIssueInput["labelDeltas"],
+): string[] | undefined {
+  if (!hasLabelDeltas(deltas)) return undefined;
+
+  const byName = new Map(
+    currentLabels.map((label) => [label.name.toLowerCase(), { id: label.id, name: label.name }]),
+  );
+
+  for (const rawName of deltas?.remove ?? []) {
+    const id = resolveLabelId(metadata, rawName);
+    const canonical = metadata.labels.find((label) => label.id === id)?.name ?? rawName;
+    byName.delete(canonical.toLowerCase());
+  }
+  for (const rawName of deltas?.add ?? []) {
+    const id = resolveLabelId(metadata, rawName);
+    const canonical = metadata.labels.find((label) => label.id === id)?.name ?? rawName;
+    byName.set(canonical.toLowerCase(), { id, name: canonical });
+  }
+
+  return [...byName.values()].map((label) => label.id);
 }
 
 const ARCHIVE_MUTATION = /* GraphQL */ `
@@ -482,7 +611,17 @@ async function lifecycleOne(
     const issue = await resolveIssueIdByIdentifier(identifier);
     if (!issue) return { identifier, status: "not-found" };
     const client = await linear();
-    await client.client.rawRequest(mutation, { id: issue.id });
+    const response = (await client.client.rawRequest(mutation, { id: issue.id })) as {
+      data: { issueArchive?: { success: boolean }; issueUnarchive?: { success: boolean } };
+    };
+    const payload = response.data.issueArchive ?? response.data.issueUnarchive;
+    if (!payload) {
+      throw new ValidationError(
+        `${_verb} issue mutation did not return a payload`,
+        "retry after checking Linear state",
+      );
+    }
+    requireMutationSuccess(_verb === "archive" ? "issueArchive" : "issueUnarchive", payload);
     return { identifier, status: "ok" };
   } catch (err) {
     // Prefer the structured boundary signal: the SDK wrapper maps "Entity

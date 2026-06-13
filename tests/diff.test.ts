@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { type IssueMetadata, type ProjectMetadata, sha256 } from "../src/lib/cache.ts";
-import { diffIssueMetadata, diffProjectMetadata } from "../src/lib/diff.ts";
+import {
+  diffIssueFields,
+  diffIssueMetadata,
+  diffProjectFields,
+  diffProjectMetadata,
+} from "../src/lib/diff.ts";
 
 function issueFixture(desc: string): IssueMetadata {
   return {
@@ -12,6 +17,8 @@ function issueFixture(desc: string): IssueMetadata {
     labels: ["type:test"],
     assignee: "alice@example.com",
     project: "Example",
+    milestone: null,
+    cycle: null,
     parent: null,
     _server: {
       id: "u-1",
@@ -30,6 +37,10 @@ function issueFixture(desc: string): IssueMetadata {
       description_hash: sha256(desc),
       project_id: "p-1",
       project_name: "Example",
+      project_milestone_id: null,
+      project_milestone_name: null,
+      cycle_id: null,
+      cycle_name: null,
       parent_id: null,
       parent_identifier: null,
       updated_at: "2026-04-23T00:00:00.000Z",
@@ -155,6 +166,21 @@ describe("diffIssueMetadata", () => {
     expect(diffIssueMetadata(meta, "body").find((c) => c.field === "parent")).toBeUndefined();
   });
 
+  it("detects project, milestone, and cycle placement changes", () => {
+    const meta = issueFixture("body");
+    meta.project = "New Project";
+    meta.milestone = "M1";
+    meta.cycle = "Cycle 1";
+    const changes = diffIssueMetadata(meta, "body");
+    expect(changes).toEqual(
+      expect.arrayContaining([
+        { field: "project", from: "Example", to: "New Project" },
+        { field: "milestone", from: null, to: "M1" },
+        { field: "cycle", from: null, to: "Cycle 1" },
+      ]),
+    );
+  });
+
   it("detects label add", () => {
     const meta = issueFixture("body");
     meta.labels = ["type:test", "priority:p0"];
@@ -192,10 +218,34 @@ describe("diffIssueMetadata", () => {
   });
 });
 
+describe("diffIssueFields", () => {
+  it("detects remote placement drift for project, milestone, and cycle", () => {
+    const local = issueFixture("body");
+    const remote = issueFixture("body");
+    local.project = "Local Project";
+    local.milestone = "Local Milestone";
+    local.cycle = "Local Cycle";
+    remote.project = "Remote Project";
+    remote.milestone = null;
+    remote.cycle = "Remote Cycle";
+
+    expect(diffIssueFields(local, remote)).toEqual(
+      expect.arrayContaining([
+        { field: "project", local: "Local Project", remote: "Remote Project" },
+        { field: "milestone", local: "Local Milestone", remote: null },
+        { field: "cycle", local: "Local Cycle", remote: "Remote Cycle" },
+      ]),
+    );
+  });
+});
+
 function projectFixture(content: string): ProjectMetadata {
   return {
     name: "Example",
     description: "short tagline",
+    icon: null,
+    start_date: null,
+    target_date: null,
     state: "started",
     _server: {
       id: "p-1",
@@ -203,6 +253,9 @@ function projectFixture(content: string): ProjectMetadata {
       state: "started",
       name: "Example",
       description: "short tagline",
+      icon: null,
+      start_date: null,
+      target_date: null,
       content_hash: sha256(content),
       updated_at: "2026-04-23T00:00:00.000Z",
     },
@@ -232,6 +285,39 @@ describe("diffProjectMetadata", () => {
     expect(changes.find((c) => c.field === "content")).toBeDefined();
   });
 
+  it("detects icon change", () => {
+    const meta = projectFixture("body");
+    meta.icon = "Rocket";
+    expect(diffProjectMetadata(meta, "body").find((c) => c.field === "icon")).toEqual({
+      field: "icon",
+      from: null,
+      to: "Rocket",
+    });
+  });
+
+  it("detects icon clear", () => {
+    const meta = projectFixture("body");
+    meta._server.icon = "Rocket";
+    meta.icon = null;
+    expect(diffProjectMetadata(meta, "body").find((c) => c.field === "icon")).toEqual({
+      field: "icon",
+      from: "Rocket",
+      to: null,
+    });
+  });
+
+  it("detects project date changes", () => {
+    const meta = projectFixture("body");
+    meta.start_date = "2026-06-01";
+    meta.target_date = "2026-06-30";
+    expect(diffProjectMetadata(meta, "body")).toEqual(
+      expect.arrayContaining([
+        { field: "start_date", from: null, to: "2026-06-01" },
+        { field: "target_date", from: null, to: "2026-06-30" },
+      ]),
+    );
+  });
+
   it("detects state change", () => {
     const meta = projectFixture("body");
     meta.state = "completed";
@@ -240,5 +326,18 @@ describe("diffProjectMetadata", () => {
       from: "started",
       to: "completed",
     });
+  });
+});
+
+describe("diffProjectFields", () => {
+  it("does not report date drift when local and remote project dates match", () => {
+    const local = projectFixture("body");
+    const remote = projectFixture("body");
+    local.start_date = "2026-06-01";
+    local.target_date = "2026-06-30";
+    remote.start_date = "2026-06-01";
+    remote.target_date = "2026-06-30";
+
+    expect(diffProjectFields(local, remote)).toEqual([]);
   });
 });

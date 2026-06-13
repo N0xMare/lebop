@@ -9,6 +9,7 @@
  */
 
 import { describe, expect, it, vi } from "vitest";
+import { ValidationError } from "../src/lib/errors.ts";
 
 let mockResponses: Array<{ data: unknown } | Error> = [];
 let calls: Array<{ query: string; variables: unknown }> = [];
@@ -39,7 +40,12 @@ vi.mock("../src/lib/sdk.ts", () => ({
   }),
 }));
 
-import { getMilestone } from "../src/lib/milestones.ts";
+import {
+  createMilestone,
+  deleteMilestone,
+  getMilestone,
+  updateMilestone,
+} from "../src/lib/milestones.ts";
 
 function reset(): void {
   mockResponses = [];
@@ -132,8 +138,38 @@ describe("getMilestone — round-5 archive-resilient list-shape query", () => {
   it("returns null when nodes is empty (genuinely missing milestone)", async () => {
     reset();
     mockResponses.push({ data: { projectMilestones: { nodes: [] } } });
+    mockResponses.push({ data: { projectMilestone: null } });
     expect(await getMilestone(M_MISSING_UUID)).toBeNull();
-    expect(calls).toHaveLength(1);
+    expect(calls).toHaveLength(2);
+    expect(calls[1]?.query).toContain("projectMilestone(id:");
+  });
+
+  it("falls back to the direct getter for fresh live milestones missed by list filtering", async () => {
+    reset();
+    mockResponses.push({ data: { projectMilestones: { nodes: [] } } });
+    mockResponses.push({
+      data: {
+        projectMilestone: {
+          id: M1_UUID,
+          name: "Fresh milestone",
+          description: "visible through direct getter",
+          targetDate: "2026-07-01",
+          sortOrder: 10,
+          archivedAt: null,
+          project: { id: PROJ_UUID, name: "Fresh project" },
+        },
+      },
+    });
+    const out = await getMilestone(M1_UUID);
+    expect(out).toMatchObject({
+      id: M1_UUID,
+      name: "Fresh milestone",
+      target_date: "2026-07-01",
+      project: { id: PROJ_UUID, name: "Fresh project" },
+    });
+    expect(calls).toHaveLength(2);
+    expect(calls[0]?.query).toContain("projectMilestones(filter:");
+    expect(calls[1]?.query).toContain("projectMilestone(id:");
   });
 
   it("short-circuits to null without hitting Linear for non-UUID input (round-10 / M-7-smoke)", async () => {
@@ -156,3 +192,64 @@ describe("getMilestone — round-5 archive-resilient list-shape query", () => {
     expect(await getMilestone("00000000-0000-0000-0000-000000000000")).toBeNull();
   });
 });
+
+describe("milestone mutation truthfulness", () => {
+  const M1_UUID = "11111111-1111-1111-1111-111111111111";
+  const PROJ_UUID = "22222222-2222-2222-2222-222222222222";
+
+  it("createMilestone rejects success:false before shaping the milestone", async () => {
+    reset();
+    mockResponses.push({
+      data: {
+        projectMilestoneCreate: {
+          success: false,
+          projectMilestone: milestoneNode(M1_UUID, PROJ_UUID),
+        },
+      },
+    });
+
+    const err = await createMilestone({ name: "M1", projectId: PROJ_UUID }).catch((e) => e);
+
+    expect(err).toBeInstanceOf(ValidationError);
+    expect(err.message).toBe("projectMilestoneCreate failed");
+  });
+
+  it("updateMilestone rejects success:false before shaping the milestone", async () => {
+    reset();
+    mockResponses.push({
+      data: {
+        projectMilestoneUpdate: {
+          success: false,
+          projectMilestone: milestoneNode(M1_UUID, PROJ_UUID),
+        },
+      },
+    });
+
+    const err = await updateMilestone(M1_UUID, { name: "M1 v2" }).catch((e) => e);
+
+    expect(err).toBeInstanceOf(ValidationError);
+    expect(err.message).toBe("projectMilestoneUpdate failed");
+  });
+
+  it("deleteMilestone rejects success:false", async () => {
+    reset();
+    mockResponses.push({ data: { projectMilestoneDelete: { success: false } } });
+
+    const err = await deleteMilestone(M1_UUID).catch((e) => e);
+
+    expect(err).toBeInstanceOf(ValidationError);
+    expect(err.message).toBe("projectMilestoneDelete failed");
+  });
+});
+
+function milestoneNode(id: string, projectId: string) {
+  return {
+    id,
+    name: "M1",
+    description: null,
+    targetDate: null,
+    sortOrder: 1,
+    archivedAt: null,
+    project: { id: projectId, name: "Project" },
+  };
+}

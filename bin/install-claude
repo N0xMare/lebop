@@ -15,17 +15,66 @@ CLAUDE_HOME="${CLAUDE_HOME:-$HOME/.claude}"
 SKILL_DST="$CLAUDE_HOME/skills/lebop"
 COMMANDS_DST="$CLAUDE_HOME/commands"
 
-mkdir -p "$CLAUDE_HOME/skills" "$COMMANDS_DST"
+backup_path() {
+  local path="$1"
+  local stamp
+  local candidate
+  local i
+  stamp="$(date +%Y%m%d%H%M%S)"
+  candidate="$path.backup-$stamp"
+  i=1
+  while [ -e "$candidate" ] || [ -L "$candidate" ]; do
+    candidate="$path.backup-$stamp-$i"
+    i=$((i + 1))
+  done
+  printf '%s\n' "$candidate"
+}
+
+backup_existing() {
+  local path="$1"
+  local backup
+  backup="$(backup_path "$path")"
+  mv "$path" "$backup"
+  echo "moved existing $path to $backup"
+}
+
+ensure_real_dir() {
+  local path="$1"
+  if [ -L "$path" ]; then
+    backup_existing "$path"
+  elif [ -e "$path" ] && [ ! -d "$path" ]; then
+    backup_existing "$path"
+  fi
+  mkdir -p "$path"
+}
+
+link_path() {
+  local src="$1"
+  local dst="$2"
+  local current
+  if [ -L "$dst" ]; then
+    current="$(readlink "$dst")"
+    if [ "$current" != "$src" ]; then
+      backup_existing "$dst"
+    fi
+  elif [ -e "$dst" ]; then
+    backup_existing "$dst"
+  fi
+  ln -sfn "$src" "$dst"
+  echo "linked $dst -> $src"
+}
+
+mkdir -p "$CLAUDE_HOME/skills"
+ensure_real_dir "$COMMANDS_DST"
 
 # Skill — directory symlink. -n prevents replacing through an existing symlink target.
-ln -sfn "$SKILL_SRC" "$SKILL_DST"
-echo "linked $SKILL_DST → $SKILL_SRC"
+link_path "$SKILL_SRC" "$SKILL_DST"
 
 # Slash commands — file-level symlinks so unrelated commands in ~/.claude/commands aren't touched.
 for f in "$COMMANDS_SRC"/lebop-*.md; do
   name="$(basename "$f")"
-  ln -sf "$f" "$COMMANDS_DST/$name"
-  echo "linked $COMMANDS_DST/$name → $f"
+  dst="$COMMANDS_DST/$name"
+  link_path "$f" "$dst"
 done
 
 echo

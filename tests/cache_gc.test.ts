@@ -7,13 +7,22 @@
  * real `~/.lebop/cache/` on the developer's machine.
  */
 
-import { mkdirSync, mkdtempSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 interface CacheModule {
   gcCache: typeof import("../src/lib/cache.ts").gcCache;
+  listCachedIssues: typeof import("../src/lib/cache.ts").listCachedIssues;
 }
 
 interface ConfigModule {
@@ -108,6 +117,16 @@ describe("gcCache — dry run", () => {
   });
 });
 
+describe("listCachedIssues", () => {
+  it("ignores non-canonical issue cache directories", async () => {
+    mkdirSync(join(cacheRoot, "_global", "issues", "NOX-1"), { recursive: true });
+    mkdirSync(join(cacheRoot, "_global", "issues", "not-an-issue"), { recursive: true });
+    mkdirSync(join(cacheRoot, "_global", "issues", "NOX-one"), { recursive: true });
+
+    await expect(cache.listCachedIssues("_global")).resolves.toEqual(["NOX-1"]);
+  });
+});
+
 describe("gcCache — age-based selection", () => {
   it("with maxAgeDays:30 and a 60-day-old hash, deletes only the old one", async () => {
     const oldDate = new Date(Date.now() - 60 * DAY);
@@ -190,7 +209,7 @@ describe("gcCache — preserveCwdRepo", () => {
 
     const oldDate = new Date(Date.now() - 60 * DAY);
     makeFakeRepo(expectedCwdHash, oldDate);
-    makeFakeRepo("zzzz99998888", oldDate);
+    makeFakeRepo("dddd99998888", oldDate);
 
     const result = await cache.gcCache({
       maxAgeDays: 30,
@@ -199,7 +218,7 @@ describe("gcCache — preserveCwdRepo", () => {
     });
 
     // Other stale hash gets removed, cwd hash is preserved.
-    expect(result.removed).toContain("zzzz99998888");
+    expect(result.removed).toContain("dddd99998888");
     expect(result.removed).not.toContain(expectedCwdHash);
     expect(() => statSync(join(cacheRoot, expectedCwdHash))).not.toThrow();
 
@@ -252,6 +271,19 @@ describe("gcCache — explicit hash", () => {
     expect(result.candidates).toEqual([]);
     expect(result.removed).toEqual([]);
   });
+
+  it("rejects invalid explicit hashes before scanning", async () => {
+    await expect(
+      cache.gcCache({
+        hash: "../outside",
+        dryRun: false,
+        preserveCwdRepo: false,
+      }),
+    ).rejects.toMatchObject({
+      code: "validation_error",
+      message: expect.stringContaining("invalid cache gc hash"),
+    });
+  });
 });
 
 describe("gcCache — misc", () => {
@@ -285,6 +317,64 @@ describe("gcCache — misc", () => {
       totalSizeBeforeMb: 0,
       totalSizeAfterMb: 0,
     });
+  });
+
+  it("refuses to scan or delete through a symlinked cache root", async () => {
+    const realCache = mkdtempSync(join(tmpdir(), "lebop-gc-real-cache-"));
+    rmSync(cacheRoot, { recursive: true, force: true });
+    symlinkSync(realCache, cacheRoot, "dir");
+    mkdirSync(join(realCache, "aaaa11112222", "issues", "FAKE-1"), { recursive: true });
+    writeFileSync(join(realCache, "aaaa11112222", "issues", "FAKE-1", "description.md"), "x");
+
+    await expect(
+      cache.gcCache({
+        maxAgeDays: 0,
+        dryRun: false,
+        preserveCwdRepo: false,
+      }),
+    ).rejects.toMatchObject({
+      code: "validation_error",
+      message: expect.stringContaining("unsafe cache root"),
+    });
+    expect(() => statSync(join(realCache, "aaaa11112222"))).not.toThrow();
+    rmSync(realCache, { recursive: true, force: true });
+  });
+
+  it("refuses to scan or delete through a symlinked LEBOP_HOME ancestor", async () => {
+    const previousHome = home;
+    const realHome = mkdtempSync(join(tmpdir(), "lebop-gc-real-home-"));
+    const linkHome = join(tmpdir(), `lebop-gc-home-link-${process.pid}-${Date.now()}`);
+    symlinkSync(realHome, linkHome, "dir");
+
+    try {
+      process.env.LEBOP_HOME = linkHome;
+      home = linkHome;
+      cacheRoot = join(home, "cache");
+      mkdirSync(join(realHome, "cache", "aaaa11112222", "issues", "FAKE-1"), {
+        recursive: true,
+      });
+      writeFileSync(
+        join(realHome, "cache", "aaaa11112222", "issues", "FAKE-1", "description.md"),
+        "x",
+      );
+      await importCache();
+
+      await expect(
+        cache.gcCache({
+          maxAgeDays: 0,
+          dryRun: false,
+          preserveCwdRepo: false,
+        }),
+      ).rejects.toMatchObject({
+        code: "validation_error",
+        message: expect.stringContaining("symlinked ancestor"),
+      });
+      expect(() => statSync(join(realHome, "cache", "aaaa11112222"))).not.toThrow();
+    } finally {
+      rmSync(previousHome, { recursive: true, force: true });
+      rmSync(linkHome, { recursive: true, force: true });
+      rmSync(realHome, { recursive: true, force: true });
+    }
   });
 });
 

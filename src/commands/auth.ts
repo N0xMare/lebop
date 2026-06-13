@@ -11,9 +11,10 @@ import {
 } from "../lib/auth.ts";
 import { setWorkspaceDefaultTeam } from "../lib/configWrite.ts";
 import { envelope } from "../lib/envelope.ts";
-import { NotFoundError } from "../lib/errors.ts";
-import { AUTH_FILE } from "../lib/paths.ts";
+import { AuthError, NotFoundError, ValidationError } from "../lib/errors.ts";
+import { AUTH_FILE_DISPLAY, AUTH_STORAGE_KIND } from "../lib/paths.ts";
 import { promptHidden } from "../lib/prompt.ts";
+import { runWithRequestContext } from "../lib/requestContext.ts";
 import { getTeam } from "../lib/teams.ts";
 
 export function registerAuth(program: Command): void {
@@ -42,16 +43,17 @@ export function registerAuth(program: Command): void {
       }
 
       if (!token) {
-        process.stderr.write(`${chalk.red("no token provided")}\n`);
-        process.exitCode = 1;
-        return;
+        throw new ValidationError(
+          "no token provided",
+          "pass --token, --token-file, --from-schpet, or enter a token at the prompt",
+        );
       }
 
       const ws = await addWorkspace(token);
       process.stdout.write(
         `${chalk.green("✓")} authenticated to ${chalk.bold(ws.name)} (${chalk.cyan(ws.slug)}) as ${ws.viewer.name} <${ws.viewer.email}>\n`,
       );
-      process.stdout.write(`  credentials saved to ${AUTH_FILE} (mode 0600)\n`);
+      process.stdout.write(`  credentials saved to ${AUTH_FILE_DISPLAY} (mode 0600)\n`);
     });
 
   auth
@@ -63,7 +65,7 @@ export function registerAuth(program: Command): void {
         process.stdout.write(
           slug
             ? `${chalk.green("✓")} removed credentials for ${chalk.bold(slug)}\n`
-            : `${chalk.green("✓")} credentials removed from ${AUTH_FILE}\n`,
+            : `${chalk.green("✓")} credentials removed from ${AUTH_FILE_DISPLAY}\n`,
         );
       } else {
         // Round-8 / R8-LOW-5: when a slug was explicitly named but doesn't
@@ -72,7 +74,7 @@ export function registerAuth(program: Command): void {
         // scripts treat a typoed slug as success.
         if (slug) {
           process.stderr.write(
-            `${chalk.red("error:")} workspace slug not found in ${AUTH_FILE}: ${chalk.bold(slug)}\n` +
+            `${chalk.red("error:")} workspace slug not found in ${AUTH_FILE_DISPLAY}: ${chalk.bold(slug)}\n` +
               `  ${chalk.cyan("hint:")} run \`lebop auth list\` to see configured workspaces.\n`,
           );
           process.exitCode = 1;
@@ -89,10 +91,22 @@ export function registerAuth(program: Command): void {
     .action(async (opts: { json?: boolean }) => {
       const stored = await loadAuth();
       if (!stored) {
-        process.stderr.write(
-          `${chalk.red("no credentials stored.")} run ${chalk.cyan("lebop auth login")}\n`,
-        );
-        process.exitCode = 1;
+        if (opts.json) {
+          process.stdout.write(
+            `${JSON.stringify(
+              envelope({
+                auth_file: AUTH_FILE_DISPLAY,
+                auth_storage: AUTH_STORAGE_KIND,
+                default: null,
+                workspaces: [],
+              }),
+              null,
+              2,
+            )}\n`,
+          );
+          return;
+        }
+        process.stdout.write("no workspaces configured\n");
         return;
       }
       const slugs = Object.keys(stored.workspaces);
@@ -101,7 +115,8 @@ export function registerAuth(program: Command): void {
         process.stdout.write(
           `${JSON.stringify(
             envelope({
-              auth_file: AUTH_FILE,
+              auth_file: AUTH_FILE_DISPLAY,
+              auth_storage: AUTH_STORAGE_KIND,
               default: stored.default ?? null,
               workspaces: slugs
                 .map((s) => {
@@ -147,18 +162,18 @@ export function registerAuth(program: Command): void {
   auth
     .command("default [slug]")
     .description("show or set the default workspace")
-    .action(async (slug: string | undefined) => {
+    .option("--json", "emit structured result")
+    .action(async (slug: string | undefined, opts: { json?: boolean }) => {
       const stored = await loadAuth();
-      if (!stored) {
-        process.stderr.write(
-          `${chalk.red("no credentials stored.")} run ${chalk.cyan("lebop auth login")}\n`,
-        );
-        process.exitCode = 1;
-        return;
-      }
       if (!slug) {
         // Read mode
-        if (stored.default) {
+        if (opts.json) {
+          process.stdout.write(
+            `${JSON.stringify(envelope({ default: stored?.default ?? null }), null, 2)}\n`,
+          );
+          return;
+        }
+        if (stored?.default) {
           process.stdout.write(`${stored.default}\n`);
         } else {
           process.stdout.write(`${chalk.yellow("no default set")}\n`);
@@ -166,7 +181,14 @@ export function registerAuth(program: Command): void {
         return;
       }
       // Write mode
+      if (!stored) {
+        throw new AuthError("no credentials stored", "run `lebop auth login` first");
+      }
       await setDefaultWorkspace(slug);
+      if (opts.json) {
+        process.stdout.write(`${JSON.stringify(envelope({ default: slug }), null, 2)}\n`);
+        return;
+      }
       process.stdout.write(`${chalk.green("✓")} default workspace set to ${chalk.bold(slug)}\n`);
     });
 
@@ -231,7 +253,8 @@ export function registerAuth(program: Command): void {
               workspace_name: ws.name,
               is_default: isDefault,
               viewer,
-              auth_file: AUTH_FILE,
+              auth_file: AUTH_FILE_DISPLAY,
+              auth_storage: AUTH_STORAGE_KIND,
               refreshed,
               created_at: ws.created_at,
             }),
@@ -244,7 +267,7 @@ export function registerAuth(program: Command): void {
 
       const defaultMarker = isDefault ? chalk.gray(" [default]") : "";
       process.stdout.write(
-        `${chalk.bold(viewer.name)} <${viewer.email}>\n  workspace: ${chalk.cyan(ws.slug)} (${ws.name})${defaultMarker}\n  id: ${viewer.id}\n  auth file: ${AUTH_FILE}\n  created: ${ws.created_at}${refreshed ? chalk.gray(" (just refreshed)") : ""}\n`,
+        `${chalk.bold(viewer.name)} <${viewer.email}>\n  workspace: ${chalk.cyan(ws.slug)} (${ws.name})${defaultMarker}\n  id: ${viewer.id}\n  auth file: ${AUTH_FILE_DISPLAY}\n  created: ${ws.created_at}${refreshed ? chalk.gray(" (just refreshed)") : ""}\n`,
       );
     });
 
@@ -255,13 +278,12 @@ export function registerAuth(program: Command): void {
     )
     .option("--json", "emit structured result")
     .action(async (workspace: string, team: string, opts: { json?: boolean }) => {
+      let canonicalTeam = team;
       // Round-11 / M-2: validate the team exists in the target workspace
       // before writing to config. Scoped via `LEBOP_WORKSPACE` env var so
       // `getTeam` (which uses `withClient` → the workspace-aware
       // `linear()` selector) targets the right Linear org.
-      const prevWorkspace = process.env.LEBOP_WORKSPACE;
-      process.env.LEBOP_WORKSPACE = workspace;
-      try {
+      await runWithRequestContext({ workspace }, async () => {
         const t = await getTeam(team);
         if (!t) {
           throw new NotFoundError(
@@ -269,22 +291,20 @@ export function registerAuth(program: Command): void {
             `run \`lebop --workspace ${workspace} teams\` to list valid keys`,
           );
         }
-      } finally {
-        if (prevWorkspace === undefined) delete process.env.LEBOP_WORKSPACE;
-        else process.env.LEBOP_WORKSPACE = prevWorkspace;
-      }
-      await setWorkspaceDefaultTeam(workspace, team);
+        canonicalTeam = t.key;
+      });
+      await setWorkspaceDefaultTeam(workspace, canonicalTeam);
       if (opts.json) {
         process.stdout.write(
           // Round-7 / HIGH-3: response envelope key renamed `team_key` →
           // `team` to match the MCP-side `set_workspace_default_team`
           // rename (round-6 / C1). Both surfaces now agree on `team`.
-          `${JSON.stringify(envelope({ workspace_slug: workspace, team }), null, 2)}\n`,
+          `${JSON.stringify(envelope({ workspace_slug: workspace, team: canonicalTeam }), null, 2)}\n`,
         );
         return;
       }
       process.stdout.write(
-        `${chalk.green("✓")} default team for ${chalk.cyan(workspace)} set to ${chalk.bold(team)}\n`,
+        `${chalk.green("✓")} default team for ${chalk.cyan(workspace)} set to ${chalk.bold(canonicalTeam)}\n`,
       );
     });
 }

@@ -6,6 +6,11 @@ let calls: Array<{ query: string; variables: unknown }> = [];
 let issueLookups: Array<string> = [];
 let issueLookupOverride: ((id: string) => unknown) | null = null;
 let rawRequestOverride: ((q: string, v: unknown) => Promise<unknown>) | null = null;
+let projectResolveCalls: Array<{ nameOrId: string; opts: { teamKey?: string } | undefined }> = [];
+let milestoneResolveCalls: Array<{
+  nameOrId: string;
+  opts: { projectId?: string | null } | undefined;
+}> = [];
 const stubIssue = (identifier: string) => ({ id: `uuid-of-${identifier}` });
 
 vi.mock("../src/lib/sdk.ts", () => ({
@@ -64,8 +69,9 @@ vi.mock("../src/lib/resolve.ts", async () => {
   // the lib expects.
   const errors =
     await vi.importActual<typeof import("../src/lib/errors.ts")>("../src/lib/errors.ts");
+  class MockResolveError extends errors.ValidationError {}
   return {
-    ResolveError: class ResolveError extends Error {},
+    ResolveError: MockResolveError,
     withFreshMetadataOnMiss: async <T>(
       _fetcher: unknown,
       fn: (md: unknown) => Promise<T>,
@@ -76,9 +82,33 @@ vi.mock("../src/lib/resolve.ts", async () => {
     resolveLabelIds: () => ["label-uuid"],
     resolveAssigneeId: async () => "assignee-uuid",
     resolvePriority: (v: unknown) => (typeof v === "number" ? v : 2),
-    resolveMilestoneIdByName: async (nameOrId: string): Promise<string> => {
+    resolveMilestoneIdByName: async (
+      nameOrId: string,
+      opts?: { projectId?: string | null },
+    ): Promise<string> => {
+      milestoneResolveCalls.push({ nameOrId, opts });
       if (/^[0-9a-f-]{36}$/i.test(nameOrId)) return nameOrId;
       return `uuid-of-milestone-${nameOrId}`;
+    },
+    resolveProjectIdByName: async (
+      nameOrId: string,
+      opts?: { teamKey?: string },
+    ): Promise<string> => {
+      projectResolveCalls.push({ nameOrId, opts });
+      if (/^[0-9a-f-]{36}$/i.test(nameOrId)) return nameOrId;
+      if (nameOrId === "Ambiguous Project") {
+        throw new MockResolveError(
+          'ambiguous project name "Ambiguous Project" matches: Ambiguous Project (NOX), Ambiguous Project (ENG)',
+          "pass an explicit team scope or the project UUID",
+        );
+      }
+      if (nameOrId === "Missing In Team") {
+        throw new MockResolveError(
+          `project not found: Missing In Team (team ${opts?.teamKey ?? "UNKNOWN"})`,
+          "verify the project name belongs to that team, or use the project UUID",
+        );
+      }
+      return `uuid-of-project-${nameOrId}`;
     },
     resolveCycleIdByName: async (nameOrId: string, teamKey?: string): Promise<string> => {
       if (/^[0-9a-f-]{36}$/i.test(nameOrId)) return nameOrId;
@@ -111,7 +141,13 @@ vi.mock("../src/lib/resolve.ts", async () => {
   };
 });
 
-import { archiveIssues, createIssue, unarchiveIssues, updateIssue } from "../src/lib/issues.ts";
+import {
+  archiveIssues,
+  createIssue,
+  issueWriteProof,
+  unarchiveIssues,
+  updateIssue,
+} from "../src/lib/issues.ts";
 
 function reset() {
   mockResponses = [];
@@ -119,6 +155,8 @@ function reset() {
   issueLookups = [];
   issueLookupOverride = null;
   rawRequestOverride = null;
+  projectResolveCalls = [];
+  milestoneResolveCalls = [];
 }
 
 describe("createIssue", () => {
@@ -186,6 +224,42 @@ describe("createIssue", () => {
     await createIssue({ team: "NOX", title: "T" });
     const input = (calls[0]?.variables as { input: Record<string, unknown> }).input;
     expect(input).toEqual({ teamId: "team-uuid", title: "T" });
+  });
+
+  it("rejects duplicate cached project names instead of taking the first", async () => {
+    reset();
+    const mockedResolve = await import("../src/lib/resolve.ts");
+    const origWith = mockedResolve.withFreshMetadataOnMiss;
+    (mockedResolve as Record<string, unknown>).withFreshMetadataOnMiss = async <T>(
+      _fetcher: unknown,
+      fn: (md: unknown) => Promise<T>,
+    ): Promise<T> =>
+      fn({
+        team_id: "team-uuid",
+        projects: [
+          { id: "project-a", name: "Duplicate Project" },
+          { id: "project-b", name: "Duplicate Project" },
+        ],
+        states: [],
+        labels: [],
+        members: [],
+      });
+
+    try {
+      const err = await createIssue({
+        team: "NOX",
+        title: "T",
+        project: "Duplicate Project",
+      }).catch((e) => e);
+
+      expect(err).toMatchObject({ code: "validation_error" });
+      expect(err.message).toMatch(/ambiguous project "Duplicate Project"/);
+      expect(
+        calls.map((call) => call.query).filter((query) => query.includes("issueCreate")),
+      ).toEqual([]);
+    } finally {
+      (mockedResolve as Record<string, unknown>).withFreshMetadataOnMiss = origWith;
+    }
   });
 });
 
@@ -439,6 +513,25 @@ describe("updateIssue — round-6 / C3 team auto-derivation from identifier", ()
     expect(input.parentId).toBe("uuid-of-NOX-2");
   });
 
+  it("fails before mutation when a non-null parent identifier cannot be resolved", async () => {
+    reset();
+    rawRequestOverride = async (query, variables) => {
+      if (query.includes("ResolveIssueId")) {
+        const id = (variables as { id: string }).id;
+        return { data: { issue: id === "NOX-404" ? null : stubIssue(id) } };
+      }
+      throw new Error("unexpected mutation");
+    };
+
+    const err = await updateIssue({ identifier: "NOX-1", parent: "NOX-404" }).catch((e) => e);
+
+    expect(err).toBeInstanceOf(NotFoundError);
+    expect(err.message).toBe("parent issue not found: NOX-404");
+    expect(
+      calls.map((call) => call.query).filter((query) => query.includes("issueUpdate")),
+    ).toEqual([]);
+  });
+
   it("clearing assignee with null works without team (no resolution needed)", async () => {
     reset();
     mockResponses.push({
@@ -619,10 +712,212 @@ describe("updateIssue with project/milestone/cycle (wave-3 single-call path)", (
     }
   });
 
-  it("cycle name without team scoping is rejected by the resolver", async () => {
-    // Wave-3 team-scoping fix: cycle names aren't globally unique, so a
-    // name input without `team` MUST throw rather than silently picking
-    // the first cross-team match. UUID inputs are still fine.
+  it("rejects duplicate cached project names on explicit-team updates", async () => {
+    reset();
+    const mockedResolve = await import("../src/lib/resolve.ts");
+    const origWith = mockedResolve.withFreshMetadataOnMiss;
+    (mockedResolve as Record<string, unknown>).withFreshMetadataOnMiss = async <T>(
+      _fetcher: unknown,
+      fn: (md: unknown) => Promise<T>,
+    ): Promise<T> =>
+      fn({
+        team_id: "team-uuid",
+        projects: [
+          { id: "project-a", name: "Duplicate Project" },
+          { id: "project-b", name: "Duplicate Project" },
+        ],
+        states: [],
+        labels: [],
+        members: [],
+      });
+
+    try {
+      const err = await updateIssue({
+        identifier: "NOX-1",
+        team: "NOX",
+        project: "Duplicate Project",
+      }).catch((e) => e);
+
+      expect(err).toMatchObject({ code: "validation_error" });
+      expect(err.message).toMatch(/ambiguous project "Duplicate Project"/);
+      expect(projectResolveCalls).toEqual([]);
+      expect(
+        calls.map((call) => call.query).filter((query) => query.includes("issueUpdate")),
+      ).toEqual([]);
+    } finally {
+      (mockedResolve as Record<string, unknown>).withFreshMetadataOnMiss = origWith;
+    }
+  });
+
+  it("rejects ambiguous project names without treating an identifier-derived team as explicit scope", async () => {
+    reset();
+
+    const err = await updateIssue({
+      identifier: "NOX-1",
+      project: "Ambiguous Project",
+    }).catch((e) => e);
+
+    expect(err).toMatchObject({ code: "validation_error" });
+    expect(err.message).toMatch(/ambiguous project name/);
+    expect(projectResolveCalls).toEqual([
+      { nameOrId: "Ambiguous Project", opts: { teamKey: undefined } },
+    ]);
+    expect(
+      calls.map((call) => call.query).filter((query) => query.includes("issueUpdate")),
+    ).toEqual([]);
+  });
+
+  it("honors explicit team boundaries for project-name misses", async () => {
+    reset();
+
+    const err = await updateIssue({
+      identifier: "NOX-1",
+      team: "NOX",
+      project: "Missing In Team",
+    }).catch((e) => e);
+
+    expect(err).toMatchObject({ code: "validation_error" });
+    expect(err.message).toBe("project not found: Missing In Team (team NOX)");
+    expect(projectResolveCalls).toEqual([
+      { nameOrId: "Missing In Team", opts: { teamKey: "NOX" } },
+    ]);
+    expect(
+      calls.map((call) => call.query).filter((query) => query.includes("issueUpdate")),
+    ).toEqual([]);
+  });
+
+  it("scopes milestone names to the issue's current project", async () => {
+    reset();
+    issueLookupOverride = (id: string) => ({
+      id: `uuid-of-${id}`,
+      identifier: id.toUpperCase(),
+      project: { id: "project-current", name: "Current Project" },
+    });
+    mockResponses.push({
+      data: {
+        issueUpdate: {
+          success: true,
+          issue: {
+            id: "uuid-of-NOX-1",
+            identifier: "NOX-1",
+            url: "u",
+            title: "T",
+            state: { name: "Done" },
+          },
+        },
+      },
+    });
+
+    await updateIssue({
+      identifier: "NOX-1",
+      milestone: "Beta",
+    });
+
+    expect(milestoneResolveCalls).toEqual([
+      { nameOrId: "Beta", opts: { projectId: "project-current" } },
+    ]);
+    const input = (calls.at(-1)?.variables as { input: Record<string, unknown> }).input;
+    expect(input.projectMilestoneId).toBe("uuid-of-milestone-Beta");
+  });
+
+  it("rejects milestone names when neither target nor current project is available", async () => {
+    reset();
+
+    const err = await updateIssue({
+      identifier: "NOX-1",
+      milestone: "Beta",
+    }).catch((e) => e);
+
+    expect(err).toMatchObject({ code: "validation_error" });
+    expect(err.message).toMatch(/requires a project scope/);
+    expect(milestoneResolveCalls).toEqual([]);
+    expect(
+      calls.map((call) => call.query).filter((query) => query.includes("issueUpdate")),
+    ).toEqual([]);
+  });
+
+  it("returns enough remote fields for one-call write proof", async () => {
+    reset();
+    mockResponses.push({
+      data: {
+        issueUpdate: {
+          success: true,
+          issue: {
+            id: "uuid-of-NOX-1",
+            identifier: "NOX-1",
+            url: "https://linear.app/test/issue/NOX-1",
+            updatedAt: "2026-06-07T12:00:00.000Z",
+            title: "New title",
+            description: "New body",
+            state: { id: "state-1", name: "Done", type: "completed" },
+            priority: 2,
+            estimate: 5,
+            labels: { nodes: [{ id: "label-1", name: "bug" }] },
+            assignee: { id: "user-1", name: "Alice", email: "alice@example.com" },
+            parent: { id: "parent-1", identifier: "NOX-0" },
+            project: { id: "project-1", name: "Project" },
+            projectMilestone: { id: "milestone-1", name: "Beta" },
+            cycle: { id: "cycle-1", name: "Cycle 1" },
+            team: { id: "team-1", key: "NOX" },
+          },
+        },
+      },
+    });
+
+    const issue = await updateIssue({ identifier: "NOX-1", title: "New title" });
+    const proof = issueWriteProof(issue);
+
+    expect(proof).toMatchObject({
+      identifier: "NOX-1",
+      updated_at: "2026-06-07T12:00:00.000Z",
+      title: "New title",
+      description: "New body",
+      state: { id: "state-1", name: "Done", type: "completed" },
+      priority: 2,
+      estimate: 5,
+      labels: [{ id: "label-1", name: "bug" }],
+      assignee: { id: "user-1", name: "Alice", email: "alice@example.com" },
+      parent: { id: "parent-1", identifier: "NOX-0" },
+      project: { id: "project-1", name: "Project" },
+      milestone: { id: "milestone-1", name: "Beta" },
+      cycle: { id: "cycle-1", name: "Cycle 1" },
+    });
+  });
+
+  it("cycle name uses identifier-derived team scoping when team is omitted", async () => {
+    // Cycle names aren't globally unique, so name resolution must be scoped.
+    // `updateIssue` can derive that scope from a canonical TEAM-NN
+    // identifier; callers only need to pass `team` when the identifier shape
+    // does not carry a team key.
+    reset();
+    mockResponses.push({
+      data: {
+        issueUpdate: {
+          success: true,
+          issue: {
+            id: "uuid-of-NOX-1",
+            identifier: "NOX-1",
+            url: "u",
+            title: "T",
+            state: { name: "Done" },
+          },
+        },
+      },
+    });
+
+    await updateIssue({
+      identifier: "NOX-1",
+      cycle: "Cycle 12",
+    });
+
+    const input = (calls.at(-1)?.variables as { input: Record<string, unknown> }).input;
+    expect(input.cycleId).toBe("uuid-of-cycle-Cycle 12");
+  });
+
+  it("cycle name without derivable team scoping is rejected by the resolver", async () => {
+    // If the identifier cannot provide a TEAM-NN prefix and no explicit team
+    // is passed, the resolver must still reject name input instead of picking
+    // a cross-team match.
     reset();
     // Override the resolve mock so resolveCycleIdByName is exercised
     // (the top-of-file mock omits it, so we add it just for this test).
@@ -641,7 +936,7 @@ describe("updateIssue with project/milestone/cycle (wave-3 single-call path)", (
 
     try {
       const err = await updateIssue({
-        identifier: "NOX-1",
+        identifier: "not-team-shaped",
         cycle: "Cycle 12",
         // No team passed.
       }).catch((e) => e);
@@ -670,6 +965,28 @@ describe("archiveIssues + unarchiveIssues", () => {
     mockResponses.push({ data: { issueUnarchive: { success: true } } });
     const results = await unarchiveIssues(["NOX-1"]);
     expect(results).toEqual([{ identifier: "NOX-1", status: "ok" }]);
+  });
+
+  it("archive: reports success:false mutation payloads as errors", async () => {
+    reset();
+    mockResponses.push({ data: { issueArchive: { success: false } } });
+    const results = await archiveIssues(["NOX-1"]);
+    expect(results[0]).toMatchObject({
+      identifier: "NOX-1",
+      status: "error",
+      error: "issueArchive failed",
+    });
+  });
+
+  it("unarchive: reports success:false mutation payloads as errors", async () => {
+    reset();
+    mockResponses.push({ data: { issueUnarchive: { success: false } } });
+    const results = await unarchiveIssues(["NOX-1"]);
+    expect(results[0]).toMatchObject({
+      identifier: "NOX-1",
+      status: "error",
+      error: "issueUnarchive failed",
+    });
   });
 
   it("archive: lifecycleOne recognizes a structured NotFoundError from the SDK boundary", async () => {

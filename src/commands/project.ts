@@ -1,16 +1,23 @@
 import chalk from "chalk";
 import type { Command } from "commander";
-import { resolveConfig } from "../lib/config.ts";
+import { invalidateTeamMetadata } from "../lib/cache.ts";
+import { refreshCachedProjectAfterUpdate } from "../lib/cacheRefresh.ts";
+import { findGitRoot, hashRepoRoot, resolveConfig } from "../lib/config.ts";
 import { envelope } from "../lib/envelope.ts";
-import { NotFoundError, tryIdempotentDelete } from "../lib/errors.ts";
-import {
-  createProject,
-  deleteProject,
-  getProject,
-  listProjects,
-  updateProject,
-} from "../lib/projects.ts";
 import { getTeamMetadata } from "../lib/resolve.ts";
+import {
+  buildProjectCreateInputFromCli,
+  buildProjectDeleteInputFromCli,
+  buildProjectGetInput,
+  buildProjectListInputFromCli,
+  buildProjectUpdateInputFromCli,
+  executeProjectCreate,
+  executeProjectDelete,
+  executeProjectGet,
+  executeProjectList,
+  executeProjectUpdate,
+  projectListPayload,
+} from "../surface/projects.ts";
 
 /**
  * `lebop project list|view|create|update|delete` — full CRUD over Linear
@@ -26,54 +33,44 @@ export function registerProject(program: Command): void {
     .option("--team <key>", "override the resolved team")
     .option("--all-teams", "list every project the token can see (no team filter)")
     .option("--state <name>", "filter: backlog | planned | started | paused | completed | canceled")
+    .option("--include-archived", "include archived projects")
     .option("--limit <n>", "default 50; pass 0 for no limit", "50")
+    .option("--cursor <token>", "continue from a previous JSON result's next_cursor")
     .option("--json", "emit structured records")
     .action(
       async (opts: {
         team?: string;
         allTeams?: boolean;
         state?: string;
+        includeArchived?: boolean;
         limit?: string;
+        cursor?: string;
         json?: boolean;
       }) => {
-        // `--all-teams` is the explicit "no team filter" escape hatch — it
-        // MUST work without a configured default team, otherwise the flag
-        // is non-functional for users who haven't set `default_team` in
-        // ~/.lebop/config.yaml. Skip resolveConfig entirely in that mode.
-        const teamFilter = opts.allTeams
-          ? undefined
-          : (await resolveConfig({ teamOverride: opts.team })).team;
-        const requested = Number.parseInt(opts.limit ?? "50", 10);
-        const max = requested === 0 ? Number.POSITIVE_INFINITY : Math.max(1, requested);
-        const records = await listProjects({
-          team: teamFilter,
-          state: opts.state,
-          max,
+        const result = await executeProjectList(buildProjectListInputFromCli({ opts }), {
+          resolveTeam: async (team) => (await resolveConfig({ teamOverride: team })).team,
         });
 
         if (opts.json) {
           process.stdout.write(
-            `${JSON.stringify(
-              envelope({
-                team: opts.allTeams ? "*" : teamFilter,
-                count: records.length,
-                projects: records,
-              }),
-              null,
-              2,
-            )}\n`,
+            `${JSON.stringify(envelope(projectListPayload(result)), null, 2)}\n`,
           );
           return;
         }
 
-        if (records.length === 0) {
+        if (result.records.length === 0) {
           process.stdout.write("no projects\n");
           return;
         }
 
-        const stateWidth = Math.max(...records.map((r) => r.state.length));
-        for (const r of records) {
+        const stateWidth = Math.max(...result.records.map((r) => r.state.length));
+        for (const r of result.records) {
           process.stdout.write(`[${r.state.padEnd(stateWidth)}]  ${r.name}\n`);
+        }
+        if (result.truncated) {
+          process.stdout.write(
+            `\nmore projects available; use --cursor ${result.next_cursor} with the same filters\n`,
+          );
         }
       },
     );
@@ -83,16 +80,10 @@ export function registerProject(program: Command): void {
     .description("show one project by UUID")
     .option("--json", "emit structured result")
     .action(async (id: string, opts: { json?: boolean }) => {
-      const project = await getProject(id);
-      // Round-8 / R8-LOW-3: structured NotFoundError instead of raw Error
-      // so `--json` emits the proper envelope (`code: "not_found"`) instead
-      // of the unclassified `code: "unknown"` fallback.
-      if (!project) {
-        throw new NotFoundError(
-          `project not found: ${id}`,
-          "verify the project UUID; run `lebop projects` to discover ids",
-        );
-      }
+      const project = await executeProjectGet(
+        buildProjectGetInput(id),
+        "verify the project UUID; run `lebop projects` to discover ids",
+      );
 
       if (opts.json) {
         process.stdout.write(`${JSON.stringify(envelope({ project }), null, 2)}\n`);
@@ -109,6 +100,7 @@ export function registerProject(program: Command): void {
           `  teams: ${project.teams.map((t) => `${t.key} (${t.name})`).join(", ")}\n`,
         );
       }
+      if (project.icon) process.stdout.write(`  icon: ${chalk.cyan(project.icon)}\n`);
       if (project.start_date) process.stdout.write(`  start: ${project.start_date}\n`);
       if (project.target_date) process.stdout.write(`  target: ${project.target_date}\n`);
       process.stdout.write(`  url: ${chalk.gray(project.url)}\n`);
@@ -122,11 +114,13 @@ export function registerProject(program: Command): void {
 
   cmd
     .command("create <name>")
-    .description("create a project (requires --team or --team-id)")
+    .description("create a project (requires --team, --team-key, --team-id, or a default team)")
     .option("--team <key>", "team key (resolved to UUID via team metadata)")
-    .option("--team-id <uuid>", "team UUID (skip the metadata lookup)")
+    .option("--team-key <key>", "team key; repeat for multi-team projects", collectValues, [])
+    .option("--team-id <uuid>", "team UUID; repeat for multi-team projects", collectValues, [])
     .option("--description <text>")
     .option("--content <text>", "long-form content body")
+    .option("--icon <name>", "Linear internal icon name, e.g. BarChart or Rocket")
     .option(
       "--state <name>",
       "backlog (default) | planned | started | paused | completed | canceled",
@@ -139,34 +133,27 @@ export function registerProject(program: Command): void {
         name: string,
         opts: {
           team?: string;
-          teamId?: string;
+          teamKey?: string[];
+          teamId?: string[];
           description?: string;
           content?: string;
+          icon?: string;
           state?: string;
           startDate?: string;
           targetDate?: string;
           json?: boolean;
         },
       ) => {
-        let teamId = opts.teamId;
-        if (!teamId) {
-          const config = await resolveConfig({ teamOverride: opts.team });
-          const md = await getTeamMetadata(config.repoHash, config.team);
-          teamId = md.team_id;
-        }
-
-        const created = await createProject({
-          name,
-          teamIds: [teamId],
-          description: opts.description,
-          content: opts.content,
-          state: opts.state,
-          startDate: opts.startDate,
-          targetDate: opts.targetDate,
-        });
+        const { project: created, teamIds } = await executeProjectCreate(
+          buildProjectCreateInputFromCli({ name, opts }),
+          CLI_PROJECT_CREATE_TEAM_DEPS,
+        );
+        await invalidateTeamMetadata(currentRepoHash());
 
         if (opts.json) {
-          process.stdout.write(`${JSON.stringify(envelope({ project: created }), null, 2)}\n`);
+          process.stdout.write(
+            `${JSON.stringify(envelope({ project: created, team_ids: teamIds }), null, 2)}\n`,
+          );
           return;
         }
         process.stdout.write(
@@ -177,10 +164,11 @@ export function registerProject(program: Command): void {
 
   cmd
     .command("update <id>")
-    .description("update a project (name, description, content, state, dates)")
+    .description("update a project (name, description, content, icon, state, dates)")
     .option("--name <text>")
     .option("--description <text>")
     .option("--content <text>")
+    .option("--icon <name>", "Linear internal icon name, or `null` to clear")
     .option("--state <name>")
     .option("--start-date <iso>", "or `null` to clear")
     .option("--target-date <iso>", "or `null` to clear")
@@ -192,38 +180,32 @@ export function registerProject(program: Command): void {
           name?: string;
           description?: string;
           content?: string;
+          icon?: string;
           state?: string;
           startDate?: string;
           targetDate?: string;
           json?: boolean;
         },
       ) => {
-        const input: Parameters<typeof updateProject>[1] = {};
-        if (opts.name !== undefined) input.name = opts.name;
-        if (opts.description !== undefined) input.description = opts.description;
-        if (opts.content !== undefined) input.content = opts.content;
-        if (opts.state !== undefined) input.state = opts.state;
-        if (opts.startDate !== undefined) {
-          input.startDate = opts.startDate === "null" ? null : opts.startDate;
-        }
-        if (opts.targetDate !== undefined) {
-          input.targetDate = opts.targetDate === "null" ? null : opts.targetDate;
-        }
-
-        if (Object.keys(input).length === 0) {
-          throw new Error(
-            "nothing to update — pass at least one of --name / --description / --content / --state / --start-date / --target-date",
-          );
-        }
-
-        const updated = await updateProject(id, input);
+        const {
+          project: updated,
+          cache,
+          status,
+        } = await executeProjectUpdate(buildProjectUpdateInputFromCli({ id, opts }), {
+          refreshCache: refreshCachedProjectAfterUpdate,
+        });
+        await invalidateTeamMetadata(currentRepoHash());
         if (opts.json) {
-          process.stdout.write(`${JSON.stringify(envelope({ project: updated }), null, 2)}\n`);
+          process.stdout.write(
+            `${JSON.stringify(envelope({ status, project: updated, cache }), null, 2)}\n`,
+          );
+          if (cache.error) process.exitCode = 1;
           return;
         }
         process.stdout.write(
-          `${chalk.green("✓")} updated ${chalk.bold(updated.name)} ${chalk.gray(`(${updated.id})`)}\n`,
+          `${cache.error ? chalk.red("✗") : chalk.green("✓")} updated ${chalk.bold(updated.name)} ${chalk.gray(`(${updated.id})`)}${cache.refreshed ? chalk.gray(" (cache refreshed)") : ""}${cache.error ? `  ${chalk.red(cache.error.message)}` : ""}\n`,
         );
+        if (cache.error) process.exitCode = 1;
       },
     );
 
@@ -233,30 +215,42 @@ export function registerProject(program: Command): void {
     .option("--yes", "confirm destructive operation (required)")
     .option("--json", "emit structured result")
     .action(async (id: string, opts: { yes?: boolean; json?: boolean }) => {
-      if (!opts.yes) {
-        process.stderr.write(
-          `${chalk.red("error:")} refusing to delete project ${chalk.bold(id)} without --yes\n` +
-            `  ${chalk.cyan("hint:")} re-run with --yes to confirm. This operation is irreversible.\n`,
-        );
-        process.exitCode = 1;
-        return;
-      }
-      // Round-8 / N2: discriminated union — narrow via `r.status`.
-      const r = await tryIdempotentDelete(() => deleteProject(id));
-      const succeeded = r.status === "deleted" && r.result;
-      if (r.status === "deleted" && !r.result) process.exitCode = 1;
+      const r = await executeProjectDelete(buildProjectDeleteInputFromCli({ id, opts }));
+      if (r.status === "deleted") await invalidateTeamMetadata(currentRepoHash());
+      if (r.status === "deleted" && !r.success) process.exitCode = 1;
       if (opts.json) {
         process.stdout.write(
-          `${JSON.stringify(envelope({ id, status: r.status, success: succeeded }), null, 2)}\n`,
+          `${JSON.stringify(envelope({ id, status: r.status, success: r.success }), null, 2)}\n`,
         );
         return;
       }
       if (r.status === "already-absent") {
         process.stdout.write(`${chalk.gray("✓")} already absent: ${chalk.bold(id)} (no-op)\n`);
-      } else if (r.result) {
+      } else if (r.success) {
         process.stdout.write(`${chalk.green("✓")} deleted ${chalk.bold(id)}\n`);
       } else {
         process.stdout.write(`${chalk.red("✗")} delete failed for ${id}\n`);
       }
     });
 }
+
+function collectValues(value: string, previous: string[]): string[] {
+  return [...previous, value];
+}
+
+function currentRepoHash(): string {
+  const repoRoot = findGitRoot(process.cwd());
+  return repoRoot ? hashRepoRoot(repoRoot) : "_global";
+}
+
+const CLI_PROJECT_CREATE_TEAM_DEPS = {
+  defaultTeamKey: async (): Promise<string> => {
+    const config = await resolveConfig();
+    return config.team;
+  },
+  resolveTeamKeyToId: async (key: string): Promise<string> => {
+    const config = await resolveConfig({ teamOverride: key });
+    const md = await getTeamMetadata(config.repoHash, config.team);
+    return md.team_id;
+  },
+};

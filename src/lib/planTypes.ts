@@ -1,5 +1,5 @@
 /**
- * Shared types for the `lebop plan` feature. See `docs/plan-spec.md` for the
+ * Shared types for the `lebop plan` feature. See `docs/spec.md` §9 for the
  * full frontmatter schema and apply semantics.
  */
 
@@ -28,6 +28,7 @@ export const LINK_KEY_TO_SET_LINKS_KIND: Record<
 export interface IssueFrontmatter {
   title: string;
   linear_id?: string; // "UE-401"; written back after first apply
+  _server?: PlanServerSnapshot;
   state?: string;
   priority?: string | number;
   estimate?: number; // Linear's estimate field (points / t-shirt size as a number)
@@ -41,15 +42,26 @@ export interface IssueFrontmatter {
   related?: string[];
   duplicates?: string[];
   duplicated_by?: string[];
-  [key: string]: unknown; // tolerant to unrecognised fields — captured but ignored
+  /** Parsed YAML may carry unknown keys; validatePlan rejects unsupported keys before mutation. */
+  [key: string]: unknown;
 }
 
 export interface ProjectFrontmatter {
   name: string;
   team: string;
   linear_id?: string; // UUID; written back after first apply
+  _server?: PlanServerSnapshot;
   description?: string;
+  icon?: string | null;
   state?: string;
+  start_date?: string | null;
+  target_date?: string | null;
+  /** Parsed YAML may carry unknown keys; validatePlan rejects unsupported keys before mutation. */
+  [key: string]: unknown;
+}
+
+export interface PlanServerSnapshot {
+  updated_at?: string;
   [key: string]: unknown;
 }
 
@@ -90,3 +102,29 @@ export interface ValidationResult {
   errors: PlanError[];
   warnings: PlanWarning[];
 }
+
+export const ISSUE_FRONTMATTER_KEYS: readonly string[] = [
+  "title",
+  "linear_id",
+  "_server",
+  "state",
+  "priority",
+  "estimate",
+  "labels",
+  "assignee",
+  "slug",
+  "parent",
+  ...LINK_KEYS,
+] as const;
+
+export const PROJECT_FRONTMATTER_KEYS: readonly string[] = [
+  "name",
+  "team",
+  "linear_id",
+  "_server",
+  "description",
+  "icon",
+  "state",
+  "start_date",
+  "target_date",
+] as const;

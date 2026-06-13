@@ -1,9 +1,9 @@
 import chalk from "chalk";
 import type { Command } from "commander";
 import { envelope } from "../lib/envelope.ts";
-import { NotFoundError } from "../lib/errors.ts";
+import { NotFoundError, ValidationError } from "../lib/errors.ts";
 import { resolveBody } from "../lib/io.ts";
-import { resolveProjectId } from "../lib/milestones.ts";
+import { resolveExistingProjectId, resolveProjectId } from "../lib/milestones.ts";
 import { createProjectUpdate, listProjectUpdates, type ProjectHealth } from "../lib/projects.ts";
 
 const HEALTH_VALUES = ["onTrack", "atRisk", "offTrack"] as const;
@@ -41,13 +41,16 @@ export function registerProjectUpdate(program: Command): void {
         if (!projectId) throw new NotFoundError(`project not found: ${project}`);
 
         const body = await resolveBody(opts);
-        if (!body.trim()) throw new Error("empty update body");
+        if (!body.trim()) {
+          throw new ValidationError("empty update body", "pass --body, --body-file, or --stdin");
+        }
 
         let health: ProjectHealth | undefined;
         if (opts.health) {
           if (!(HEALTH_VALUES as readonly string[]).includes(opts.health)) {
-            throw new Error(
+            throw new ValidationError(
               `invalid --health "${opts.health}". expected: ${HEALTH_VALUES.join(", ")}`,
+              `expected one of: ${HEALTH_VALUES.join(", ")}`,
             );
           }
           health = opts.health as ProjectHealth;
@@ -72,7 +75,7 @@ export function registerProjectUpdate(program: Command): void {
     .description("list status updates on a project (project is name or UUID)")
     .option("--json", "emit structured records")
     .action(async (project: string, opts: { json?: boolean }) => {
-      const projectId = await resolveProjectId(project);
+      const projectId = await resolveExistingProjectId(project);
       if (!projectId) throw new NotFoundError(`project not found: ${project}`);
 
       const updates = await listProjectUpdates(projectId);

@@ -11,7 +11,10 @@ import type {
 } from "./planTypes.ts";
 
 /** Parse a frontmatter+body markdown file into {frontmatter, body}. */
-export function splitFrontmatter(raw: string): { frontmatter: unknown; body: string } {
+export function splitFrontmatter(
+  raw: string,
+  sourcePath?: string,
+): { frontmatter: unknown; body: string } {
   // Accept optional leading BOM, then `---\n`, yaml (possibly empty), `---\n?`, then body.
   const m = raw.match(/^﻿?---\r?\n([\s\S]*?)\r?\n?---\r?\n?([\s\S]*)$/);
   if (!m) {
@@ -24,7 +27,7 @@ export function splitFrontmatter(raw: string): { frontmatter: unknown; body: str
   // Strip a single leading newline (the conventional blank line after the closing `---`)
   // so re-parse of a writer-generated file yields the same body string round-trip.
   const body = (m[2] ?? "").replace(/^\r?\n/, "");
-  const parsed = yaml.trim() === "" ? {} : parseYaml(yaml);
+  const parsed = parseFrontmatterYaml(yaml, sourcePath);
   if (parsed !== null && typeof parsed !== "object") {
     throw new ValidationError(
       "frontmatter YAML must be an object",
@@ -43,7 +46,7 @@ export function slugFromPath(path: string): string {
 /** Parse the `_project.md` file in a plan directory. */
 async function parseProjectFile(path: string): Promise<ProjectFile> {
   const raw = await readFile(path, "utf8");
-  const { frontmatter, body } = splitFrontmatter(raw);
+  const { frontmatter, body } = splitFrontmatter(raw, path);
   const fm = frontmatter as ProjectFrontmatter;
   if (typeof fm.name !== "string" || fm.name.trim() === "") {
     throw new ValidationError(
@@ -63,7 +66,7 @@ async function parseProjectFile(path: string): Promise<ProjectFile> {
 /** Parse one issue markdown file. */
 async function parseIssueFile(path: string): Promise<IssueFile> {
   const raw = await readFile(path, "utf8");
-  const { frontmatter, body } = splitFrontmatter(raw);
+  const { frontmatter, body } = splitFrontmatter(raw, path);
   const fm = frontmatter as IssueFrontmatter;
   if (typeof fm.title !== "string" || fm.title.trim() === "") {
     throw new ValidationError(
@@ -73,6 +76,19 @@ async function parseIssueFile(path: string): Promise<IssueFile> {
   }
   const slug = typeof fm.slug === "string" && fm.slug.trim() !== "" ? fm.slug : slugFromPath(path);
   return { path, slug, frontmatter: fm, body };
+}
+
+function parseFrontmatterYaml(yaml: string, sourcePath?: string): unknown {
+  if (yaml.trim() === "") return {};
+  try {
+    return parseYaml(yaml);
+  } catch (err) {
+    const prefix = sourcePath ? `${sourcePath}: ` : "";
+    throw new ValidationError(
+      `${prefix}frontmatter YAML is invalid: ${(err as Error).message}`,
+      "fix the YAML syntax inside the `---` frontmatter block; common issues are malformed lists, tabs, or unclosed quotes",
+    );
+  }
 }
 
 /**

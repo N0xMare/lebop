@@ -1,6 +1,8 @@
 import chalk from "chalk";
 import type { Command } from "commander";
+import { commentCacheNotRefreshed, issueCacheNotRefreshed } from "../lib/cacheCoherence.ts";
 import { addComment, deleteComment, listComments, updateComment } from "../lib/comments.ts";
+import { findGitRoot, hashRepoRoot } from "../lib/config.ts";
 import { envelope } from "../lib/envelope.ts";
 import { tryIdempotentDelete, ValidationError } from "../lib/errors.ts";
 import { resolveBody } from "../lib/io.ts";
@@ -42,11 +44,26 @@ export function registerComment(program: Command): void {
       });
 
       if (opts.json) {
+        const cacheContext = currentCacheContext();
         // Round-7 / MED-4: echo A26's full response (body/url/user) for
         // CLI/MCP parity. Pre-fix the CLI emitted only `{id, created_at}`;
         // MCP path already echoed the full shape via `result` pass-through.
         process.stdout.write(
-          `${JSON.stringify(envelope({ identifier: id, comment: result }), null, 2)}\n`,
+          `${JSON.stringify(
+            envelope({
+              identifier: id,
+              comment: result,
+              cache: issueCacheNotRefreshed({
+                identifiers: [id.toUpperCase()],
+                reason: "comment add does not rewrite the cached issue comment collection in place",
+                repairHint: `run \`lebop pull ${id.toUpperCase()} --refresh --yes\` to refresh cached comments after verifying local cache overwrite is intended`,
+                repoHash: cacheContext.repoHash,
+                repoRoot: cacheContext.repoRoot,
+              }),
+            }),
+            null,
+            2,
+          )}\n`,
         );
         return;
       }
@@ -107,7 +124,25 @@ export function registerComment(program: Command): void {
       }
       const updated = await updateComment(commentId, body);
       if (opts.json) {
-        process.stdout.write(`${JSON.stringify(envelope({ comment: updated }), null, 2)}\n`);
+        const cacheContext = currentCacheContext();
+        process.stdout.write(
+          `${JSON.stringify(
+            envelope({
+              comment: updated,
+              cache: commentCacheNotRefreshed({
+                commentIds: [commentId],
+                reason:
+                  "comment update receives only a comment UUID and does not know which cached issue comment collection to refresh",
+                repairHint:
+                  "run `lebop pull <issue-id> --refresh --yes` for the parent issue before relying on cached comments, after verifying local cache overwrite is intended",
+                repoHash: cacheContext.repoHash,
+                repoRoot: cacheContext.repoRoot,
+              }),
+            }),
+            null,
+            2,
+          )}\n`,
+        );
         return;
       }
       process.stdout.write(
@@ -122,21 +157,29 @@ export function registerComment(program: Command): void {
     .option("--json", "emit structured result")
     .action(async (commentId: string, opts: { yes?: boolean; json?: boolean }) => {
       if (!opts.yes) {
-        process.stderr.write(
-          `${chalk.red("error:")} refusing to delete comment ${chalk.bold(commentId)} without --yes\n` +
-            `  ${chalk.cyan("hint:")} re-run with --yes to confirm. This operation is irreversible.\n`,
+        throw new ValidationError(
+          `refusing to delete comment ${commentId} without --yes`,
+          "re-run with --yes to confirm. This operation is irreversible.",
         );
-        process.exitCode = 1;
-        return;
       }
       const { status } = await tryIdempotentDelete(() => deleteComment(commentId));
       if (opts.json) {
+        const cacheContext = currentCacheContext();
         process.stdout.write(
           `${JSON.stringify(
             envelope({
               id: commentId,
               status,
               success: status === "deleted",
+              cache: commentCacheNotRefreshed({
+                commentIds: [commentId],
+                reason:
+                  "comment delete receives only a comment UUID and does not know which cached issue comment collection to refresh",
+                repairHint:
+                  "run `lebop pull <issue-id> --refresh --yes` for the parent issue before relying on cached comments, after verifying local cache overwrite is intended",
+                repoHash: cacheContext.repoHash,
+                repoRoot: cacheContext.repoRoot,
+              }),
             }),
             null,
             2,
@@ -160,4 +203,12 @@ interface AddOpts {
   stdin?: boolean;
   parent?: string;
   json?: boolean;
+}
+
+function currentCacheContext(): { repoHash: string; repoRoot: string | null } {
+  const repoRoot = findGitRoot(process.cwd());
+  return {
+    repoHash: repoRoot ? hashRepoRoot(repoRoot) : "_global",
+    repoRoot,
+  };
 }

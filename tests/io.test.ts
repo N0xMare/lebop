@@ -15,16 +15,20 @@ import { resolveBody, resolveContent } from "../src/lib/io.ts";
 describe("resolveBody (structured errors)", () => {
   let prevBun: unknown;
   let prevIsTTY: boolean | undefined;
+  let fileText = "";
+  let stdinText = "";
 
   beforeEach(() => {
     prevBun = (globalThis as { Bun?: unknown }).Bun;
     prevIsTTY = process.stdin.isTTY;
+    fileText = "";
+    stdinText = "";
     // Force TTY so the "no body" path is taken (otherwise it falls back to
     // reading from piped stdin).
     Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
     (globalThis as { Bun?: unknown }).Bun = {
-      file: () => ({ text: async () => "" }),
-      stdin: { text: async () => "" },
+      file: () => ({ text: async () => fileText }),
+      stdin: { text: async () => stdinText },
     };
   });
 
@@ -43,6 +47,35 @@ describe("resolveBody (structured errors)", () => {
     const err = await resolveBody({ body: "x", bodyFile: "/tmp/y" }).catch((e) => e);
     expect(err).toBeInstanceOf(ValidationError);
     expect(err).toMatchObject({ code: "validation_error", hint: expect.any(String) });
+  });
+
+  it("empty inline body is an explicit body provider", async () => {
+    await expect(resolveBody({ body: "" })).resolves.toBe("");
+  });
+
+  it("empty inline body still participates in source mutex checks", async () => {
+    const err = await resolveBody({ body: "", stdin: true }).catch((e) => e);
+    expect(err).toBeInstanceOf(ValidationError);
+    expect(err).toMatchObject({ code: "validation_error", hint: expect.any(String) });
+  });
+
+  it("body-file preserves leading whitespace and trims trailing whitespace", async () => {
+    fileText = "  indented\n";
+
+    await expect(resolveBody({ bodyFile: "/tmp/body.md" })).resolves.toBe("  indented");
+  });
+
+  it("explicit stdin preserves leading whitespace and trims trailing whitespace", async () => {
+    stdinText = "  indented\n";
+
+    await expect(resolveBody({ stdin: true })).resolves.toBe("  indented");
+  });
+
+  it("implicit piped stdin preserves leading whitespace and trims trailing whitespace", async () => {
+    Object.defineProperty(process.stdin, "isTTY", { value: false, configurable: true });
+    stdinText = "  indented\n";
+
+    await expect(resolveBody({})).resolves.toBe("  indented");
   });
 });
 
@@ -63,6 +96,16 @@ describe("resolveContent (structured errors)", () => {
 
   it("multiple-source mutex is a ValidationError with code + hint", async () => {
     const err = await resolveContent({ content: "x", contentFile: "/tmp/y" }).catch((e) => e);
+    expect(err).toBeInstanceOf(ValidationError);
+    expect(err).toMatchObject({ code: "validation_error", hint: expect.any(String) });
+  });
+
+  it("empty inline content is an explicit content provider", async () => {
+    await expect(resolveContent({ content: "" })).resolves.toBe("");
+  });
+
+  it("empty inline content still participates in source mutex checks", async () => {
+    const err = await resolveContent({ content: "", stdin: true }).catch((e) => e);
     expect(err).toBeInstanceOf(ValidationError);
     expect(err).toMatchObject({ code: "validation_error", hint: expect.any(String) });
   });
