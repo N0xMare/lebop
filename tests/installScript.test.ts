@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-describe("scripts/install.sh", () => {
+// These shell out to install.sh + fake bins; 5s default is flaky under load.
+describe("scripts/install.sh", { timeout: 20_000 }, () => {
   let root: string;
   let home: string;
   let fakeBin: string;

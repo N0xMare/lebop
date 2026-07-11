@@ -69,7 +69,7 @@ function escapeRegExp(value: string): string {
 describe("runtime version metadata", () => {
   it("uses package.json as the single runtime source", () => {
     expect(LEBOP_VERSION).toBe(packageJson.version);
-    expect(packageJson.version).toBe("0.0.3");
+    expect(packageJson.version).toBe("0.0.4");
   });
 
   it("CLI and MCP server do not hardcode independent runtime versions", () => {

@@ -1,7 +1,12 @@
 import chalk from "chalk";
 import type { Command } from "commander";
 import { envelope } from "../lib/envelope.ts";
-import { type LintFileResult, lintFiles } from "../lib/lintFiles.ts";
+import type { LintFileResult } from "../lib/lintFiles.ts";
+import {
+  buildLintFilesInputFromCli,
+  executeLintFiles,
+  lintFilesCliPayload,
+} from "../surface/lint.ts";
 
 interface LintOpts {
   team?: string;
@@ -19,12 +24,16 @@ export function registerLint(program: Command): void {
     .option("--strict", "exit non-zero on any warning")
     .option("--json", "emit structured JSON output")
     .action(async (paths: string[], opts: LintOpts) => {
-      const result = await lintFiles({
-        paths,
-        team: opts.team,
-        fix: opts.fix,
-        strict: opts.strict,
-      });
+      const result = await executeLintFiles(
+        buildLintFilesInputFromCli({
+          paths,
+          opts: {
+            team: opts.team,
+            fix: opts.fix,
+            strict: opts.strict,
+          },
+        }),
+      );
       if (result.files.length === 0 && result.missing_count === 0) {
         process.stderr.write(`${chalk.yellow("no markdown files found to lint.")}\n`);
         return;
@@ -33,23 +42,7 @@ export function registerLint(program: Command): void {
         process.stderr.write(`${chalk.red("missing:")} ${file}\n`);
 
       if (opts.json) {
-        process.stdout.write(
-          `${JSON.stringify(
-            envelope({
-              files: result.files.map((f) => ({
-                path: f.path,
-                warnings: f.warnings,
-                fixed: f.fixed,
-              })),
-              warning_count: result.warning_count,
-              fixed_count: result.fixed_count,
-              missing_count: result.missing_count,
-              strict_failed: result.strict_failed,
-            }),
-            null,
-            2,
-          )}\n`,
-        );
+        process.stdout.write(`${JSON.stringify(envelope(lintFilesCliPayload(result)), null, 2)}\n`);
       } else {
         printHuman(result.files, Boolean(opts.fix));
       }

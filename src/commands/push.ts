@@ -1,14 +1,12 @@
 import chalk from "chalk";
 import type { Command } from "commander";
-import {
-  applyCachePushPlans,
-  type CachePushResult,
-  collectCachePushPlans,
-} from "../lib/cachePush.ts";
-import { resolveConfig } from "../lib/config.ts";
+import type { CachePushResult } from "../lib/cachePush.ts";
 import { envelope } from "../lib/envelope.ts";
-import { ValidationError } from "../lib/errors.ts";
-import { expandIds } from "../lib/expand.ts";
+import {
+  buildCachePushInputFromCli,
+  cachePushPayload,
+  executeCachePush,
+} from "../surface/cache.ts";
 
 interface PushOpts {
   team?: string;
@@ -39,34 +37,16 @@ export function registerPush(program: Command): void {
     )
     .option("--json", "emit structured per-entity result records")
     .action(async (ids: string[], opts: PushOpts) => {
-      const dryRun = opts.dryRun === true;
-      if (opts.force === true && !dryRun && !isConfirmed(opts)) {
-        throw new ValidationError(
-          "refusing to push with --force without --yes/--confirm",
-          "run with --dry-run to preview, or pass --yes/--confirm after verifying stale-guard bypass is intended",
-        );
-      }
-      const config = await resolveConfig({ teamOverride: opts.team });
-      const lintCtx = {
-        repoConfig: config.repoConfig,
-        workspaceUrlPrefix: config.workspaceUrlPrefix,
-      };
+      const result = await executeCachePush(buildCachePushInputFromCli({ ids, opts }));
+      const dryRun = result.dryRun;
 
-      const explicitIds = expandIds(ids);
-      const explicitProjectIds = opts.projectId ?? [];
-      const plans = await collectCachePushPlans(config.repoHash, {
-        identifiers: explicitIds,
-        projectIds: explicitProjectIds,
-        includeUnchanged: explicitIds.length > 0 || explicitProjectIds.length > 0,
-      });
-
-      if (plans.length === 0) {
+      if (result.results.length === 0) {
         if (opts.json) {
           process.stdout.write(
             `${JSON.stringify(
               envelope({
-                team: config.team,
-                repo_hash: config.repoHash,
+                team: result.team,
+                repo_hash: result.repoHash,
                 mode: "cache" as const,
                 results: [],
                 summary: { applied: 0, skipped: 0, failed: 0, total: 0 },
@@ -82,36 +62,13 @@ export function registerPush(program: Command): void {
         return;
       }
 
-      const { results, summary } = await applyCachePushPlans({
-        repoHash: config.repoHash,
-        team: config.team,
-        plans,
-        lintCtx,
-        dryRun,
-        force: opts.force,
-        strict: opts.strict,
-      });
-
       if (opts.json) {
-        process.stdout.write(
-          `${JSON.stringify(
-            envelope({
-              team: config.team,
-              repo_hash: config.repoHash,
-              mode: "cache" as const,
-              results,
-              summary,
-              notes: dryRun ? "dry-run: nothing was written" : undefined,
-            }),
-            null,
-            2,
-          )}\n`,
-        );
+        process.stdout.write(`${JSON.stringify(envelope(cachePushPayload(result)), null, 2)}\n`);
       } else {
-        printSummary(results, dryRun);
+        printSummary(result.results, dryRun);
       }
 
-      if (summary.failed > 0 || (summary.writeback_failed ?? 0) > 0) {
+      if (result.summary.failed > 0 || (result.summary.writeback_failed ?? 0) > 0) {
         process.exitCode = 1;
       }
     });
@@ -120,10 +77,6 @@ export function registerPush(program: Command): void {
 function collect(value: string, previous: string[]): string[] {
   previous.push(value);
   return previous;
-}
-
-function isConfirmed(opts: Pick<PushOpts, "yes" | "confirm">): boolean {
-  return opts.yes === true || opts.confirm === true;
 }
 
 function printSummary(results: CachePushResult[], dryRun: boolean): void {

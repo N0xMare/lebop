@@ -61,7 +61,7 @@ declarative authoring).
 
 ## 3. Scope
 
-### In scope (`0.0.3` shipped surface)
+### In scope (`0.0.4` shipped surface)
 
 | Group | Commands |
 |---|---|
@@ -163,7 +163,7 @@ curl -fsSL https://raw.githubusercontent.com/N0xMare/lebop/main/scripts/install.
 The installer downloads the matching GitHub Releases binary for macOS/Linux
 x64/arm64, verifies it against `SHA256SUMS`, and writes it to
 `~/.local/bin/lebop` or `/usr/local/bin/lebop`. Pin a release with
-`LEBOP_VERSION=v0.0.3`.
+`LEBOP_VERSION=v0.0.4`.
 
 From source (Bun required):
 
@@ -190,7 +190,7 @@ sudo ln -sf "$HOME/.bun/bin/lebop" /usr/local/bin/lebop
 Verify:
 
 ```sh
-lebop --version       # 0.0.3
+lebop --version       # 0.0.4
 which lebop           # /opt/homebrew/bin/lebop (or /usr/local/bin/lebop)
 ```
 
@@ -249,7 +249,7 @@ it when you want a default team, per-repo overrides, or repo-scoped lint
 rules:
 
 ```yaml
-default_team: TEAM                              # global fallback (single-workspace setups)
+default_team: ENG                               # global fallback (single-workspace setups)
 
 # Time-to-live for the on-disk team-metadata cache (states/labels/members/projects).
 # Default 3600s (1h). Lower it when your workspace's labels/states change often,
@@ -260,20 +260,20 @@ team_metadata_ttl_seconds: 3600
 # workspace slug (the urlKey — what appears after `linear.app/` and in
 # `lebop auth list`). Avoids `default_team` leaking across workspaces.
 workspace_team_defaults:
-  acme-corp: ACM
-  acme-side-project: SIDE
+  acme: ENG
+  acme-staging: STG
 
 workspaces:
-  your-workspace-slug:
-    url_prefix: https://linear.app/your-workspace-slug   # required by L004
+  acme:
+    url_prefix: https://linear.app/acme                 # required by L004
 
 repos:
-  /Users/you/dev/some-repo:                     # absolute git-root path
-    team: TEAM                                  # team override for this repo
+  /Users/you/dev/billing-api:                   # absolute git-root path
+    team: ENG                                   # team override for this repo
     conventions:
       bracket_issue_refs: true                  # L004 linter rule
     path_rewrites:                              # R001 linter rule
-      - { from: "crates/", to: "protocol/backend/crates/" }
+      - { from: "apps/api/", to: "services/billing/" }
     required_formats:                           # R002 linter rule (regex)
       - { pattern: '\bpr-(\d+)\b', suggest: '[#$1]', message: "Use [#N] form" }
 ```
@@ -350,10 +350,16 @@ lebop/                                # this repo
 │   ├── lebop                         # CLI entry: #!/usr/bin/env bun → src/cli.ts
 │   └── install-claude                # symlink installer for Claude Code (agents/skills + commands)
 ├── src/
-│   ├── cli.ts                        # commander dispatcher; registers all subcommands
-│   ├── commands/                     # thin shells over lib/; one file per top-level verb
-│   ├── mcp/server.ts                 # stdio MCP server; registers tools over lib functions
-│   └── lib/                          # shared core consumed by CLI + MCP
+│   ├── cli.ts                        # commander dispatcher; registers thin command modules
+│   ├── commands/                     # thin shells: argv → surface/lib → format
+│   ├── surface/                      # authority: SURFACE_OPERATIONS + domain contracts
+│   │   ├── contracts.ts              # op metadata, exceptions, live/confirm fields
+│   │   ├── deriveToolSurfaceManifest.ts  # L2: CLI/MCP/live inventories from ops
+│   │   └── <domain>.ts               # per-domain ops (issues, projects, …)
+│   ├── mcp/
+│   │   ├── server.ts                 # stdio MCP boot: create server, register tools
+│   │   └── tools/                    # thin MCP tool modules over surface/lib
+│   └── lib/                          # domain core: Linear behavior + local state
 │       ├── auth/config/requestContext # credentials, defaults, per-call workspace/team scope
 │       ├── sdk/retry/paginate/raw     # Linear SDK access, retry, GraphQL pagination/escape hatch
 │       ├── issues/projects/etc.       # entity CRUD/list helpers for Linear concepts
@@ -364,7 +370,7 @@ lebop/                                # this repo
 │       ├── planParse/Validate/Apply   # declarative plan parsing, linting, realization, sync
 │       ├── linearPublish/publishStore # review/apply publish workflow records
 │       ├── lint/quirks                # Linear markdown renderer rules
-│       ├── toolSurfaceManifest        # CLI/MCP parity inventory
+│       ├── toolSurfaceManifest        # thin re-export of derived L2 inventories
 │       └── toolBehaviorContracts      # payload/behavior contracts used by tests + live harness
 ├── tests/                            # vitest unit/integration tests plus harness contract tests
 ├── scripts/                          # installer, package checks, live Noxor full-surface harness
@@ -402,14 +408,23 @@ under `~/.lebop/`. Commands that target user files, such as `plan
 apply`/`plan pull` writeback and explicit `--to` exports, write where the
 caller points them.
 
-### 5.2 Two surfaces, one lib
+### 5.2 Authority model (lib, surface, thin adapters)
 
-The `commands/` layer should stay thin: parse argv, call into `lib/`, and
-format output (human or `--json`). The MCP server (see §13.3) consumes the
-same `lib/` functions and emits MCP-tool-shaped responses. Wrapper-specific
-code belongs to argument normalization, transport formatting, error envelopes,
-and request-local workspace/team scope; durable Linear behavior belongs in
-`lib/` and should be covered by shared contracts/tests.
+lebop has one durable Linear/domain core and two thin agent-facing adapters:
+
+| Layer | Role |
+|---|---|
+| **`lib/`** | Domain authority — SDK calls, cache, plan/publish, resolve, lint, retries. Shared by CLI and MCP. No transport I/O. |
+| **`surface/`** | Contract authority — `SURFACE_OPERATIONS` declares each dual/exception op (CLI command, MCP tool, safety, live steps/semantics, notes). |
+| **`commands/` + `mcp/tools/`** | Thin adapters — parse argv / MCP args, call surface/lib, format human/JSON or MCP envelopes. |
+| **`mcp/server.ts`** | Boot-only — create the stdio server and register tools from modular `mcp/tools/*`. |
+| **L2 inventory** | Derived — `deriveToolSurfaceManifest` builds CLI/MCP/live manifests from `SURFACE_OPERATIONS`. `lib/toolSurfaceManifest.ts` re-exports those derived inventories (no second handwritten tool/command list). |
+
+Wrapper-specific code belongs to argument normalization, transport formatting,
+error envelopes, and request-local workspace/team scope. Durable Linear
+behavior belongs in `lib/` and is covered by shared contracts/tests. Adding a
+dual-surface op means registering it on `SURFACE_OPERATIONS` and wiring thin
+adapters — not editing a separate parity inventory.
 
 ### 5.3 Atomicity
 
@@ -426,7 +441,7 @@ The hero workflow for bulk and multi-line edits.
 # 1. Pull entities into the cache
 lebop pull TEAM-101..TEAM-109            # range
 lebop pull TEAM-101 TEAM-102 TEAM-103    # list
-lebop pull --project "Some Project"      # whole project + its issues
+lebop pull --project "Billing API v2"    # whole project + its issues
 lebop pull TEAM-101 --to ./scratch       # export mode (no cache write)
 
 # 2. Edit the markdown + YAML files in-place
@@ -623,7 +638,7 @@ agent didn't touch.
 ### 6.5 `status` — git-like diff against `_server`
 
 ```
-On team: TEAM  (repo: /path/to/consumer-repo)
+On team: ENG  (repo: /Users/you/dev/billing-api)
 
 Modified locally (4):
   TEAM-101  description, labels
@@ -673,7 +688,7 @@ labels:                     # by name → resolved to labelIds on push
   - area:backend
   - type:refactor
 assignee: null              # or email / name / @me
-project: Example Project    # by name, for readability
+project: Billing API v2     # by name, for readability
 parent: TEAM-100            # bare TEAM-NN identifier; `null` clears
 # ---- server-owned; do not edit ----
 _server:
@@ -692,7 +707,7 @@ _server:
   title: "example issue title"
   description_hash: <sha256>
   project_id: <uuid>
-  project_name: Example Project
+  project_name: Billing API v2
   parent_id: <uuid>
   parent_identifier: TEAM-100
   updated_at: "2026-01-01T00:00:00Z"   # used for the stale guard
@@ -710,7 +725,7 @@ Project long-form body.
 ### 7.4 `cache/<repo-hash>/projects/<uuid>/metadata.yaml`
 
 ```yaml
-name: Example Project
+name: Billing API v2
 description: "short project tagline (≤255 chars)"
 icon: Rocket
 start_date: 2026-06-01     # YYYY-MM-DD; `null` clears
@@ -720,7 +735,7 @@ _server:
   id: <uuid>
   url: https://linear.app/<workspace-slug>/project/...
   state: started
-  name: Example Project
+  name: Billing API v2
   description: "short project tagline (≤255 chars)"
   icon: Rocket
   start_date: 2026-06-01
@@ -1039,7 +1054,7 @@ the `_server.updated_at` staleness boundary.
 | `labels` | `set labels TEAM-1 +urgent -area:backend` | **delta syntax** (default); `=foo,bar` exact-replace |
 | `parent` | `set parent TEAM-1 TEAM-100` | TEAM-NN identifier; `null` clears |
 | `description` | `set description TEAM-1 --description-file ./body.md` | positional value, `--description`, `--description-file`, or `--stdin`; no cache stale guard |
-| `project` | `set project TEAM-1 "Project Name"` | project name/UUID; `null` detaches |
+| `project` | `set project TEAM-1 "Billing API v2"` | project name/UUID; `null` detaches |
 | `milestone` | `set milestone TEAM-1 "Milestone"` | milestone name/UUID; `null` clears |
 | `cycle` | `set cycle TEAM-1 "Cycle 1"` | cycle name/UUID; `null` clears |
 | `links` | `set links TEAM-1 --yes +blocks:TEAM-2 -related:TEAM-3` | five kinds: `blocks\|blocked-by\|related\|duplicates\|duplicated-by`; negative deltas require `--yes` |
@@ -1285,44 +1300,50 @@ payload on miss.
 ## 9. Plan workflow — declarative authoring
 
 A `plan` is a directory of frontmatter-markdown files describing a Linear
-project + its issues + their relationships. `lebop plan apply` realizes the
+**project** + its issues + their relationships. `lebop plan apply` realizes the
 whole graph in one idempotent pass.
+
+Plans are **project-rooted** (`_project.md` required). That maps to a Linear
+**project** and issues (with parents/links)—not to a Linear **Initiative**
+object. Org-level initiatives use `lebop initiative …` / MCP initiative tools
+instead; there is no `_initiative.md` plan root.
 
 ### 9.1 Why
 
 The `pull → edit → push` loop is great for editing existing issues. For
-**new** initiatives it's the wrong tool — you'd have to create issues one
-at a time, manually wire up `parent:` and `blocks:` after the fact, and
-re-do it if you decide to re-name something. `plan apply` lets you author
-the whole graph as code, review the plan as a PR, and realize it in Linear
-in one call.
+**new projects / greenfield issue graphs** it's the wrong tool — you'd have
+to create issues one at a time, manually wire up `parent:` and `blocks:` after
+the fact, and re-do it if you decide to re-name something. `plan apply` lets
+you author the whole graph as code, review the plan as a PR, and realize it in
+Linear in one call.
 
 ### 9.2 Layout
 
 ```
-plans/some-initiative/
+plans/billing-api-v2/
 ├── _project.md             # required: project metadata + content body
-├── 01-design.md            # one file per issue
-├── 02-impl.md
-└── 03-bench.md
+├── epic.md                 # top-level issue (optional parent for sub-issues)
+├── design.md               # one file per issue
+├── impl.md
+└── web-ui.md
 ```
 
 **Filename → slug**: the stem (filename minus `.md`) is the slug used for
-intra-plan references. `01-design.md` → slug `01-design`. Explicit `slug:`
+intra-plan references. `design.md` → slug `design`. Explicit `slug:`
 in frontmatter overrides.
 
-**File order is not load-bearing.** Numeric prefixes are a human convention
-for reading order only.
+**File order is not load-bearing.** Numeric prefixes (e.g. `01-design.md`) are
+a human convention for reading order only.
 
 ### 9.3 `_project.md`
 
 ```markdown
 ---
-name: Some Initiative
+name: Billing API v2
 description: "tagline ≤ 255 chars"
 icon: Rocket                         # Linear icon name; optional
 state: backlog                       # backlog | planned | started | completed | canceled
-team: TEAM                           # team KEY (not UUID)
+team: ENG                            # team KEY (not UUID)
 linear_id: 88377408-…                # written back by lebop after first apply
 ---
 
@@ -1338,22 +1359,22 @@ name, not emoji.
 
 ```markdown
 ---
-title: "Chain-aware initial gas pricing"
+title: "Design usage metering API"
 state: Backlog                       # state NAME (case-insensitive)
 priority: high                       # name (none|urgent|high|normal|low) or 0..4
 estimate: 3                          # Linear estimate points; optional
 labels:
   - type:feature
-  - area:relayer
+  - area:backend
 assignee: someone@example.com        # email | name | @me | null
 linear_id: TEAM-401                  # written back after first apply
-parent: epic-multi-rpc               # optional: slug OR TEAM-NN identifier
+parent: epic                         # optional: slug OR TEAM-NN identifier
 
 blocks:                              # outgoing list of slugs OR TEAM-NN
-  - 02-multi-rpc
+  - impl
   - TEAM-321
 blocked_by:                          # this issue is blocked by...
-  - 03-bench-harness
+  - web-ui
 related:
   - TEAM-250
 duplicates:                          # WARNING: may move this issue to "Duplicate"
@@ -1573,16 +1594,16 @@ rediscover.
   {
     "schema_version": 2,
     "workspaces": {
-      "unlink-xyz": {
-        "slug": "unlink-xyz",
-        "name": "Unlink",
-        "url_key": "unlink-xyz",
+      "acme": {
+        "slug": "acme",
+        "name": "Acme",
+        "url_key": "acme",
         "token": "lin_api_...",
         "viewer": { "id": "...", "email": "...", "name": "..." },
         "created_at": "..."
       }
     },
-    "default": "unlink-xyz"
+    "default": "acme"
   }
   ```
 
@@ -1793,7 +1814,7 @@ Facts that cost time on first encounter. **Check here before re-deriving.**
 
 ## 13. Release surface and validation
 
-The shipped surface in §3 is the public release surface for the `0.0.3`
+The shipped surface in §3 is the public release surface for the `0.0.4`
 line: agent-oriented CLI + MCP tooling, reviewed publish, context
 materialization, cache/stale-guard workflows, and deliberately skipped
 interactive-only ergonomics (see §3 out-of-scope).
@@ -1895,7 +1916,7 @@ Minimal MCP client config, using an absolute binary path:
       "command": "/Users/you/.local/bin/lebop",
       "args": ["mcp"],
       "env": {
-        "LEBOP_WORKSPACE": "noxor"
+        "LEBOP_WORKSPACE": "acme"
       }
     }
   }
@@ -1917,9 +1938,9 @@ Cursor project config (`.cursor/mcp.json`) uses the same command shape:
 
 - **Auth**: bearer-token via existing `~/.lebop/auth.json`. OAuth dynamic
   client registration (like Linear's hosted MCP) is post-release.
-- **Layout**: `src/mcp/server.ts` registers tools over shared `lib/`
-  behavior, with remaining adapter/workflow duplication being migrated
-  through domain surface contracts. Uses `@modelcontextprotocol/sdk`.
+- **Layout**: `src/mcp/server.ts` is boot-only (stdio server + tool
+  registration). Tool handlers live in modular `src/mcp/tools/*` and call
+  shared `lib/` / surface contracts. Uses `@modelcontextprotocol/sdk`.
 - **Per-call workspace selection**: Linear remote tools accept an optional
   `workspace` arg, except local/auth helpers where a workspace override
   would be misleading (`lint_text`, `cache_gc`, `list_workspaces`,
@@ -2101,7 +2122,7 @@ Cache loop: `pull_issues`, `pull_project`, `push_changes`,
 `cache_status`, `diff_issue`, `diff_project`. All accept an optional `repo_root` path
 arg; default behavior uses the MCP server's cwd → git-root resolution
 (same as the CLI). `pull_issues` accepts CLI-style identifier ranges such as
-`NOX-1..NOX-3`. Both `pull_issues` and `pull_project` also accept `to` to use
+`TEAM-101..TEAM-103`. Both `pull_issues` and `pull_project` also accept `to` to use
 the same export-only filesystem mode as CLI `pull --to` instead of writing the
 cache. `pull_project` mirrors `lebop pull --project-id / --project`: project
 names resolve through the live paginated project list for the resolved team,
@@ -2199,9 +2220,10 @@ Shipped:
   (`LEBOP_LIVE_EXPECT_WORKSPACE`, `LEBOP_LIVE_EXPECT_TEAM`,
   `LEBOP_LIVE_EXPECT_STAMP`, `LEBOP_LIVE_EXPECT_BIN_MODE`,
   `LEBOP_LIVE_EXPECT_VERSION`, `LEBOP_LIVE_EXPECT_BIN_SHA256`).
-- `src/lib/toolSurfaceManifest.ts` and `src/lib/toolBehaviorContracts.ts` —
-  source-controlled CLI/MCP parity plus high-risk behavior contracts used by
-  local tests and live report validation.
+- `src/lib/toolSurfaceManifest.ts` (derived L2 re-export from
+  `SURFACE_OPERATIONS`) and `src/lib/toolBehaviorContracts.ts` — CLI/MCP
+  parity plus high-risk behavior contracts used by local tests and live
+  report validation.
 - `.github/workflows/release.yml` — tag-triggered, builds 4 platform
   binaries (`bun build --compile --target=bun-{darwin,linux}-{x64,arm64}`),
   gates release builds on the full Noxor live report validator, runs the

@@ -130,17 +130,19 @@ For MCP linting, use `lint_files` when you need CLI-equivalent file/cache lint b
 
 ## Declarative project planning — `lebop plan`
 
-For "write the whole initiative in markdown, upload to Linear in one go" workflows:
+For "author a **Linear project + its issues** as markdown, then realize them in one go" workflows. A plan directory is **project-rooted**: required `_project.md` plus issue files. That maps to a Linear **project** and issues (with parents/links)—not to a Linear **Initiative** object.
+
+**Linear initiatives** (org-level planning units that group projects) are separate: use `lebop initiative …` / MCP initiative tools (create, update, add/remove project, etc.). There is no `_initiative.md` plan root and no declarative initiative tree in `plan apply` today.
 
 ```
-plans/initiative-name/
-├── _project.md          # name/team/description/icon/body
+plans/project-name/
+├── _project.md          # required: name/team/description/icon/body → Linear project
 ├── epic-foo.md          # top-level issue (optional `parent:` for sub-issues)
 ├── sub-foo-a.md         # has `parent: epic-foo` → nested under epic
 └── task-bar.md          # standalone
 ```
 
-Issue frontmatter keys: `title`, `state`, `priority`, `estimate`, `labels[]`, `assignee`, `parent` (slug or `UE-###`), plus 5 link fields (`blocks`, `blocked_by`, `related`, `duplicates`, `duplicated_by`).
+Issue frontmatter keys: `title`, `state`, `priority`, `estimate`, `labels[]`, `assignee`, `parent` (slug or `TEAM-###`), plus 5 link fields (`blocks`, `blocked_by`, `related`, `duplicates`, `duplicated_by`).
 
 Verbs:
 - `lebop plan validate <dir>` — parse + resolve refs, no Linear writes.
@@ -151,7 +153,7 @@ Verbs:
 - `lebop publish review --plan <dir>` — task-shaped review: validate + lint + diff + dry-run, then store a `review_id`.
 - `lebop publish apply <review-id>` — publish only the reviewed plan hash, then verify with a post-apply diff.
 
-Idempotent: re-applying a plan that matches Linear reports all `unchanged`. Slug references get rewritten to `UE-###` after first apply.
+Idempotent: re-applying a plan that matches Linear reports all `unchanged`. Slug references get rewritten to `TEAM-###` after first apply.
 
 ## Team collaboration (critical hazard)
 

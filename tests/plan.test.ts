@@ -130,6 +130,16 @@ describe("parsePlan", () => {
     await expect(parsePlan(dir)).rejects.toThrow(/missing required `_project.md`/);
   });
 
+  it("does not treat _initiative.md as a plan root (project+issues only)", async () => {
+    // Product freeze: declarative plans are _project.md + issue files; initiatives
+    // remain imperative CLI/MCP CRUD (not initiative-as-plan-root).
+    dir = writePlanDir({
+      "_initiative.md": "---\nname: Org Initiative\nteam: UE\n---\n\nbody\n",
+      "01.md": "---\ntitle: Child\n---\n\n",
+    });
+    await expect(parsePlan(dir)).rejects.toThrow(/missing required `_project.md`/);
+  });
+
   // Wave 3 / structured-error taxonomy: parsePlan throws must be typed.
   it("missing _project.md surfaces as ValidationError with code + hint", async () => {
     dir = writePlanDir({ "01-first.md": "---\ntitle: First\n---\n\nbody" });

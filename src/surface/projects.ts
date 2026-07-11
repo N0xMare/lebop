@@ -539,7 +539,7 @@ export const projectListOperation = {
   action: "list",
   title: "List Linear projects",
   description: "List projects scoped to a team (default) or workspace-wide.",
-  cli: { command: "project list" },
+  cli: { command: "project list", liveSteps: ["cli:project list --json"] },
   mcp: {
     tool: "list_projects",
     title: "List Linear projects",
@@ -569,7 +569,7 @@ export const projectListAliasOperation = {
   aliasOf: "projects.list",
   title: "List Linear projects",
   description: "Plural CLI alias for listing projects.",
-  cli: { command: "projects" },
+  cli: { command: "projects", liveSteps: ["cli:projects alias --json"] },
   mcp: {
     tool: "list_projects",
     title: "List Linear projects",
@@ -599,7 +599,7 @@ export const projectGetOperation = {
   title: "Get one project by UUID",
   description:
     "Returns one project (with content + lead + teams). Missing ids surface as structured not_found errors, matching `lebop project view --json`.",
-  cli: { command: "project view" },
+  cli: { command: "project view", liveSteps: ["cli:project view --json"] },
   mcp: {
     tool: "get_project",
     title: "Get one project by UUID",
@@ -623,7 +623,7 @@ export const projectCreateOperation = {
   title: "Create a project",
   description:
     "Create a project for one or more teams. Accepts team_ids (UUIDs), team_keys, or a single team key; omits selectors to use the configured default team. NOT retry-wrapped (would duplicate).",
-  cli: { command: "project create" },
+  cli: { command: "project create", liveSteps: ["cli:project create --json"] },
   mcp: {
     tool: "create_project",
     title: "Create a project",
@@ -654,7 +654,7 @@ export const projectUpdateOperation = {
   action: "update",
   title: "Update a project",
   description: "Idempotent at the value level — safe to retry.",
-  cli: { command: "project update" },
+  cli: { command: "project update", liveSteps: ["cli:project update --json"] },
   mcp: {
     tool: "update_project",
     title: "Update a project",
@@ -685,7 +685,7 @@ export const projectDeleteOperation = {
   title: "Delete a project",
   description:
     "Delete a project by UUID. Soft delete server-side (sets `archived_at`); not user-restorable via Linear's standard UI flows. Idempotent — re-deleting an already-soft-deleted project returns `{status: 'already-absent'}`.",
-  cli: { command: "project delete" },
+  cli: { command: "project delete", liveSteps: ["cli:project delete --json"] },
   mcp: {
     tool: "delete_project",
     title: "Delete a project",

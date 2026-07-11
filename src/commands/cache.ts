@@ -1,25 +1,9 @@
 import chalk from "chalk";
 import type { Command } from "commander";
-import { type GcCandidate, type GcResult, gcCache } from "../lib/cache.ts";
-import { parseCliNumber } from "../lib/cliOptions.ts";
+import type { GcCandidate, GcResult } from "../lib/cache.ts";
 import { envelope } from "../lib/envelope.ts";
-import { ValidationError } from "../lib/errors.ts";
+import { buildCacheGcInputFromCli, cacheGcPayload, executeCacheGc } from "../surface/cache.ts";
 import { statusAction } from "./status.ts";
-
-interface CacheGcOpts {
-  maxAge?: string;
-  maxSize?: string;
-  hash?: string;
-  dryRun?: boolean; // commander auto-fills `dryRun` from `--no-dry-run`
-  preserveCwd?: boolean; // commander auto-fills `preserveCwd` from `--no-preserve-cwd`
-  yes?: boolean;
-  json?: boolean;
-}
-
-function parsePositiveNumber(label: string, raw: string | undefined): number | undefined {
-  if (raw === undefined) return undefined;
-  return parseCliNumber(raw, { optionName: label });
-}
 
 function reasonStyle(reason: GcCandidate["reason"]): string {
   switch (reason) {
@@ -115,33 +99,24 @@ export function registerCache(program: Command): void {
     )
     .option("--yes", "confirm deletion when --no-dry-run is set")
     .option("--json", "emit structured result")
-    .action(async (opts: CacheGcOpts) => {
-      const maxAgeDays = parsePositiveNumber("--max-age", opts.maxAge);
-      const maxSizeMb = parsePositiveNumber("--max-size", opts.maxSize);
-      const dryRun = opts.dryRun !== false; // default true; --no-dry-run flips to false
-      const preserveCwdRepo = opts.preserveCwd !== false; // default true
-      if (!dryRun && opts.yes !== true) {
-        throw new ValidationError(
-          "cache gc deletion requires --yes",
-          "run without --no-dry-run to preview, or pass --no-dry-run --yes to confirm deletion",
-        );
-      }
+    .action(
+      async (opts: {
+        maxAge?: string;
+        maxSize?: string;
+        hash?: string;
+        dryRun?: boolean;
+        preserveCwd?: boolean;
+        yes?: boolean;
+        json?: boolean;
+      }) => {
+        const executed = await executeCacheGc(buildCacheGcInputFromCli({ opts }));
 
-      const result = await gcCache({
-        maxAgeDays,
-        maxSizeMb,
-        hash: opts.hash,
-        dryRun,
-        preserveCwdRepo,
-      });
+        if (opts.json) {
+          process.stdout.write(`${JSON.stringify(envelope(cacheGcPayload(executed)), null, 2)}\n`);
+          return;
+        }
 
-      if (opts.json) {
-        process.stdout.write(
-          `${JSON.stringify(envelope({ dry_run: dryRun, ...result }), null, 2)}\n`,
-        );
-        return;
-      }
-
-      printHuman(result, dryRun);
-    });
+        printHuman(executed.result, executed.dryRun);
+      },
+    );
 }

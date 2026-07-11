@@ -7,6 +7,20 @@ export type SurfaceDomain =
   | "cache"
   | "plan"
   | "auth"
+  | "labels"
+  | "milestones"
+  | "cycles"
+  | "comments"
+  | "relations"
+  | "documents"
+  | "initiatives"
+  | "agent_sessions"
+  | "teams"
+  | "lookups"
+  | "attachments"
+  | "lint"
+  | "raw"
+  | "link"
   | "other";
 
 export type SurfaceOperationAction =
@@ -21,6 +35,14 @@ export type SurfaceOperationAction =
   | "review"
   | "other";
 
+/** Explicit inventory exception for non-dual surfaces (L2 derivation / Phase C–D). */
+export type SurfaceOperationExceptionKind = "cli_only" | "mcp_only" | "recipe";
+
+export type SurfaceOperationException = {
+  kind: SurfaceOperationExceptionKind;
+  reason: string;
+};
+
 export type SurfaceSafety = {
   readOnly: boolean;
   destructive: boolean;
@@ -34,6 +56,8 @@ export type SurfaceConfirmPolicy = NonNullable<SurfaceSafety["confirm"]>;
 export type SurfaceCliMapping = {
   command: string;
   liveSteps?: readonly string[];
+  /** Why this CLI command is not covered by live smoke steps (when liveSteps omitted). */
+  nonLiveReason?: string;
 };
 
 export type SurfaceMcpAnnotationHints = {
@@ -70,6 +94,10 @@ export interface SurfaceOperationContract<
   mcp?: SurfaceMcpMapping;
   safety: SurfaceSafety;
   behaviorContractKind?: "explore" | "fetch" | "publish" | "json_error";
+  /** CLI-only / MCP-only / recipe inventory marker for L2 derivation. */
+  exception?: SurfaceOperationException;
+  /** Free-form notes (asymmetries, derivation caveats) for agents and L2. */
+  notes?: string;
   fromCli?: (input: CliInput) => CanonicalInput;
   fromMcp?: (input: McpInput, deps?: unknown) => CanonicalInput;
   execute?: (input: CanonicalInput) => Promise<Result>;
@@ -87,6 +115,10 @@ export interface SurfaceOperationMetadata {
   mcp?: SurfaceMcpMapping;
   safety: SurfaceSafety;
   behaviorContractKind?: "explore" | "fetch" | "publish" | "json_error";
+  /** CLI-only / MCP-only / recipe inventory marker for L2 derivation. */
+  exception?: SurfaceOperationException;
+  /** Free-form notes (asymmetries, derivation caveats) for agents and L2. */
+  notes?: string;
 }
 
 export interface SurfaceCliManifestExpectation {
@@ -130,6 +162,11 @@ export function surfaceMcpAnnotationExpectation(
   };
 }
 
+/**
+ * Dual-surface CLI→MCP parity rows only.
+ * cli_only / mcp_only exception ops are skipped because they lack one side
+ * (`cli` and `mcp` both required). Recipe aliases that declare both sides still participate.
+ */
 export function deriveSurfaceCliManifestExpectations(
   operations: readonly SurfaceOperationMetadata[],
 ): SurfaceCliManifestExpectation[] {
@@ -153,6 +190,11 @@ export function deriveSurfaceCliManifestExpectations(
   });
 }
 
+/**
+ * MCP inventory rows from ops that declare `mcp`.
+ * mcp_only exception ops are included (no CLI command aggregated);
+ * cli_only ops (no `mcp`) are skipped.
+ */
 export function deriveSurfaceMcpManifestExpectations(
   operations: readonly SurfaceOperationMetadata[],
 ): SurfaceMcpManifestExpectation[] {

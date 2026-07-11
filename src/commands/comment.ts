@@ -1,11 +1,20 @@
 import chalk from "chalk";
 import type { Command } from "commander";
-import { commentCacheNotRefreshed, issueCacheNotRefreshed } from "../lib/cacheCoherence.ts";
-import { addComment, deleteComment, listComments, updateComment } from "../lib/comments.ts";
 import { findGitRoot, hashRepoRoot } from "../lib/config.ts";
 import { envelope } from "../lib/envelope.ts";
-import { tryIdempotentDelete, ValidationError } from "../lib/errors.ts";
+import { ValidationError } from "../lib/errors.ts";
 import { resolveBody } from "../lib/io.ts";
+import {
+  buildCommentAddInputFromCli,
+  buildCommentDeleteInputFromCli,
+  buildCommentListInputFromCli,
+  buildCommentUpdateInputFromCli,
+  type CommentCacheDeps,
+  executeCommentAdd,
+  executeCommentDelete,
+  executeCommentList,
+  executeCommentUpdate,
+} from "../surface/comments.ts";
 
 /**
  * `lebop comment add|list|update|delete` — full CRUD over Linear comments.
@@ -14,12 +23,15 @@ import { resolveBody } from "../lib/io.ts";
  * For agents/scripts upgrading: prefix all your existing comment-add calls
  * with `add`. The flags (--body / --body-file / --stdin) are unchanged.
  *
- * The GraphQL + structured-error mapping (issue-not-found, Linear-rejected,
- * etc.) lives in `../lib/comments.ts` so the CLI here and the MCP server
- * share one code path.
+ * Shared GraphQL + structured-error mapping lives in `../lib/comments.ts`.
+ * Canonical normalize + execute live in `../surface/comments.ts`.
  */
 export function registerComment(program: Command): void {
   const cmd = program.command("comment").description("manage comments on Linear issues");
+  const cacheDeps: CommentCacheDeps = {
+    channel: "cli",
+    resolveCacheContext: () => currentCacheContext(),
+  };
 
   cmd
     .command("add <id>")
@@ -37,14 +49,12 @@ export function registerComment(program: Command): void {
           "pass a non-empty body via --body, --body-file, or stdin",
         );
       }
-      const result = await addComment({
-        identifier: id,
-        body,
-        parentId: opts.parent,
-      });
+      const result = await executeCommentAdd(
+        buildCommentAddInputFromCli({ id, body, parent: opts.parent }),
+        cacheDeps,
+      );
 
       if (opts.json) {
-        const cacheContext = currentCacheContext();
         // Round-7 / MED-4: echo A26's full response (body/url/user) for
         // CLI/MCP parity. Pre-fix the CLI emitted only `{id, created_at}`;
         // MCP path already echoed the full shape via `result` pass-through.
@@ -52,14 +62,8 @@ export function registerComment(program: Command): void {
           `${JSON.stringify(
             envelope({
               identifier: id,
-              comment: result,
-              cache: issueCacheNotRefreshed({
-                identifiers: [id.toUpperCase()],
-                reason: "comment add does not rewrite the cached issue comment collection in place",
-                repairHint: `run \`lebop pull ${id.toUpperCase()} --refresh --yes\` to refresh cached comments after verifying local cache overwrite is intended`,
-                repoHash: cacheContext.repoHash,
-                repoRoot: cacheContext.repoRoot,
-              }),
+              comment: result.comment,
+              cache: result.cache,
             }),
             null,
             2,
@@ -68,7 +72,7 @@ export function registerComment(program: Command): void {
         return;
       }
       process.stdout.write(
-        `${chalk.green("✓")} commented on ${chalk.bold(id)}${result.id ? chalk.gray(` (${result.id})`) : ""}\n`,
+        `${chalk.green("✓")} commented on ${chalk.bold(id)}${result.comment.id ? chalk.gray(` (${result.comment.id})`) : ""}\n`,
       );
     });
 
@@ -78,7 +82,7 @@ export function registerComment(program: Command): void {
     .option("--json", "emit structured records")
     .action(async (id: string, opts: { json?: boolean }) => {
       const upperId = id.toUpperCase();
-      const comments = await listComments(upperId);
+      const { comments } = await executeCommentList(buildCommentListInputFromCli({ id: upperId }));
 
       if (opts.json) {
         process.stdout.write(
@@ -122,22 +126,16 @@ export function registerComment(program: Command): void {
           "pass a non-empty body via --body, --body-file, or stdin",
         );
       }
-      const updated = await updateComment(commentId, body);
+      const { comment: updated, cache } = await executeCommentUpdate(
+        buildCommentUpdateInputFromCli({ commentId, body }),
+        cacheDeps,
+      );
       if (opts.json) {
-        const cacheContext = currentCacheContext();
         process.stdout.write(
           `${JSON.stringify(
             envelope({
               comment: updated,
-              cache: commentCacheNotRefreshed({
-                commentIds: [commentId],
-                reason:
-                  "comment update receives only a comment UUID and does not know which cached issue comment collection to refresh",
-                repairHint:
-                  "run `lebop pull <issue-id> --refresh --yes` for the parent issue before relying on cached comments, after verifying local cache overwrite is intended",
-                repoHash: cacheContext.repoHash,
-                repoRoot: cacheContext.repoRoot,
-              }),
+              cache,
             }),
             null,
             2,
@@ -156,30 +154,18 @@ export function registerComment(program: Command): void {
     .option("--yes", "confirm destructive operation (required)")
     .option("--json", "emit structured result")
     .action(async (commentId: string, opts: { yes?: boolean; json?: boolean }) => {
-      if (!opts.yes) {
-        throw new ValidationError(
-          `refusing to delete comment ${commentId} without --yes`,
-          "re-run with --yes to confirm. This operation is irreversible.",
-        );
-      }
-      const { status } = await tryIdempotentDelete(() => deleteComment(commentId));
+      const { status, cache } = await executeCommentDelete(
+        buildCommentDeleteInputFromCli({ commentId, opts }),
+        cacheDeps,
+      );
       if (opts.json) {
-        const cacheContext = currentCacheContext();
         process.stdout.write(
           `${JSON.stringify(
             envelope({
               id: commentId,
               status,
               success: status === "deleted",
-              cache: commentCacheNotRefreshed({
-                commentIds: [commentId],
-                reason:
-                  "comment delete receives only a comment UUID and does not know which cached issue comment collection to refresh",
-                repairHint:
-                  "run `lebop pull <issue-id> --refresh --yes` for the parent issue before relying on cached comments, after verifying local cache overwrite is intended",
-                repoHash: cacheContext.repoHash,
-                repoRoot: cacheContext.repoRoot,
-              }),
+              cache,
             }),
             null,
             2,

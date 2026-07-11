@@ -1,11 +1,19 @@
 import chalk from "chalk";
 import type { Command } from "commander";
-import { resolveConfig } from "../lib/config.ts";
 import { envelope } from "../lib/envelope.ts";
-import { NotFoundError } from "../lib/errors.ts";
-import { listTeamMembers } from "../lib/teamMembers.ts";
-import { getTeam } from "../lib/teams.ts";
-import { listWorkflowStates } from "../lib/workflowStates.ts";
+import {
+  buildTeamGetInputFromCli,
+  buildTeamMembersListInputFromCli,
+  buildWorkflowStatesListInputFromCli,
+  executeTeamGet,
+  executeTeamMembersList,
+  executeWorkflowStatesList,
+  teamMembersListPayload,
+  workflowStatesListPayload,
+} from "../surface/teams.ts";
+
+const TEAM_GET_NOT_FOUND_HINT = "run `lebop teams` to list valid team keys";
+const WORKFLOW_STATES_TEAM_NOT_FOUND_HINT = "run `lebop teams` to list valid team keys";
 
 /**
  * `lebop team` — team-scoped operations beyond listing. Currently only
@@ -24,33 +32,23 @@ export function registerTeam(program: Command): void {
     .option("--all", "include inactive members")
     .option("--json", "emit structured records")
     .action(async (teamKey: string | undefined, opts: { all?: boolean; json?: boolean }) => {
-      const config = await resolveConfig({ teamOverride: teamKey });
-      const members = await listTeamMembers({
-        teamKey: config.team,
-        includeInactive: opts.all,
-      });
+      const result = await executeTeamMembersList(
+        buildTeamMembersListInputFromCli({ teamKey, opts }),
+      );
 
       if (opts.json) {
         process.stdout.write(
-          `${JSON.stringify(
-            envelope({
-              team: config.team,
-              count: members.length,
-              members,
-            }),
-            null,
-            2,
-          )}\n`,
+          `${JSON.stringify(envelope(teamMembersListPayload(result)), null, 2)}\n`,
         );
         return;
       }
 
-      if (members.length === 0) {
-        process.stdout.write(`no members in team ${config.team}\n`);
+      if (result.members.length === 0) {
+        process.stdout.write(`no members in team ${result.team}\n`);
         return;
       }
-      const nameWidth = Math.max(...members.map((m) => m.name.length));
-      for (const m of members) {
+      const nameWidth = Math.max(...result.members.map((m) => m.name.length));
+      for (const m of result.members) {
         const owner = m.is_owner ? chalk.yellow(" (owner)") : "";
         const inactive = m.active ? "" : chalk.gray(" [inactive]");
         process.stdout.write(
@@ -64,19 +62,10 @@ export function registerTeam(program: Command): void {
     .description("show one team by key (e.g. NOX) or UUID")
     .option("--json", "emit structured result")
     .action(async (keyOrId: string, opts: { json?: boolean }) => {
-      const team = await getTeam(keyOrId);
-      // Round-13 / L-1: align miss-contract with sibling `view`/`get`
-      // commands (`document view`, `milestone view`, `initiative view`,
-      // `agent-session view`). Throw NotFoundError BEFORE the --json branch
-      // so both modes emit the structured envelope / `code: "not_found"`
-      // exit-1 shape. Pre-fix `--json` returned `{team: null}` (mirroring
-      // MCP `get_team` null contract) while human mode wrote stderr + exit
-      // 1 — surface-inconsistent.
-      if (!team)
-        throw new NotFoundError(
-          `team not found: ${keyOrId}`,
-          "run `lebop teams` to list valid team keys",
-        );
+      const team = await executeTeamGet(
+        buildTeamGetInputFromCli({ keyOrId }),
+        TEAM_GET_NOT_FOUND_HINT,
+      );
       if (opts.json) {
         process.stdout.write(`${JSON.stringify(envelope({ team }), null, 2)}\n`);
         return;
@@ -94,27 +83,13 @@ export function registerTeam(program: Command): void {
     .description("list workflow states (Backlog, Todo, In Progress, ...) for a team")
     .option("--json", "emit structured records")
     .action(async (teamKey: string | undefined, opts: { json?: boolean }) => {
-      const config = await resolveConfig({ teamOverride: teamKey });
-      const result = await listWorkflowStates(config.team);
-      if (!result) {
-        // Round-11 / N-2: throw structured NotFoundError so `--json` mode
-        // emits the proper `{ok:false, error:{code:"not_found", ...}}`
-        // envelope (parity with `agent-session view`, `show`, etc.).
-        // Pre-fix this wrote chalk prose to stderr even under `--json`,
-        // violating the spec's "CLI --json errors emit structured envelope"
-        // commitment (round-7 / Q4).
-        throw new NotFoundError(
-          `team not found: ${config.team}`,
-          "run `lebop teams` to list valid team keys",
-        );
-      }
+      const result = await executeWorkflowStatesList(
+        buildWorkflowStatesListInputFromCli({ teamKey }),
+        { teamNotFoundHint: WORKFLOW_STATES_TEAM_NOT_FOUND_HINT },
+      );
       if (opts.json) {
         process.stdout.write(
-          `${JSON.stringify(
-            envelope({ team: result.team, count: result.states.length, states: result.states }),
-            null,
-            2,
-          )}\n`,
+          `${JSON.stringify(envelope(workflowStatesListPayload(result)), null, 2)}\n`,
         );
         return;
       }

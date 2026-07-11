@@ -10,7 +10,7 @@
 Two shapes:
 
 - **Ad-hoc ops** — `list`, `show`, `set`, `comment`, `new`, `archive`, pull → edit files → `push`, `diff`, `raw` GraphQL escape hatch.
-- **Declarative planning** — author a project + its issues + their relationships as a directory of markdown files, then `lebop plan apply` realizes the whole graph in Linear in one idempotent pass.
+- **Declarative planning** — author a **Linear project + its issues** (+ relationships) as a directory of markdown files, then `lebop plan apply` realizes the whole graph in Linear in one idempotent pass. (Linear **initiatives** are separate — use `lebop initiative …` / MCP initiative tools.)
 
 ---
 
@@ -28,7 +28,7 @@ lebop teams
 lebop list --assignee me --state-type started --limit 10
 ```
 
-The installer drops a single self-contained binary (no Bun runtime needed) at `~/.local/bin/lebop` if writable, otherwise `/usr/local/bin/lebop` (sudo). Override with `LEBOP_INSTALL_DIR=...`. Pin a specific version with `LEBOP_VERSION=v0.0.3`.
+The installer drops a single self-contained binary (no Bun runtime needed) at `~/.local/bin/lebop` if writable, otherwise `/usr/local/bin/lebop` (sudo). Override with `LEBOP_INSTALL_DIR=...`. Pin a specific version with `LEBOP_VERSION=v0.0.4`.
 
 **From source** (Bun required):
 
@@ -49,22 +49,24 @@ Full setup, config, and command reference: [`docs/spec.md`](docs/spec.md).
 
 ## Mental model: pick the right verb for what you want to do
 
+Examples below use a fictional team key **`TEAM`** and issue IDs like **`TEAM-101`**. Replace with your Linear team prefix and real identifiers.
+
 ### Discover
 
 ```sh
 lebop workspace explore / --json
-lebop workspace explore /projects --query "Relayer" --json
+lebop workspace explore /projects --query "Billing" --json
 lebop workspace fetch /projects/<uuid> --depth full --json
 lebop teams
 lebop projects [--team KEY | --all-teams] [--state STATE] [--include-archived] [--limit N] [--cursor TOKEN] [--json]
 lebop list --assignee me --state-type started
-lebop list --project "Relayer Hardening" --label type:feature
+lebop list --project "Billing API v2" --label type:feature
 ```
 
 For agents researching Linear work, `workspace explore` is the preferred ls-style discovery call and `workspace fetch` materializes a bounded local dossier for a project, issue, initiative, document, cycle, milestone, or agent session.
 The MCP equivalents are `explore_linear_workspace` and `fetch_linear_workspace`; use the same two-step discovery-then-fetch flow when operating through MCP.
-Bare issue identifiers like `UE-321` are accepted directly by both explore/fetch surfaces; qualified paths like `/issues/UE-321` also work.
-Issue child paths such as `/issues/UE-321/documents` are fetchable when the question is about documents attached to a specific issue.
+Bare issue identifiers like `TEAM-101` are accepted directly by both explore/fetch surfaces; qualified paths like `/issues/TEAM-101` also work.
+Issue child paths such as `/issues/TEAM-101/documents` are fetchable when the question is about documents attached to a specific issue.
 `--team` / MCP `team` narrows only project, issue, and cycle searches/listings. For initiatives, documents, milestones, and agent sessions, use `--kind`, concrete paths, child paths, smaller limits, or fetch controls instead.
 `workspace explore` returns `next_cursor` for continuable project/initiative/issue listings, supported child listings, and search.
 Collection/team explore paths are discovery-only (`fetchable: false`); concrete project, issue, initiative, document, cycle, milestone, and agent-session paths are fetchable. Non-cursor-backed capped listings return bounded metadata instead of implying completion.
@@ -76,23 +78,23 @@ When Linear returns rate-limit headers, JSON/MCP workspace research results incl
 ### Read one issue
 
 ```sh
-lebop show UE-321                 # print inline, no cache write — the right "just show me this"
-lebop show UE-321 --json          # structured output for programmatic use
+lebop show TEAM-101                 # print inline, no cache write — the right "just show me this"
+lebop show TEAM-101 --json          # structured output for programmatic use
 ```
 
 ### Edit one field on one issue (fast, no cache round-trip)
 
 ```sh
-lebop set state UE-321 "In Progress"
-lebop set priority UE-321 urgent                 # name or 0..4
-lebop set description UE-321 --description-file ./body.md
-lebop set project UE-321 "Relayer Hardening"     # or null to detach
-lebop set milestone UE-321 "Launch Milestone"    # or null to clear
-lebop set cycle UE-321 "Cycle 12"                # or null to clear
-lebop set labels UE-321 +urgent -area:backend    # delta syntax
-lebop set assignee UE-321 @me
-lebop set links UE-321 +blocks:UE-322 +related:UE-323   # 5 link kinds
-lebop comment add UE-321 --body "LGTM"
+lebop set state TEAM-101 "In Progress"
+lebop set priority TEAM-101 urgent                 # name or 0..4
+lebop set description TEAM-101 --description-file ./body.md
+lebop set project TEAM-101 "Billing API v2"        # or null to detach
+lebop set milestone TEAM-101 "Launch Milestone"    # or null to clear
+lebop set cycle TEAM-101 "Cycle 12"                # or null to clear
+lebop set labels TEAM-101 +urgent -area:backend    # delta syntax
+lebop set assignee TEAM-101 @me
+lebop set links TEAM-101 +blocks:TEAM-102 +related:TEAM-103   # 5 link kinds
+lebop comment add TEAM-101 --body "LGTM"
 ```
 
 Direct point edits write immediately and do not use the local cache `updatedAt`
@@ -102,12 +104,12 @@ protection matters.
 ### Edit a body with cache protection (multi-line description / project content)
 
 ```sh
-lebop pull UE-321..UE-329                         # or space-separated list, or single id
-# ... edit files under ~/.lebop/cache/<hash>/issues/UE-321/description.md ...
+lebop pull TEAM-101..TEAM-109                       # or space-separated list, or single id
+# ... edit files under ~/.lebop/cache/<hash>/issues/TEAM-101/description.md ...
 lebop status                                      # git-like: see what's modified
 lebop push --dry-run                              # preview mutations
 lebop push                                        # apply (updatedAt stale guard; --force --yes to bypass)
-lebop publish review --cache UE-321 --json        # reviewed cache publish, returns review_id
+lebop publish review --cache TEAM-101 --json      # reviewed cache publish, returns review_id
 lebop publish review --cache --all-modified --json # review every modified cache row
 lebop publish apply <review-id> --json            # apply only reviewed cache state
 ```
@@ -118,77 +120,77 @@ Use `publish review --cache` when an agent/user wants an explicit approve-then-a
 ### Create or archive issues ad-hoc
 
 ```sh
-lebop new --title "Chain-aware gas pricing" \
-           --project "Relayer Hardening" \
+lebop new --title "Add usage metering to the public API" \
+           --project "Billing API v2" \
            --state Backlog \
            --priority high \
            --estimate 3 \
            --label type:feature \
-           --description "Use eth_feeHistory to size initial bids."
+           --description "Meter request volume per tenant for the /v1 endpoints."
 
-lebop archive UE-321 UE-322 --yes                 # reversible from the Linear UI
+lebop archive TEAM-101 TEAM-102 --yes               # reversible from the Linear UI
 ```
 
-### Plan a whole initiative declaratively (the hero workflow)
+### Plan a whole project declaratively (the hero workflow)
 
-Author the plan in markdown on disk:
+Author a **Linear project + its issues** as markdown on disk (not a Linear Initiative — those use `lebop initiative` / MCP initiative tools):
 
 ```
-plans/rpc-failover/
-├── _project.md            # name / team / description / icon / body
+plans/billing-api-v2/
+├── _project.md            # required: name / team / description / icon / body → Linear project
 ├── epic.md                # top-level issue (can have sub-issues via `parent:`)
 ├── design.md              # has `parent: epic` → renders as a sub-issue in Linear
 ├── impl.md                # same
-└── bench.md               # links, labels, priorities, estimates
+└── web-ui.md              # links, labels, priorities, estimates
 ```
 
 Each `*.md` file has YAML frontmatter for structured fields and markdown body for the description:
 
 ```markdown
 ---
-title: "Design failover priority algorithm"
+title: "Design usage metering API"
 state: Backlog
 priority: high
 estimate: 3                # points (optional)
-labels: [type:feature]
-parent: epic               # slug of another file, or bare UE-XXX
-blocks: [impl]             # local slug OR external UE-XXX
-related: [UE-250]
+labels: [type:feature, area:backend]
+parent: epic               # slug of another file, or bare TEAM-###
+blocks: [impl]             # local slug OR external TEAM-###
+related: [TEAM-250]
 ---
 
-Approach doc. Multi-RPC failover selection rules, …
+OpenAPI shape, rate windows, and how the web dashboard will read aggregates.
 ```
 
 Then realize it in Linear:
 
 ```sh
-lebop plan validate plans/rpc-failover          # parse + resolve refs; no Linear writes
-lebop plan lint     plans/rpc-failover --fix    # catch markdown-renderer gotchas first
-lebop plan apply    plans/rpc-failover --dry-run   # preview
-lebop plan apply    plans/rpc-failover             # create project + issues + links; writes linear_id back
-lebop plan apply    plans/rpc-failover --force --yes  # bypass stale/missing plan guard after manual review
-lebop plan diff     plans/rpc-failover             # local-vs-remote drift after changes
-lebop plan pull     plans/rpc-failover --force --yes  # overwrite local with remote
-lebop plan pull     plans/rpc-failover --include-new  # also import remote-only issues
+lebop plan validate plans/billing-api-v2          # parse + resolve refs; no Linear writes
+lebop plan lint     plans/billing-api-v2 --fix    # catch markdown-renderer gotchas first
+lebop plan apply    plans/billing-api-v2 --dry-run   # preview
+lebop plan apply    plans/billing-api-v2             # create project + issues + links; writes linear_id back
+lebop plan apply    plans/billing-api-v2 --force --yes  # bypass stale/missing plan guard after manual review
+lebop plan diff     plans/billing-api-v2             # local-vs-remote drift after changes
+lebop plan pull     plans/billing-api-v2 --force --yes  # overwrite local with remote
+lebop plan pull     plans/billing-api-v2 --include-new  # also import remote-only issues
 ```
 
 For agent-authored plans, prefer the reviewed publish wrapper:
 
 ```sh
-lebop publish review --plan plans/rpc-failover --json   # validate + lint + diff + dry-run; returns review_id
-lebop publish apply  <review-id> --json                 # refuses if files changed; publishes + verifies
+lebop publish review --plan plans/billing-api-v2 --json   # validate + lint + diff + dry-run; returns review_id
+lebop publish apply  <review-id> --json                   # refuses if files changed; publishes + verifies
 ```
 
-Re-apply is idempotent — unchanged files stay unchanged. Existing Linear updates require a fresh `_server.updated_at` snapshot written by `plan pull` or a previous successful apply; use `--force --yes` only after manually reviewing remote state. Parents get created before children (topological). Slug links auto-rewrite to `UE-XXX` once issues exist. Relations (`blocks` / `blocked_by` / `related` / `duplicates` / `duplicated_by`) honor Linear's single-record-per-pair semantics.
+Re-apply is idempotent — unchanged files stay unchanged. Existing Linear updates require a fresh `_server.updated_at` snapshot written by `plan pull` or a previous successful apply; use `--force --yes` only after manually reviewing remote state. Parents get created before children (topological). Slug links auto-rewrite to `TEAM-###` once issues exist. Relations (`blocks` / `blocked_by` / `related` / `duplicates` / `duplicated_by`) honor Linear's single-record-per-pair semantics.
 
 See [`docs/spec.md`](docs/spec.md#9-plan-workflow--declarative-authoring) for the full frontmatter schema, apply semantics, and edge cases.
 
 ### Diff + escape hatch
 
 ```sh
-lebop diff UE-321                                  # unified diff of local cache vs live remote
+lebop diff TEAM-101                                  # unified diff of local cache vs live remote
 lebop raw 'query { viewer { id email } }'          # any GraphQL lebop doesn't wrap
-echo '{"id":"UE-321"}' | lebop raw 'query($id:String!){issue(id:$id){title}}' --variables-json -
+echo '{"id":"TEAM-101"}' | lebop raw 'query($id:String!){issue(id:$id){title}}' --variables-json -
 # Raw mutations require --allow-mutation plus --yes/--confirm; prefer first-class verbs when they exist.
 ```
 
@@ -227,26 +229,26 @@ If two people already applied in parallel: archive one issue set via `lebop arch
 `~/.lebop/config.yaml` is optional — `lebop` works with just auth. Config extends behavior per-repo:
 
 ```yaml
-default_team: UE                               # global fallback (single-workspace setups)
+default_team: ENG                               # global fallback (single-workspace setups)
 
 # Multi-workspace? Set per-workspace defaults instead — keyed by Linear
 # workspace slug (the urlKey shown in `lebop auth list`):
 workspace_team_defaults:
-  unlink-xyz: UE
-  noxor: NOX
+  acme: ENG
+  acme-staging: STG
 
 workspaces:
-  unlink-xyz:
-    url_prefix: https://linear.app/unlink-xyz  # needed by L004 (bracket issue refs)
+  acme:
+    url_prefix: https://linear.app/acme         # needed by L004 (bracket issue refs)
 
 repos:
-  /Users/you/dev/some-repo:                    # absolute git-root path
-    team: UE                                   # team override for this repo
+  /Users/you/dev/billing-api:                   # absolute git-root path
+    team: ENG                                   # team override for this repo
     conventions:
-      bracket_issue_refs: true                 # L004 linter rule
-    path_rewrites:                             # R001 linter rule
-      - { from: "crates/", to: "protocol/backend/crates/" }
-    required_formats:                          # R002 linter rule — regex-based
+      bracket_issue_refs: true                  # L004 linter rule
+    path_rewrites:                              # R001 linter rule
+      - { from: "apps/api/", to: "services/billing/" }
+    required_formats:                           # R002 linter rule — regex-based
       - { pattern: '\bpr-(\d+)\b', suggest: '[#$1]', message: "Use [#N] form" }
 ```
 
@@ -300,7 +302,7 @@ Claude Desktop style:
       "command": "/Users/you/.local/bin/lebop",
       "args": ["mcp"],
       "env": {
-        "LEBOP_WORKSPACE": "noxor"
+        "LEBOP_WORKSPACE": "acme"
       }
     }
   }
@@ -354,7 +356,7 @@ Option A is required if you want agents started BEFORE you edited your shell con
 | Mutation batching | Sequential | Sequential | One call per plan or one multi-alias push |
 | Staleness guard | None | None | `updatedAt` check; `--force --yes` to bypass |
 | Markdown lint | None | None | 8 rules (in-memory L001/L002/L003/L005/L006 + repo-scoped L004/R001/R002) |
-| Declarative planning | Not a goal | Not exposed | Hero feature |
+| Declarative planning | Not a goal | Not exposed | Hero feature (project + issues) |
 | GraphQL escape hatch | Yes | No | Yes (`raw`) |
 | Local cache | No | No | Yes (`~/.lebop/cache/`) |
 | `issue start` / branch / `pr` | Yes | No | **Deliberately skipped** — pair with `linear-cli` |

@@ -1,7 +1,6 @@
 import type { Command } from "commander";
 import { envelope } from "../lib/envelope.ts";
-import { paginateConnection } from "../lib/paginate.ts";
-import { linear } from "../lib/sdk.ts";
+import { buildTeamListInputFromCli, executeTeamList, teamListPayload } from "../surface/teams.ts";
 
 export function registerTeams(program: Command): void {
   program
@@ -9,17 +8,11 @@ export function registerTeams(program: Command): void {
     .description("list teams in the workspace")
     .option("--json", "emit structured team records")
     .action(async (opts: { json?: boolean }) => {
-      const client = await linear();
-      const teams = await paginateConnection(({ first, after }) => client.teams({ first, after }));
-      const records = teams.map((t) => ({
-        key: t.key,
-        name: t.name,
-        id: t.id,
-        description: t.description ?? null,
-      }));
+      const result = await executeTeamList(buildTeamListInputFromCli());
+      const records = result.teams;
 
       if (opts.json) {
-        process.stdout.write(`${JSON.stringify(envelope({ teams: records }), null, 2)}\n`);
+        process.stdout.write(`${JSON.stringify(envelope(teamListPayload(result)), null, 2)}\n`);
         return;
       }
 

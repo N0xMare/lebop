@@ -119,7 +119,7 @@ function compiledBinaryProvenance() {
     path: "./dist/lebop",
     sha256: "a".repeat(64),
     size_bytes: 123456,
-    version: "0.0.3",
+    version: "0.0.4",
     platform: "darwin",
     arch: "arm64",
   };
@@ -133,12 +133,13 @@ describe("live Noxor harness validation helpers", () => {
       {
         name: "mcp:get_cycle",
         allowed: true,
-        reason: "NOX currently has no cycles, so get_cycle has no valid UUID fixture.",
-        expires: "2026-07-31",
+        reason:
+          "NOX workspace lacks cycle/agent-session fixtures; allowlist extended for architecture release train until fixtures can be seeded; not a product gap. get_cycle has no valid UUID fixture.",
+        expires: "2026-09-30",
         detail_reason: "fixture unavailable",
       },
     ]);
-    expect(() => assertNoUnexpectedGaps({ gaps }, new Date("2026-08-01T00:00:00.000Z"))).toThrow(
+    expect(() => assertNoUnexpectedGaps({ gaps }, new Date("2026-10-01T00:00:00.000Z"))).toThrow(
       /unallowlisted or expired gaps/,
     );
   });
@@ -207,7 +208,7 @@ describe("live Noxor harness validation helpers", () => {
     expect(() =>
       assertFullSurfaceReport(report, {
         expectedBinaryMode: "compiled-binary",
-        expectedBinaryVersion: "0.0.3",
+        expectedBinaryVersion: "0.0.4",
       }),
     ).toThrow(/binary_under_test\.version/);
   });

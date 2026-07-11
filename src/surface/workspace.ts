@@ -194,7 +194,23 @@ export const exploreWorkspaceOperation = {
   title: "Explore Linear workspace context",
   description:
     "Ls-style Linear discovery and search. Returns concise paths, ids, names, states, counts, and next_paths without long bodies.",
-  cli: { command: "workspace explore" },
+  cli: {
+    command: "workspace explore",
+    liveSteps: [
+      "cli:workspace explore root --json",
+      "cli:workspace explore projects cursor page 1 --json",
+      "cli:workspace explore projects cursor page 2 --json",
+      "cli:workspace explore project search --json",
+      "cli:workspace explore initiative search --json",
+      "cli:workspace explore initiative --json",
+      "cli:workspace explore issue --json",
+      "cli:workspace explore issue documents --json",
+      "cli:workspace explore cycle issues --json",
+      "cli:workspace explore project --json",
+      "cli:workspace explore project issues --json",
+      "cli:workspace explore milestone issues --json",
+    ],
+  },
   mcp: {
     tool: "explore_linear_workspace",
     title: "Explore Linear workspace context",
@@ -234,7 +250,20 @@ export const fetchWorkspaceOperation = {
   title: "Fetch Linear workspace context",
   description:
     "Materialize a bounded Linear project, issue, initiative, agent session, document, cycle, or milestone dossier into local files and return a compact manifest.",
-  cli: { command: "workspace fetch" },
+  cli: {
+    command: "workspace fetch",
+    liveSteps: [
+      "cli:workspace fetch document --json",
+      "cli:workspace fetch initiative --json",
+      "cli:workspace fetch issue --json",
+      "cli:workspace fetch issue documents --json",
+      "cli:workspace fetch issue agent-sessions --json",
+      "cli:workspace fetch cycle --json",
+      "cli:workspace fetch agent-session --json",
+      "cli:workspace fetch project --json",
+      "cli:workspace fetch milestone --json",
+    ],
+  },
   mcp: {
     tool: "fetch_linear_workspace",
     title: "Fetch Linear workspace context",

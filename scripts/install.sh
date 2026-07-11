@@ -4,7 +4,7 @@
 #   curl -fsSL https://raw.githubusercontent.com/N0xMare/lebop/main/scripts/install.sh | bash
 #
 # Env overrides:
-#   LEBOP_VERSION=v0.0.3          # pin a specific tag (default: latest)
+#   LEBOP_VERSION=v0.0.4          # pin a specific tag (default: latest)
 #   LEBOP_INSTALL_DIR=/usr/local/bin  # install location (default: $HOME/.local/bin if writable, else /usr/local/bin)
 #   LEBOP_REPO=N0xMare/lebop      # source repo (default)
 

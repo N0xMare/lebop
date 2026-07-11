@@ -1,21 +1,29 @@
 import chalk from "chalk";
 import type { Command } from "commander";
-import { parseCliLimit, parseCliNumber } from "../lib/cliOptions.ts";
 import { envelope } from "../lib/envelope.ts";
-import { NotFoundError, tryIdempotentDelete, ValidationError } from "../lib/errors.ts";
 import {
-  archiveInitiative,
-  createInitiative,
-  deleteInitiative,
-  getInitiative,
-  initiativeAddProject,
-  initiativeRemoveProject,
-  listInitiatives,
-  resolveInitiativeId,
-  unarchiveInitiative,
-  updateInitiative,
-} from "../lib/initiatives.ts";
-import { resolveProjectId } from "../lib/milestones.ts";
+  buildInitiativeAddProjectInputFromCli,
+  buildInitiativeArchiveInputFromCli,
+  buildInitiativeCreateInputFromCli,
+  buildInitiativeDeleteInputFromCli,
+  buildInitiativeGetInput,
+  buildInitiativeListInputFromCli,
+  buildInitiativeRemoveProjectInputFromCli,
+  buildInitiativeUnarchiveInput,
+  buildInitiativeUpdateInputFromCli,
+  executeInitiativeAddProject,
+  executeInitiativeArchive,
+  executeInitiativeCreate,
+  executeInitiativeDelete,
+  executeInitiativeGet,
+  executeInitiativeList,
+  executeInitiativeRemoveProject,
+  executeInitiativeUnarchive,
+  executeInitiativeUpdate,
+  initiativeDeleteCliSuccess,
+  initiativeDeletePayload,
+  initiativeListPayload,
+} from "../surface/initiatives.ts";
 
 export function registerInitiative(program: Command): void {
   const cmd = program
@@ -40,27 +48,21 @@ export function registerInitiative(program: Command): void {
         limit?: string;
         json?: boolean;
       }) => {
-        const max = parseCliLimit(opts.limit, { defaultValue: 50, zeroMeansInfinity: true });
-        const initiatives = await listInitiatives({
-          status: opts.status,
-          ownerId: opts.ownerId,
-          includeArchived: opts.includeArchived ?? opts.archived,
-          max,
-        });
+        const result = await executeInitiativeList(buildInitiativeListInputFromCli({ opts }));
 
         if (opts.json) {
           process.stdout.write(
-            `${JSON.stringify(envelope({ count: initiatives.length, initiatives }), null, 2)}\n`,
+            `${JSON.stringify(envelope(initiativeListPayload(result)), null, 2)}\n`,
           );
           return;
         }
 
-        if (initiatives.length === 0) {
+        if (result.initiatives.length === 0) {
           process.stdout.write("no initiatives\n");
           return;
         }
-        const nameWidth = Math.max(...initiatives.map((i) => i.name.length));
-        for (const i of initiatives) {
+        const nameWidth = Math.max(...result.initiatives.map((i) => i.name.length));
+        for (const i of result.initiatives) {
           const status = i.status ? chalk.cyan(`[${i.status}]`) : chalk.gray("[no status]");
           const date = i.target_date ? chalk.gray(`(${i.target_date})`) : "";
           const arch = i.archived_at ? chalk.gray(" [archived]") : "";
@@ -76,10 +78,7 @@ export function registerInitiative(program: Command): void {
     .description("show one initiative (with projects)")
     .option("--json", "emit structured result")
     .action(async (idOrName: string, opts: { json?: boolean }) => {
-      const id = await resolveInitiativeId(idOrName);
-      if (!id) throw new NotFoundError(`initiative not found: ${idOrName}`);
-      const initiative = await getInitiative(id);
-      if (!initiative) throw new NotFoundError(`initiative not found: ${idOrName}`);
+      const initiative = await executeInitiativeGet(buildInitiativeGetInput(idOrName));
 
       if (opts.json) {
         process.stdout.write(`${JSON.stringify(envelope({ initiative }), null, 2)}\n`);
@@ -124,15 +123,9 @@ export function registerInitiative(program: Command): void {
           json?: boolean;
         },
       ) => {
-        const created = await createInitiative({
-          name,
-          description: opts.description,
-          status: opts.status,
-          ownerId: opts.ownerId,
-          targetDate: opts.targetDate,
-          color: opts.color,
-          icon: opts.icon,
-        });
+        const created = await executeInitiativeCreate(
+          buildInitiativeCreateInputFromCli({ name, opts }),
+        );
         if (opts.json) {
           process.stdout.write(`${JSON.stringify(envelope({ initiative: created }), null, 2)}\n`);
           return;
@@ -170,35 +163,9 @@ export function registerInitiative(program: Command): void {
           json?: boolean;
         },
       ) => {
-        const input: Parameters<typeof updateInitiative>[1] = {};
-        if (opts.name !== undefined) input.name = opts.name;
-        if (opts.description !== undefined) input.description = opts.description;
-        if (opts.status !== undefined) input.status = opts.status;
-        if (opts.ownerId !== undefined && opts.clearOwner) {
-          throw new ValidationError(
-            "pass either --owner-id or --clear-owner, not both",
-            "use --clear-owner to remove ownership, or --owner-id <uuid> to assign an owner",
-          );
-        }
-        if (opts.clearOwner) input.ownerId = null;
-        if (opts.ownerId !== undefined)
-          input.ownerId = opts.ownerId === "null" ? null : opts.ownerId;
-        if (opts.targetDate !== undefined) {
-          input.targetDate = opts.targetDate === "null" ? null : opts.targetDate;
-        }
-        if (opts.color !== undefined) input.color = opts.color;
-        if (opts.icon !== undefined) input.icon = opts.icon;
-
-        if (Object.keys(input).length === 0) {
-          throw new ValidationError(
-            "nothing to update — pass at least one field",
-            "pass --name, --description, --status, --owner-id, --target-date, --color, or --icon",
-          );
-        }
-
-        const resolvedId = await resolveInitiativeId(id);
-        if (!resolvedId) throw new NotFoundError(`initiative not found: ${id}`);
-        const updated = await updateInitiative(resolvedId, input);
+        const updated = await executeInitiativeUpdate(
+          buildInitiativeUpdateInputFromCli({ id, opts }),
+        );
         if (opts.json) {
           process.stdout.write(`${JSON.stringify(envelope({ initiative: updated }), null, 2)}\n`);
           return;
@@ -217,20 +184,16 @@ export function registerInitiative(program: Command): void {
     .option("--yes", "confirm destructive operation (required)")
     .option("--json", "emit structured result")
     .action(async (id: string, opts: { json?: boolean; yes?: boolean }) => {
-      if (!opts.yes) {
-        throw new ValidationError(
-          "refusing to archive initiative without --yes",
-          "re-run with --yes to confirm this destructive state change",
-        );
-      }
-      const resolvedId = await resolveInitiativeId(id);
-      if (!resolvedId) throw new NotFoundError(`initiative not found: ${id}`);
-      const success = await archiveInitiative(resolvedId);
+      const result = await executeInitiativeArchive(
+        buildInitiativeArchiveInputFromCli({ id, opts }),
+      );
       if (opts.json) {
-        process.stdout.write(`${JSON.stringify(envelope({ id: resolvedId, success }), null, 2)}\n`);
+        process.stdout.write(
+          `${JSON.stringify(envelope({ id: result.id, success: result.success }), null, 2)}\n`,
+        );
         return;
       }
-      process.stdout.write(`${chalk.green("✓")} archived ${chalk.bold(resolvedId)}\n`);
+      process.stdout.write(`${chalk.green("✓")} archived ${chalk.bold(result.id)}\n`);
     });
 
   cmd
@@ -238,14 +201,14 @@ export function registerInitiative(program: Command): void {
     .description("unarchive an initiative. Accepts UUID or exact initiative name.")
     .option("--json", "emit structured result")
     .action(async (id: string, opts: { json?: boolean }) => {
-      const resolvedId = await resolveInitiativeId(id);
-      if (!resolvedId) throw new NotFoundError(`initiative not found: ${id}`);
-      const success = await unarchiveInitiative(resolvedId);
+      const result = await executeInitiativeUnarchive(buildInitiativeUnarchiveInput(id));
       if (opts.json) {
-        process.stdout.write(`${JSON.stringify(envelope({ id: resolvedId, success }), null, 2)}\n`);
+        process.stdout.write(
+          `${JSON.stringify(envelope({ id: result.id, success: result.success }), null, 2)}\n`,
+        );
         return;
       }
-      process.stdout.write(`${chalk.green("✓")} unarchived ${chalk.bold(resolvedId)}\n`);
+      process.stdout.write(`${chalk.green("✓")} unarchived ${chalk.bold(result.id)}\n`);
     });
 
   cmd
@@ -256,45 +219,21 @@ export function registerInitiative(program: Command): void {
     .option("--yes", "confirm destructive operation (required)")
     .option("--json", "emit structured result")
     .action(async (id: string, opts: { yes?: boolean; json?: boolean }) => {
-      if (!opts.yes) {
-        throw new ValidationError(
-          `refusing to delete initiative ${id} without --yes`,
-          "re-run with --yes to confirm. Use `initiative archive` for a reversible alternative.",
-        );
-      }
-      // Round-9 / M-1: envelope `id` field must have a consistent shape across
-      // both deleted and already-absent branches so `jq -r .id` doesn't get a
-      // name-string in one case and a UUID in the other. When name lookup
-      // fails, we have no UUID — emit `id: null` and a separate `query`
-      // field carrying the original lookup token so callers can still
-      // identify which target the response refers to.
-      const resolvedId = await resolveInitiativeId(id);
-      if (!resolvedId) {
-        if (opts.json) {
-          process.stdout.write(
-            `${JSON.stringify(envelope({ id: null, query: id, status: "already-absent", success: false }), null, 2)}\n`,
-          );
-        } else {
-          process.stdout.write(`${chalk.gray("✓")} already absent: ${chalk.bold(id)} (no-op)\n`);
-        }
-        return;
-      }
-      // Round-8 / N2: discriminated union — narrow via `r.status`.
-      const r = await tryIdempotentDelete(() => deleteInitiative(resolvedId));
-      const succeeded = r.status === "deleted" && r.result;
+      const r = await executeInitiativeDelete(buildInitiativeDeleteInputFromCli({ id, opts }));
+      const succeeded = initiativeDeleteCliSuccess(r);
       if (r.status === "deleted" && !r.result) process.exitCode = 1;
       if (opts.json) {
         process.stdout.write(
-          `${JSON.stringify(envelope({ id: resolvedId, query: id, status: r.status, success: succeeded }), null, 2)}\n`,
+          `${JSON.stringify(envelope(initiativeDeletePayload(r, succeeded)), null, 2)}\n`,
         );
         return;
       }
-      if (r.status === "already-absent") {
-        process.stdout.write(
-          `${chalk.gray("✓")} already absent: ${chalk.bold(resolvedId)} (no-op)\n`,
-        );
+      if (r.id === null) {
+        process.stdout.write(`${chalk.gray("✓")} already absent: ${chalk.bold(id)} (no-op)\n`);
+      } else if (r.status === "already-absent") {
+        process.stdout.write(`${chalk.gray("✓")} already absent: ${chalk.bold(r.id)} (no-op)\n`);
       } else if (r.result) {
-        process.stdout.write(`${chalk.green("✓")} deleted ${chalk.bold(resolvedId)}\n`);
+        process.stdout.write(`${chalk.green("✓")} deleted ${chalk.bold(r.id)}\n`);
       }
     });
 
@@ -305,25 +244,17 @@ export function registerInitiative(program: Command): void {
     .option("--json", "emit structured result")
     .action(
       async (initiative: string, project: string, opts: { sortOrder?: string; json?: boolean }) => {
-        const sortOrder =
-          opts.sortOrder !== undefined
-            ? parseCliNumber(opts.sortOrder, { optionName: "--sort-order", allowNegative: true })
-            : undefined;
-        const initiativeId = await resolveInitiativeId(initiative);
-        if (!initiativeId) throw new NotFoundError(`initiative not found: ${initiative}`);
-        const projectId = await resolveProjectId(project);
-        if (!projectId) throw new NotFoundError(`project not found: ${project}`);
-        const result = await initiativeAddProject({
-          initiativeId,
-          projectId,
-          sortOrder,
-        });
+        const result = await executeInitiativeAddProject(
+          buildInitiativeAddProjectInputFromCli({ initiative, project, opts }),
+        );
         if (opts.json) {
-          process.stdout.write(`${JSON.stringify(envelope({ edge_id: result.id }), null, 2)}\n`);
+          process.stdout.write(
+            `${JSON.stringify(envelope({ edge_id: result.edge_id }), null, 2)}\n`,
+          );
           return;
         }
         process.stdout.write(
-          `${chalk.green("✓")} linked ${chalk.bold(project)} → ${chalk.bold(initiative)} ${chalk.gray(`(${result.id})`)}\n`,
+          `${chalk.green("✓")} linked ${chalk.bold(project)} → ${chalk.bold(initiative)} ${chalk.gray(`(${result.edge_id})`)}\n`,
         );
       },
     );
@@ -335,17 +266,9 @@ export function registerInitiative(program: Command): void {
     .option("--json", "emit structured result")
     .action(
       async (initiative: string, project: string, opts: { json?: boolean; yes?: boolean }) => {
-        if (!opts.yes) {
-          throw new ValidationError(
-            "refusing to remove project from initiative without --yes",
-            "re-run with --yes to confirm this destructive state change",
-          );
-        }
-        const initiativeId = await resolveInitiativeId(initiative);
-        if (!initiativeId) throw new NotFoundError(`initiative not found: ${initiative}`);
-        const projectId = await resolveProjectId(project);
-        if (!projectId) throw new NotFoundError(`project not found: ${project}`);
-        const result = await initiativeRemoveProject({ initiativeId, projectId });
+        const result = await executeInitiativeRemoveProject(
+          buildInitiativeRemoveProjectInputFromCli({ initiative, project, opts }),
+        );
         if (opts.json) {
           process.stdout.write(`${JSON.stringify(envelope({ ...result }), null, 2)}\n`);
           return;

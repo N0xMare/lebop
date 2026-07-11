@@ -1,17 +1,21 @@
 import chalk from "chalk";
 import type { Command } from "commander";
-import { parseCliLimit } from "../lib/cliOptions.ts";
-import {
-  createDocument,
-  deleteDocument,
-  getDocument,
-  listDocuments,
-  updateDocument,
-} from "../lib/documents.ts";
 import { envelope } from "../lib/envelope.ts";
-import { NotFoundError, tryIdempotentDelete, ValidationError } from "../lib/errors.ts";
 import { resolveContent } from "../lib/io.ts";
-import { resolveExistingProjectId, resolveProjectId } from "../lib/milestones.ts";
+import {
+  buildDocumentCreateInputFromCli,
+  buildDocumentDeleteInputFromCli,
+  buildDocumentGetInput,
+  buildDocumentListInputFromCli,
+  buildDocumentUpdateInputFromCli,
+  documentDeleteSuccessForCli,
+  documentListPayload,
+  executeDocumentCreate,
+  executeDocumentDelete,
+  executeDocumentGet,
+  executeDocumentList,
+  executeDocumentUpdate,
+} from "../surface/documents.ts";
 
 export function registerDocument(program: Command): void {
   const cmd = program.command("document").description("manage Linear documents");
@@ -23,27 +27,18 @@ export function registerDocument(program: Command): void {
     .option("--limit <n>", "default 50; pass 0 for no limit", "50")
     .option("--json", "emit structured records")
     .action(async (opts: { project?: string; limit?: string; json?: boolean }) => {
-      let projectId: string | undefined;
-      if (opts.project) {
-        const resolved = await resolveExistingProjectId(opts.project);
-        if (!resolved) throw new NotFoundError(`project not found: ${opts.project}`);
-        projectId = resolved;
-      }
-      const max = parseCliLimit(opts.limit, { defaultValue: 50, zeroMeansInfinity: true });
-      const documents = await listDocuments({ projectId, max });
+      const result = await executeDocumentList(buildDocumentListInputFromCli({ opts }));
 
       if (opts.json) {
-        process.stdout.write(
-          `${JSON.stringify(envelope({ count: documents.length, documents }), null, 2)}\n`,
-        );
+        process.stdout.write(`${JSON.stringify(envelope(documentListPayload(result)), null, 2)}\n`);
         return;
       }
-      if (documents.length === 0) {
+      if (result.documents.length === 0) {
         process.stdout.write("no documents\n");
         return;
       }
-      const titleWidth = Math.max(...documents.map((d) => d.title.length));
-      for (const d of documents) {
+      const titleWidth = Math.max(...result.documents.map((d) => d.title.length));
+      for (const d of result.documents) {
         const project = d.project ? chalk.cyan(d.project.name) : chalk.gray("(no project)");
         const arch = d.archived_at ? chalk.gray(" [archived]") : "";
         process.stdout.write(`${chalk.bold(d.title.padEnd(titleWidth))}  ${project}${arch}\n`);
@@ -55,8 +50,7 @@ export function registerDocument(program: Command): void {
     .description("show one document by UUID (with content)")
     .option("--json", "emit structured result")
     .action(async (id: string, opts: { json?: boolean }) => {
-      const doc = await getDocument(id);
-      if (!doc) throw new NotFoundError(`document not found: ${id}`);
+      const doc = await executeDocumentGet(buildDocumentGetInput(id));
 
       if (opts.json) {
         process.stdout.write(`${JSON.stringify(envelope({ document: doc }), null, 2)}\n`);
@@ -96,29 +90,10 @@ export function registerDocument(program: Command): void {
           json?: boolean;
         },
       ) => {
-        // Round-7 / MED-5: mutual-exclusion (round-6 H17 silently let
-        // --project-id win when both passed).
-        if (opts.project && opts.projectId) {
-          throw new ValidationError(
-            "pass exactly one of --project / --project-id, not both",
-            "choose one project selector",
-          );
-        }
-        if (!opts.project && !opts.projectId) {
-          throw new ValidationError(
-            "either --project <name-or-id> or --project-id <uuid> is required",
-            "documents must be created inside a project",
-          );
-        }
-        const projectId = opts.projectId ?? (await resolveProjectId(opts.project as string));
-        if (!projectId) throw new NotFoundError(`project not found: ${opts.project}`);
         const content = await resolveContent(opts);
-        const created = await createDocument({
-          title,
-          projectId,
-          content,
-          icon: opts.icon,
-        });
+        const created = await executeDocumentCreate(
+          buildDocumentCreateInputFromCli({ title, opts, content }),
+        );
 
         if (opts.json) {
           process.stdout.write(`${JSON.stringify(envelope({ document: created }), null, 2)}\n`);
@@ -151,18 +126,11 @@ export function registerDocument(program: Command): void {
           json?: boolean;
         },
       ) => {
-        const input: Parameters<typeof updateDocument>[1] = {};
-        if (opts.title !== undefined) input.title = opts.title;
-        if (opts.icon !== undefined) input.icon = opts.icon;
         const provided = [opts.content, opts.contentFile, opts.stdin].filter(Boolean).length;
-        if (provided > 0) input.content = await resolveContent(opts);
-        if (Object.keys(input).length === 0) {
-          throw new ValidationError(
-            "nothing to update — pass at least one field",
-            "pass --title, --content, --content-file, --stdin, or --icon",
-          );
-        }
-        const updated = await updateDocument(id, input);
+        const content = provided > 0 ? await resolveContent(opts) : undefined;
+        const updated = await executeDocumentUpdate(
+          buildDocumentUpdateInputFromCli({ id, opts, content }),
+        );
         if (opts.json) {
           process.stdout.write(`${JSON.stringify(envelope({ document: updated }), null, 2)}\n`);
           return;
@@ -179,25 +147,19 @@ export function registerDocument(program: Command): void {
     .option("--yes", "confirm destructive operation (required)")
     .option("--json", "emit structured result")
     .action(async (id: string, opts: { yes?: boolean; json?: boolean }) => {
-      if (!opts.yes) {
-        throw new ValidationError(
-          `refusing to delete document ${id} without --yes`,
-          "re-run with --yes to confirm. This operation is irreversible.",
-        );
-      }
       // Round-8 / N2: discriminated union — narrow via `r.status`.
-      const r = await tryIdempotentDelete(() => deleteDocument(id));
-      const succeeded = r.status === "deleted" && r.result;
-      if (r.status === "deleted" && !r.result) process.exitCode = 1;
+      const r = await executeDocumentDelete(buildDocumentDeleteInputFromCli({ id, opts }));
+      const success = documentDeleteSuccessForCli(r);
+      if (r.status === "deleted" && !success) process.exitCode = 1;
       if (opts.json) {
         process.stdout.write(
-          `${JSON.stringify(envelope({ id, status: r.status, success: succeeded }), null, 2)}\n`,
+          `${JSON.stringify(envelope({ id: r.id, status: r.status, success }), null, 2)}\n`,
         );
         return;
       }
       if (r.status === "already-absent") {
         process.stdout.write(`${chalk.gray("✓")} already absent: ${chalk.bold(id)} (no-op)\n`);
-      } else if (r.result) {
+      } else if (success) {
         process.stdout.write(`${chalk.green("✓")} deleted ${chalk.bold(id)}\n`);
       }
     });

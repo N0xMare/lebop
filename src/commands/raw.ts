@@ -1,11 +1,11 @@
 import type { Command } from "commander";
 import { ValidationError } from "../lib/errors.ts";
+import { classifyRawGraphQLOperation } from "../lib/rawGraphql.ts";
 import {
-  assertRawGraphQLOperationAllowed,
-  assertRawGraphQLPaginateAllowed,
-} from "../lib/rawGraphql.ts";
-import { paginateRawQuery } from "../lib/rawPaginate.ts";
-import { linear, withClient } from "../lib/sdk.ts";
+  buildRawGraphqlInputFromCli,
+  executeRawGraphql,
+  rawGraphqlCliPayload,
+} from "../surface/raw.ts";
 
 export function registerRaw(program: Command): void {
   program
@@ -31,47 +31,37 @@ export function registerRaw(program: Command): void {
         ...(await resolveInlineVariables(opts.variable)),
       };
 
-      if (opts.paginate) {
-        assertRawGraphQLPaginateAllowed(query);
-        const accumulated = await paginateRawQuery(
-          variables,
-          async (vars) =>
-            (await withClient((c) => c.client.rawRequest(query, vars))) as {
-              data: Record<string, unknown>;
-            },
-        );
-        process.stdout.write(`${JSON.stringify(accumulated, null, 2)}\n`);
-        return;
-      }
-
-      const operationKind = assertRawGraphQLOperationAllowed(query, {
-        allowMutation: opts.allowMutation === true,
-        mutationMessage: "raw GraphQL mutation requires --allow-mutation",
-        mutationHint:
-          "prefer first-class lebop write tools; if raw mutation is intentional, re-run with --allow-mutation",
-        surface: "raw GraphQL",
+      const input = buildRawGraphqlInputFromCli({
+        query,
+        variables,
+        paginate: opts.paginate,
+        allowMutation: opts.allowMutation,
       });
-      if (operationKind === "mutation" && !isConfirmed(opts)) {
+
+      // Confirm gate stays in the adapter (behavior freeze with legacy CLI).
+      // Paginate path is query-only; mutation path requires --yes/--confirm.
+      // When allowMutation is false, execute throws the allow-mutation error first.
+      if (
+        !opts.paginate &&
+        opts.allowMutation === true &&
+        classifyRawGraphQLOperation(query) === "mutation" &&
+        !isConfirmed(opts)
+      ) {
         throw new ValidationError(
           "raw GraphQL mutation requires --yes/--confirm with --allow-mutation",
           "prefer first-class lebop write tools; if raw mutation is intentional, pass --yes/--confirm after verifying the mutation and variables",
         );
       }
-      const response: unknown =
-        operationKind === "mutation"
-          ? await (await linear()).client.rawRequest(query, variables)
-          : await withClient((c) => c.client.rawRequest(query, variables));
 
-      // rawRequest returns { data, errors?, ... } — unwrap for a clean result view.
-      //
+      const result = await executeRawGraphql(input);
+
       // Intentional CLI/MCP asymmetry: this CLI path emits the RAW data shape
       // (no schema_version envelope) because `lebop raw` is documented as the
       // GraphQL escape hatch and users routinely pipe its output to `jq`
       // expecting the unwrapped Linear GraphQL response. The MCP analog
       // (`raw_graphql` tool) wraps `{schema_version, data}` because tool-call
       // responses must always carry the envelope. See docs/spec.md §15.6.
-      const payload = (response as { data?: unknown }).data ?? response;
-      process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+      process.stdout.write(`${JSON.stringify(rawGraphqlCliPayload(result), null, 2)}\n`);
     });
 }
 

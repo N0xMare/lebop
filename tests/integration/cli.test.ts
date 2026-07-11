@@ -870,6 +870,18 @@ describe("destructive CLI confirmation gates", () => {
     expect(mock.requestAt(0)).toBeUndefined();
   });
 
+  it("set labels with only -delta requires a value path that reaches surface (argv prep)", async () => {
+    // Ensures +/- label tokens are accepted by the CLI parser (not rejected as flags).
+    // Mock GraphQL is not required: missing auth/config still proves parse acceptance
+    // when the error is not "unknown option".
+    const r = await runLebop(["set", "labels", "NOX-1", "--json", "--", "+urgent", "-bug"], env);
+    expect(r.stderr).toBe("");
+    const parsed = JSON.parse(r.stdout);
+    // Either validation from domain or network/auth — must not be commander unknown option
+    expect(String(parsed.error?.message ?? parsed.message ?? "")).not.toMatch(/unknown option/i);
+    expect(parsed.ok === false || parsed.schema_version === 1).toBe(true);
+  });
+
   it("set links negative deltas require --yes before config or issue lookup", async () => {
     const r = await runLebop(["set", "links", "NOX-1", "--json", "-related:NOX-2"], env);
 

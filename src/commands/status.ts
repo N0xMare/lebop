@@ -1,8 +1,11 @@
 import chalk from "chalk";
 import type { Command } from "commander";
-import { collectCacheStatus } from "../lib/cacheStatus.ts";
-import { resolveConfig } from "../lib/config.ts";
 import { envelope } from "../lib/envelope.ts";
+import {
+  buildCacheStatusInputFromCli,
+  cacheStatusPayload,
+  executeCacheStatus,
+} from "../surface/cache.ts";
 
 /**
  * Inner action handler — exported so `lebop cache status` (in commands/cache.ts)
@@ -14,13 +17,8 @@ export async function statusAction(opts: {
   json?: boolean;
   remote?: boolean;
 }): Promise<void> {
-  const config = await resolveConfig({ teamOverride: opts.team });
-  const status = await collectCacheStatus({
-    team: config.team,
-    repoRoot: config.repoRoot,
-    repoHash: config.repoHash,
-    checkRemote: opts.remote !== false,
-  });
+  const result = await executeCacheStatus(buildCacheStatusInputFromCli({ opts }));
+  const status = cacheStatusPayload(result);
 
   if (opts.json) {
     process.stdout.write(`${JSON.stringify(envelope({ ...status }), null, 2)}\n`);
@@ -28,7 +26,7 @@ export async function statusAction(opts: {
   }
 
   process.stdout.write(
-    `on team: ${chalk.bold(config.team)}${config.repoRoot ? `  (repo: ${config.repoRoot})` : "  (no repo — global cache)"}\n\n`,
+    `on team: ${chalk.bold(result.config.team)}${result.config.repoRoot ? `  (repo: ${result.config.repoRoot})` : "  (no repo — global cache)"}\n\n`,
   );
 
   const totalModified = status.modified.issues.length + status.modified.projects.length;

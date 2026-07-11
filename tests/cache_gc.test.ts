@@ -100,8 +100,10 @@ describe("gcCache — dry run", () => {
   });
 
   it("dryRun:true with explicit maxAgeDays:0 reports everything but deletes nothing", async () => {
-    makeFakeRepo("aaaa11112222", new Date());
-    makeFakeRepo("bbbb33334444", new Date());
+    // Use ages well past the 0-day cutoff so FS mtime granularity cannot flake.
+    const aged = new Date(Date.now() - 48 * 60 * 60 * 1000);
+    makeFakeRepo("aaaa11112222", aged);
+    makeFakeRepo("bbbb33334444", aged);
 
     const result = await cache.gcCache({
       maxAgeDays: 0,

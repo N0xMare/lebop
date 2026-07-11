@@ -16,7 +16,7 @@ To use it:
 2. In the copied `_project.md`, replace `team: TEAM` with your team's key
    (run `lebop teams` to list keys).
 3. (Optional) Tweak titles, labels, priorities, and bodies to match a real
-   initiative.
+   project (this plan is project-rooted via `_project.md`, not a Linear Initiative).
 4. `lebop plan validate plans/getting-started-demo`
 5. `lebop plan apply plans/getting-started-demo --dry-run`
 6. `lebop plan apply plans/getting-started-demo`

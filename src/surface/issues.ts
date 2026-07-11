@@ -1285,7 +1285,7 @@ export const issueListOperation = {
   action: "list",
   title: "List Linear issues by filter",
   description: issueListDescription,
-  cli: { command: "list" },
+  cli: { command: "list", liveSteps: ["cli:list --json"] },
   mcp: {
     tool: "list_issues",
     title: "List Linear issues by filter",
@@ -1310,7 +1310,7 @@ export const issueMineOperation = {
   action: "list",
   title: "List issues assigned to the current user",
   description: "`lebop mine` is the active-work CLI shorthand expressible through list_issues.",
-  cli: { command: "mine" },
+  cli: { command: "mine", liveSteps: ["cli:mine --json"] },
   mcp: {
     tool: "list_issues",
     title: "List Linear issues by filter",
@@ -1318,6 +1318,8 @@ export const issueMineOperation = {
     annotations: listIssueAnnotations,
   },
   safety: { readOnly: true, destructive: false, idempotent: true, openWorld: true },
+  notes:
+    "Recipe: list_issues({ assignee: 'me', active_only: true }) matches default mine; pass all_states:true to include completed/canceled assigned issues.",
   fromCli: buildIssueMineInputFromCli,
   fromMcp: buildIssueListInputFromMcp,
 } satisfies SurfaceOperationContract<
@@ -1335,7 +1337,7 @@ export const issueGetOperation = {
   title: "Get a single Linear issue",
   description:
     "Fetch one issue by identifier or UUID. By default returns the same issue context as `lebop show --json` under `issue`: metadata, description, comments, and relation summaries.",
-  cli: { command: "show" },
+  cli: { command: "show", liveSteps: ["cli:show --json"] },
   mcp: {
     tool: "get_issue",
     title: "Get a single Linear issue",
@@ -1366,7 +1368,10 @@ export const issueCreateOperation = {
   title: "Create a new Linear issue",
   description:
     "Creates one issue. NOT retry-wrapped — duplicate creation could result if the response is lost mid-call.",
-  cli: { command: "new" },
+  cli: {
+    command: "new",
+    liveSteps: ["cli:new --description-file --json", "cli:new --stdin --json"],
+  },
   mcp: {
     tool: "create_issue",
     title: "Create a new Linear issue",
@@ -1399,7 +1404,23 @@ export const issueUpdateOperation = {
   title: "Update fields on an existing Linear issue",
   description:
     "Set any combination of: title, description, state, priority, estimate, labels, label deltas, assignee, parent, project, milestone, cycle. Idempotent at the value level — safe to retry.",
-  cli: { command: "set" },
+  cli: {
+    command: "set",
+    liveSteps: [
+      "cli:set title --json",
+      "cli:set state --json",
+      "cli:set priority --json",
+      "cli:set estimate --json",
+      "cli:set assignee --json",
+      "cli:set description --json",
+      "cli:set project --json",
+      "cli:set milestone --json",
+      "cli:set cycle --json",
+      "cli:set labels exact --json",
+      "cli:set parent --json",
+      "cli:set parent clear --json",
+    ],
+  },
   mcp: {
     tool: "update_issue",
     title: "Update fields on an existing Linear issue",
@@ -1415,6 +1436,8 @@ export const issueUpdateOperation = {
     },
   },
   safety: { readOnly: false, destructive: false, idempotent: true, openWorld: true },
+  notes:
+    "Field parity: CLI set supports direct issue fields one field per invocation, including description/project/milestone/cycle. CLI-only set links maps to relation add/delete semantics; content remains cache/publish-only. MCP update_issue supports the direct issue fields that CLI set supports except set links, and can update multiple fields in one call.",
   fromCli: buildIssueUpdateInputFromCli,
   fromMcp: buildIssueUpdateInputFromMcp,
 } satisfies SurfaceOperationContract<
@@ -1454,6 +1477,8 @@ export const issueRelationsUpdateOperation = {
     openWorld: true,
     confirm: "required_when_mutating",
   },
+  notes:
+    "Batch relation delta parity for `lebop set links`: applies multiple add/remove relation deltas for one source issue.",
 } satisfies SurfaceOperationContract<unknown, unknown>;
 
 export const issueArchiveOperation = {
@@ -1464,7 +1489,14 @@ export const issueArchiveOperation = {
   title: "Archive one or more issues",
   description:
     "Archives one or more issues (reversible from the Linear UI; reversible programmatically via unarchive_issue). NOT retry-wrapped.",
-  cli: { command: "archive" },
+  cli: {
+    command: "archive",
+    liveSteps: [
+      "cli:archive/unarchive issue --json",
+      "cli:archive issue final --json",
+      "cli:archive primary evidence issue --json",
+    ],
+  },
   mcp: {
     tool: "archive_issue",
     title: "Archive one or more issues",
@@ -1501,7 +1533,10 @@ export const issueUnarchiveOperation = {
   action: "update",
   title: "Unarchive one or more issues",
   description: "Reverse of archive_issue. NOT retry-wrapped.",
-  cli: { command: "unarchive" },
+  cli: {
+    command: "unarchive",
+    liveSteps: ["cli:archive/unarchive issue --json", "cli:unarchive issue --json"],
+  },
   mcp: {
     tool: "unarchive_issue",
     title: "Unarchive one or more issues",
@@ -1532,7 +1567,7 @@ export const issueBulkUpdateOperation = {
   title: "Apply one patch uniformly to N issues",
   description:
     "Wraps Linear's issueBatchUpdate. Resolves all extras once up front, then fires a single batch mutation with partial-success rows.",
-  cli: { command: "bulk update" },
+  cli: { command: "bulk update", liveSteps: ["cli:bulk update --json"] },
   mcp: {
     tool: "bulk_update_issues",
     title: "Apply one patch uniformly to N issues",

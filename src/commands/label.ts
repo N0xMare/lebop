@@ -3,10 +3,16 @@ import type { Command } from "commander";
 import { invalidateTeamMetadata } from "../lib/cache.ts";
 import { findGitRoot, hashRepoRoot, resolveConfig } from "../lib/config.ts";
 import { envelope } from "../lib/envelope.ts";
-import { NotFoundError, tryIdempotentDelete, ValidationError } from "../lib/errors.ts";
-import { createLabel, deleteLabel, listLabels, resolveLabelSelectorToId } from "../lib/labels.ts";
 import { getTeamMetadata } from "../lib/resolve.ts";
-import { getTeam } from "../lib/teams.ts";
+import {
+  buildLabelCreateInputFromCli,
+  buildLabelDeleteInputFromCli,
+  buildLabelListInputFromCli,
+  executeLabelCreate,
+  executeLabelDelete,
+  executeLabelList,
+  labelListPayload,
+} from "../surface/labels.ts";
 
 /**
  * `lebop label list|create|delete` — workspace + team-scoped label management.
@@ -23,52 +29,19 @@ export function registerLabel(program: Command): void {
     .option("--json", "emit structured records")
     .action(
       async (opts: { team?: string; workspaceOnly?: boolean; all?: boolean; json?: boolean }) => {
-        const teamScope =
-          opts.workspaceOnly || opts.all
-            ? undefined
-            : (await resolveConfig({ teamOverride: opts.team })).team;
-        if (!opts.workspaceOnly && !opts.all && teamScope) {
-          const team = await getTeam(teamScope);
-          if (!team) {
-            throw new NotFoundError(
-              `team not found: ${teamScope}`,
-              "use `lebop teams` to see available team keys; or pass --workspace-only to skip team scoping",
-            );
-          }
-        }
-        const labels = await listLabels({
-          team: teamScope,
-          workspaceOnly: opts.workspaceOnly,
-          all: opts.all,
-        });
+        const result = await executeLabelList(buildLabelListInputFromCli({ opts }));
 
         if (opts.json) {
-          const scope = opts.all
-            ? { type: "all" as const, team: null }
-            : opts.workspaceOnly
-              ? { type: "workspace" as const, team: null }
-              : { type: "team" as const, team: teamScope ?? null };
-          process.stdout.write(
-            `${JSON.stringify(
-              envelope({
-                scope,
-                team: teamScope ?? null,
-                count: labels.length,
-                labels,
-              }),
-              null,
-              2,
-            )}\n`,
-          );
+          process.stdout.write(`${JSON.stringify(envelope(labelListPayload(result)), null, 2)}\n`);
           return;
         }
 
-        if (labels.length === 0) {
+        if (result.labels.length === 0) {
           process.stdout.write("no labels\n");
           return;
         }
-        const nameWidth = Math.max(...labels.map((l) => l.name.length));
-        for (const l of labels) {
+        const nameWidth = Math.max(...result.labels.map((l) => l.name.length));
+        for (const l of result.labels) {
           const scope = l.team ? chalk.gray(`[${l.team.key}]`) : chalk.cyan("[workspace]");
           const desc = l.description ? chalk.gray(` — ${l.description}`) : "";
           process.stdout.write(`${chalk.bold(l.name.padEnd(nameWidth))}  ${scope}${desc}\n`);
@@ -98,27 +71,16 @@ export function registerLabel(program: Command): void {
           json?: boolean;
         },
       ) => {
-        const scope = opts.workspaceScoped
-          ? {
-              repoHash: currentRepoHash(),
-              team: undefined,
-              teamId: undefined,
-            }
-          : await resolveLabelCreateScope(opts.team);
-        const teamId = scope.teamId;
-        const created = await createLabel({
-          name,
-          teamId,
-          color: opts.color,
-          description: opts.description,
+        const created = await executeLabelCreate(buildLabelCreateInputFromCli({ name, opts }), {
+          resolveTeamKey: resolveLabelCreateTeamKey,
         });
-        await invalidateTeamMetadata(scope.repoHash, scope.team);
+        await invalidateTeamMetadata(created.repoHash ?? currentRepoHash(), created.invalidateTeam);
         if (opts.json) {
-          process.stdout.write(`${JSON.stringify(envelope({ label: created }), null, 2)}\n`);
+          process.stdout.write(`${JSON.stringify(envelope({ label: created.label }), null, 2)}\n`);
           return;
         }
         process.stdout.write(
-          `${chalk.green("✓")} created ${chalk.bold(created.name)} ${chalk.gray(`(${created.id})`)}\n`,
+          `${chalk.green("✓")} created ${chalk.bold(created.label.name)} ${chalk.gray(`(${created.label.id})`)}\n`,
         );
       },
     );
@@ -137,32 +99,21 @@ export function registerLabel(program: Command): void {
         nameOrId: string,
         opts: { team?: string; scope?: string; yes?: boolean; json?: boolean },
       ) => {
-        if (!opts.yes) {
-          throw new ValidationError(
-            `refusing to delete label ${nameOrId} without --yes`,
-            "re-run with --yes to confirm. This removes the label from every issue that uses it.",
-          );
+        const r = await executeLabelDelete(buildLabelDeleteInputFromCli({ nameOrId, opts }));
+        if (r.mutated) {
+          await invalidateTeamMetadata(currentRepoHash(), r.team ?? undefined);
         }
-        const scope = normalizeDeleteScope(opts.scope);
-        const resolved = await resolveLabelSelectorToId(nameOrId, scope, opts.team);
-        const id = resolved.id;
-        // Round-8 / N2: discriminated union — narrow via `r.status`.
-        const r = await tryIdempotentDelete(() => deleteLabel(id));
-        if (r.status === "deleted") {
-          await invalidateTeamMetadata(currentRepoHash(), resolved.team ?? undefined);
-        }
-        const succeeded = r.status === "deleted" && r.result;
-        if (r.status === "deleted" && !r.result) process.exitCode = 1;
+        if (r.status === "deleted" && !r.success) process.exitCode = 1;
         if (opts.json) {
           process.stdout.write(
             `${JSON.stringify(
               envelope({
-                id,
-                selector: nameOrId,
-                scope: resolved.scope,
-                team: resolved.team,
+                id: r.id,
+                selector: r.selector,
+                scope: r.scope,
+                team: r.team,
                 status: r.status,
-                success: succeeded,
+                success: r.success,
               }),
               null,
               2,
@@ -171,23 +122,14 @@ export function registerLabel(program: Command): void {
           return;
         }
         if (r.status === "already-absent") {
-          process.stdout.write(`${chalk.gray("✓")} already absent: ${chalk.bold(id)} (no-op)\n`);
-        } else if (r.result) {
-          process.stdout.write(`${chalk.green("✓")} deleted ${chalk.bold(id)}\n`);
+          process.stdout.write(`${chalk.gray("✓")} already absent: ${chalk.bold(r.id)} (no-op)\n`);
+        } else if (r.success) {
+          process.stdout.write(`${chalk.green("✓")} deleted ${chalk.bold(r.id)}\n`);
         } else {
-          process.stdout.write(`${chalk.red("✗")} delete failed for ${id}\n`);
+          process.stdout.write(`${chalk.red("✗")} delete failed for ${r.id}\n`);
         }
       },
     );
-}
-
-function normalizeDeleteScope(scope: string | undefined): "team" | "workspace" {
-  if (scope === undefined || scope === "team") return "team";
-  if (scope === "workspace") return "workspace";
-  throw new ValidationError(
-    "label delete --scope must be team or workspace",
-    "pass --scope team or --scope workspace",
-  );
 }
 
 function currentRepoHash(): string {
@@ -195,15 +137,15 @@ function currentRepoHash(): string {
   return repoRoot ? hashRepoRoot(repoRoot) : "_global";
 }
 
-async function resolveLabelCreateScope(team: string | undefined): Promise<{
-  repoHash: string;
-  team: string;
+async function resolveLabelCreateTeamKey(team: string | undefined): Promise<{
   teamId: string;
+  teamKey: string;
+  repoHash: string;
 }> {
   const config = await resolveConfig({ teamOverride: team });
   return {
     repoHash: config.repoHash,
-    team: config.team,
+    teamKey: config.team,
     teamId: (await getTeamMetadata(config.repoHash, config.team)).team_id,
   };
 }

@@ -82,46 +82,54 @@ export function resolveLebopInvocation(args = [], env = process.env) {
 
 export const GAP_ALLOWLIST = {
   "cli:cycle view --json": {
-    reason: "NOX currently has no cycles, so cycle view has no valid UUID fixture.",
-    expires: "2026-07-31",
+    reason:
+      "NOX workspace lacks cycle/agent-session fixtures; allowlist extended for architecture release train until fixtures can be seeded; not a product gap. Cycle view has no valid UUID fixture.",
+    expires: "2026-09-30",
   },
   "cli:workspace explore cycle issues --json": {
-    reason: "NOX currently has no cycles, so cycle issue exploration has no valid fixture.",
-    expires: "2026-07-31",
+    reason:
+      "NOX workspace lacks cycle/agent-session fixtures; allowlist extended for architecture release train until fixtures can be seeded; not a product gap. Cycle issue exploration has no valid fixture.",
+    expires: "2026-09-30",
   },
   "cli:workspace fetch cycle --json": {
-    reason: "NOX currently has no cycles, so cycle workspace fetch has no valid fixture.",
-    expires: "2026-07-31",
+    reason:
+      "NOX workspace lacks cycle/agent-session fixtures; allowlist extended for architecture release train until fixtures can be seeded; not a product gap. Cycle workspace fetch has no valid fixture.",
+    expires: "2026-09-30",
   },
   "cli:agent-session view --json": {
-    reason: "NOX currently has no agent sessions, so agent-session view has no valid fixture.",
-    expires: "2026-07-31",
+    reason:
+      "NOX workspace lacks cycle/agent-session fixtures; allowlist extended for architecture release train until fixtures can be seeded; not a product gap. Agent-session view has no valid fixture.",
+    expires: "2026-09-30",
   },
   "cli:workspace fetch agent-session --json": {
     reason:
-      "NOX currently has no agent sessions, so concrete agent-session fetch has no valid fixture.",
-    expires: "2026-07-31",
+      "NOX workspace lacks cycle/agent-session fixtures; allowlist extended for architecture release train until fixtures can be seeded; not a product gap. Concrete agent-session fetch has no valid fixture.",
+    expires: "2026-09-30",
   },
   "mcp:get_cycle": {
-    reason: "NOX currently has no cycles, so get_cycle has no valid UUID fixture.",
-    expires: "2026-07-31",
+    reason:
+      "NOX workspace lacks cycle/agent-session fixtures; allowlist extended for architecture release train until fixtures can be seeded; not a product gap. get_cycle has no valid UUID fixture.",
+    expires: "2026-09-30",
   },
   "mcp:explore_linear_workspace cycle issues": {
-    reason: "NOX currently has no cycles, so cycle issue exploration has no valid fixture.",
-    expires: "2026-07-31",
+    reason:
+      "NOX workspace lacks cycle/agent-session fixtures; allowlist extended for architecture release train until fixtures can be seeded; not a product gap. Cycle issue exploration has no valid fixture.",
+    expires: "2026-09-30",
   },
   "mcp:fetch_linear_workspace cycle": {
-    reason: "NOX currently has no cycles, so cycle workspace fetch has no valid fixture.",
-    expires: "2026-07-31",
+    reason:
+      "NOX workspace lacks cycle/agent-session fixtures; allowlist extended for architecture release train until fixtures can be seeded; not a product gap. Cycle workspace fetch has no valid fixture.",
+    expires: "2026-09-30",
   },
   "mcp:get_agent_session": {
-    reason: "NOX currently has no agent sessions, so get_agent_session has no valid fixture.",
-    expires: "2026-07-31",
+    reason:
+      "NOX workspace lacks cycle/agent-session fixtures; allowlist extended for architecture release train until fixtures can be seeded; not a product gap. get_agent_session has no valid fixture.",
+    expires: "2026-09-30",
   },
   "mcp:fetch_linear_workspace agent-session": {
     reason:
-      "NOX currently has no agent sessions, so concrete agent-session fetch has no valid fixture.",
-    expires: "2026-07-31",
+      "NOX workspace lacks cycle/agent-session fixtures; allowlist extended for architecture release train until fixtures can be seeded; not a product gap. Concrete agent-session fetch has no valid fixture.",
+    expires: "2026-09-30",
   },
 };
 

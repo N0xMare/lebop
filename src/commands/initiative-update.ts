@@ -1,17 +1,14 @@
 import chalk from "chalk";
 import type { Command } from "commander";
 import { envelope } from "../lib/envelope.ts";
-import { NotFoundError, ValidationError } from "../lib/errors.ts";
-import {
-  createInitiativeUpdate,
-  type InitiativeHealth,
-  listInitiativeUpdates,
-  resolveExistingInitiativeId,
-  resolveInitiativeId,
-} from "../lib/initiatives.ts";
 import { resolveBody } from "../lib/io.ts";
-
-const HEALTH_VALUES = ["onTrack", "atRisk", "offTrack"] as const;
+import {
+  buildInitiativeUpdateCreateInputFromCli,
+  buildInitiativeUpdateListInputFromCli,
+  executeInitiativeUpdateCreate,
+  executeInitiativeUpdateList,
+  initiativeUpdateListPayload,
+} from "../surface/initiative-updates.ts";
 
 export function registerInitiativeUpdate(program: Command): void {
   const cmd = program
@@ -37,35 +34,24 @@ export function registerInitiativeUpdate(program: Command): void {
           json?: boolean;
         },
       ) => {
-        const initiativeId = await resolveInitiativeId(initiative);
-        if (!initiativeId) throw new NotFoundError(`initiative not found: ${initiative}`);
-
         const body = await resolveBody(opts);
-        if (!body.trim()) {
-          throw new ValidationError("empty update body", "pass --body, --body-file, or --stdin");
-        }
-
-        let health: InitiativeHealth | undefined;
-        if (opts.health) {
-          if (!(HEALTH_VALUES as readonly string[]).includes(opts.health)) {
-            throw new ValidationError(
-              `invalid --health "${opts.health}". expected: ${HEALTH_VALUES.join(", ")}`,
-              `expected one of: ${HEALTH_VALUES.join(", ")}`,
-            );
-          }
-          health = opts.health as InitiativeHealth;
-        }
-
-        const created = await createInitiativeUpdate({ initiativeId, body, health });
+        const result = await executeInitiativeUpdateCreate(
+          buildInitiativeUpdateCreateInputFromCli({
+            initiative,
+            body,
+            health: opts.health,
+          }),
+        );
 
         if (opts.json) {
           process.stdout.write(
-            `${JSON.stringify(envelope({ initiative_update: created }), null, 2)}\n`,
+            `${JSON.stringify(envelope({ initiative_update: result.initiative_update }), null, 2)}\n`,
           );
           return;
         }
+        const health = result.initiative_update.health;
         process.stdout.write(
-          `${chalk.green("✓")} posted update on initiative ${chalk.gray(initiativeId)}${health ? `  ${chalk.cyan(health)}` : ""}\n`,
+          `${chalk.green("✓")} posted update on initiative ${chalk.gray(result.initiative_id)}${health ? `  ${chalk.cyan(health)}` : ""}\n`,
         );
       },
     );
@@ -75,24 +61,20 @@ export function registerInitiativeUpdate(program: Command): void {
     .description("list status updates on an initiative")
     .option("--json", "emit structured records")
     .action(async (initiative: string, opts: { json?: boolean }) => {
-      const initiativeId = await resolveExistingInitiativeId(initiative);
-      if (!initiativeId) throw new NotFoundError(`initiative not found: ${initiative}`);
-      const updates = await listInitiativeUpdates(initiativeId);
+      const result = await executeInitiativeUpdateList(
+        buildInitiativeUpdateListInputFromCli({ initiative }),
+      );
       if (opts.json) {
         process.stdout.write(
-          `${JSON.stringify(
-            envelope({ initiative_id: initiativeId, count: updates.length, updates }),
-            null,
-            2,
-          )}\n`,
+          `${JSON.stringify(envelope(initiativeUpdateListPayload(result)), null, 2)}\n`,
         );
         return;
       }
-      if (updates.length === 0) {
+      if (result.updates.length === 0) {
         process.stdout.write("no updates\n");
         return;
       }
-      for (const u of updates) {
+      for (const u of result.updates) {
         const health = u.health ? `  ${chalk.cyan(u.health)}` : "";
         const who = u.user ? `${u.user.name} <${u.user.email}>` : "unknown";
         process.stdout.write(

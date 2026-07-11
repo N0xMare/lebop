@@ -1,37 +1,21 @@
 import chalk from "chalk";
 import type { Command } from "commander";
-import type { TeamMetadata } from "../lib/cache.ts";
-import { refreshCachedIssueByIdentifier } from "../lib/cacheRefresh.ts";
 import { parseCliNumber } from "../lib/cliOptions.ts";
-import { mapLimit } from "../lib/concurrency.ts";
 import { findGitRoot, hashRepoRoot, resolveConfig } from "../lib/config.ts";
 import { envelope } from "../lib/envelope.ts";
-import { ConfigError, NotFoundError, ValidationError } from "../lib/errors.ts";
-import {
-  assertRelationCreateConfirmed,
-  createLink,
-  deleteLink,
-  findLink,
-  type LinkDelta,
-  parseLinkToken,
-  preflightCreateLink,
-  type RelationCreatePreflight,
-  relationBatchAddsRequireConfirmation,
-  relationDeltaKey,
-  relationPairKey,
-} from "../lib/relations.ts";
-import {
-  deriveTeamFromIdentifiers,
-  getTeamMetadata,
-  resolveLabelId,
-  withFreshMetadataOnMiss,
-} from "../lib/resolve.ts";
-import { withClient } from "../lib/sdk.ts";
+import { ConfigError, ValidationError } from "../lib/errors.ts";
+import { deriveTeamFromIdentifiers } from "../lib/resolve.ts";
 import {
   buildIssueUpdateInputFromCli,
   executeIssueUpdate,
   type IssueUpdateInput as SurfaceIssueUpdateInput,
 } from "../surface/issues.ts";
+import {
+  buildRelationUpdateInputFromCli,
+  executeRelationUpdate,
+  type RelationMutationDeps,
+  relationUpdateCliPayload,
+} from "../surface/relations.ts";
 
 const SUPPORTED_FIELDS = [
   "title",
@@ -50,6 +34,13 @@ const SUPPORTED_FIELDS = [
 type SupportedField = (typeof SUPPORTED_FIELDS)[number];
 type UpdateField = Exclude<SupportedField, "links">;
 const UNSUPPORTED_FIELDS = new Set(["content"]);
+
+const cliRelationCacheDeps: RelationMutationDeps = {
+  resolveCacheContext: () => {
+    const repoRoot = findGitRoot(process.cwd());
+    return { repoRoot, repoHash: repoRoot ? hashRepoRoot(repoRoot) : "_global" };
+  },
+};
 
 export function registerSet(program: Command): void {
   program
@@ -145,7 +136,9 @@ async function handleUpdateField(
   } else {
     assertNoDescriptionSourceOptions(field, opts, tail);
     if (field === "labels") {
-      input.labels = await resolveLabelsInputNames(id, tail.positionals, opts, tail);
+      const labels = parseLabelsFieldInput(id, tail.positionals);
+      if (labels.labels !== undefined) input.labels = labels.labels;
+      if (labels.labelDeltas !== undefined) input.labelDeltas = labels.labelDeltas;
       if (teamOverride) {
         const config = await resolveSetConfig(id, teamOverride);
         input.team = config.team;
@@ -254,12 +247,11 @@ function applyScalarUpdateInput(input: SurfaceIssueUpdateInput, field: UpdateFie
   }
 }
 
-async function resolveLabelsInputNames(
+/** CLI label token UX → surface labels (exact) or labelDeltas (+/-). */
+function parseLabelsFieldInput(
   id: string,
   tokens: string[],
-  opts: SetOpts,
-  tail: SharedTailArgs,
-): Promise<string[]> {
+): Pick<SurfaceIssueUpdateInput, "labels" | "labelDeltas"> {
   if (tokens.length === 0) {
     throw new ValidationError(
       `missing value for \`set labels ${id}\``,
@@ -267,32 +259,18 @@ async function resolveLabelsInputNames(
     );
   }
 
-  const teamOverride = opts.team ?? tail.team;
-  const config = await resolveSetConfig(id, teamOverride);
-  const issue = await withClient((c) => c.issue(id));
-  if (!issue) throw new NotFoundError(`issue not found: ${id}`);
-  const issueIdentifier = typeof issue.identifier === "string" ? issue.identifier : id;
-  const teamKey = teamOverride ?? deriveTeamForMetadata(issueIdentifier, config.team);
-  const metadata = await withFreshMetadataOnMiss(
-    (o) => getTeamMetadata(config.repoHash, teamKey, o),
-    async (md) => md,
-  );
-
   if (tokens.length === 1 && tokens[0]?.startsWith("=")) {
-    return tokens[0]
-      .slice(1)
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean)
-      .map((name) => canonicalLabelName(metadata, name));
+    return {
+      labels: tokens[0]
+        .slice(1)
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean),
+    };
   }
 
-  const current = await issue.labels();
-  const currentNames = new Map<string, string>();
-  for (const label of current.nodes) {
-    currentNames.set(label.name.toLowerCase(), label.name);
-  }
-
+  const add: string[] = [];
+  const remove: string[] = [];
   for (const token of tokens) {
     if (token.startsWith("--")) {
       throw new ValidationError(
@@ -301,11 +279,9 @@ async function resolveLabelsInputNames(
       );
     }
     if (token.startsWith("+")) {
-      const name = canonicalLabelName(metadata, token.slice(1));
-      currentNames.set(name.toLowerCase(), name);
+      add.push(token.slice(1));
     } else if (token.startsWith("-")) {
-      const name = canonicalLabelName(metadata, token.slice(1));
-      currentNames.delete(name.toLowerCase());
+      remove.push(token.slice(1));
     } else {
       throw new ValidationError(
         `label token "${token}" must start with + or - (delta) or use =a,b,c (exact replacement)`,
@@ -314,20 +290,7 @@ async function resolveLabelsInputNames(
     }
   }
 
-  return Array.from(currentNames.values());
-}
-
-function deriveTeamForMetadata(identifier: string, fallbackTeam: string): string {
-  try {
-    return deriveTeamFromIdentifiers([identifier]) ?? fallbackTeam;
-  } catch {
-    return fallbackTeam;
-  }
-}
-
-function canonicalLabelName(metadata: TeamMetadata, name: string): string {
-  const id = resolveLabelId(metadata, name);
-  return metadata.labels.find((label) => label.id === id)?.name ?? name;
+  return { labelDeltas: { add, remove } };
 }
 
 function cacheWritebackFromIssueCache(cache: {
@@ -513,28 +476,16 @@ function sharedInputForOutput(
   field: UpdateField,
   input: SurfaceIssueUpdateInput,
 ): Record<string, unknown> {
+  if (field === "labels") {
+    if (input.labels !== undefined) return { labels: input.labels };
+    return { labels: input.labelDeltas };
+  }
   return { [field]: input[field] };
 }
 
 function parseEstimate(value: string): number | null {
   if (value === "null" || value === "none" || value === "") return null;
   return parseCliNumber(value, { optionName: "estimate", allowNullHint: true });
-}
-
-interface LinkResult {
-  op: "+" | "-";
-  kind: string;
-  target: string;
-  status:
-    | "created"
-    | "deleted"
-    | "unchanged"
-    | "created-writeback-failed"
-    | "deleted-writeback-failed"
-    | "already-absent"
-    | "error";
-  relationId?: string;
-  error?: string;
 }
 
 type CacheWritebackResult =
@@ -546,139 +497,23 @@ type CacheWritebackResult =
 async function handleLinks(id: string, valueArgs: string[], opts: SetOpts): Promise<void> {
   const yesFromVariadic = valueArgs.includes("--yes");
   const linkArgs = valueArgs.filter((arg) => arg !== "--yes");
-  if (linkArgs.length === 0) {
-    throw new ValidationError(
-      "`set links` requires at least one +KIND:ID or -KIND:ID token",
-      "pass one or more link delta tokens",
-    );
-  }
-
-  const deltas: LinkDelta[] = linkArgs.map(parseLinkToken);
   const confirmed = opts.yes === true || yesFromVariadic;
-  if (deltas.some((d) => d.op === "-") && !confirmed) {
-    throw new ValidationError(
-      "refusing to remove links without --yes",
-      "re-run with --yes to confirm this destructive state change",
-    );
-  }
-  if (relationBatchAddsRequireConfirmation(deltas) && !confirmed) {
-    throw new ValidationError(
-      "refusing to add multiple relation kinds for the same issue pair without --yes",
-      "Linear stores one relation per issue pair; re-run with --yes after verifying the batch replacement order is intended",
-    );
-  }
-  // Round-6 / H6: same auto-derive fallback as the main set path — link
-  // mutations are workspace-scoped (no team metadata needed); we only
-  // touch config for repoHash on the cache-refresh side. Derive team from
-  // the source identifier to avoid the `--team` requirement.
-  let config: Awaited<ReturnType<typeof resolveConfig>>;
-  try {
-    config = await resolveConfig({ teamOverride: opts.team });
-  } catch (err) {
-    if (!(err instanceof ConfigError)) throw err;
-    let derived: string | null = null;
-    try {
-      derived = deriveTeamFromIdentifiers([id]);
-    } catch {
-      // identifier wasn't TEAM-NN shape — fall through.
-    }
-    if (!derived) throw err;
-    config = await resolveConfig({ teamOverride: derived });
-  }
 
-  const selfIssue = await withClient((c) => c.issue(id));
-  if (!selfIssue) throw new NotFoundError(`issue not found: ${id}`);
-  const selfUuid = selfIssue.id;
-  const selfIdentifier = selfIssue.identifier;
-
-  // Resolve each target identifier → UUID in parallel.
-  const uniqueTargets = Array.from(new Set(deltas.map((d) => d.target)));
-  const targetMap = new Map<string, string>();
-  await mapLimit(uniqueTargets, 8, async (ident) => {
-    const issue = await withClient((c) => c.issue(ident));
-    if (!issue) throw new NotFoundError(`link target not found: ${ident}`);
-    targetMap.set(ident, issue.id);
-  });
-
-  const createPreflights = new Map<string, RelationCreatePreflight>();
-  for (const d of deltas.filter((delta) => delta.op === "+")) {
-    const key = relationDeltaKey(d);
-    if (createPreflights.has(key)) continue;
-    const preflight = await preflightCreateLink(selfIdentifier, d.target, d.kind);
-    assertRelationCreateConfirmed(preflight, confirmed);
-    createPreflights.set(key, preflight);
-  }
-
-  const results: LinkResult[] = [];
-  const dirtyPairs = new Set<string>();
-  for (const d of deltas) {
-    const targetUuid = targetMap.get(d.target);
-    if (!targetUuid) {
-      results.push({ ...d, status: "error", error: "target UUID missing" });
-      continue;
-    }
-    try {
-      if (d.op === "+") {
-        const pairKey = relationPairKey(d.target);
-        const preflight = dirtyPairs.has(pairKey)
-          ? await preflightCreateLink(selfIdentifier, d.target, d.kind)
-          : createPreflights.get(relationDeltaKey(d));
-        if (preflight) assertRelationCreateConfirmed(preflight, confirmed);
-        if (preflight?.exact) {
-          results.push({ ...d, status: "unchanged", relationId: preflight.exact.id });
-          continue;
-        }
-        const { id: relId } = await createLink(selfUuid, targetUuid, d.kind);
-        dirtyPairs.add(pairKey);
-        results.push({ ...d, status: "created", relationId: relId });
-      } else {
-        const relId = await findLink(selfIdentifier, d.target, d.kind);
-        if (!relId) {
-          results.push({ ...d, status: "already-absent" });
-        } else {
-          await deleteLink(relId);
-          dirtyPairs.add(relationPairKey(d.target));
-          results.push({ ...d, status: "deleted", relationId: relId });
-        }
-      }
-    } catch (err) {
-      results.push({ ...d, status: "error", error: (err as Error).message });
-    }
-  }
-
-  // Refresh cache snapshot if this issue was cached — relation mutations bump updatedAt.
-  let cacheWriteback: CacheWritebackResult = { status: "not-cached" };
-  try {
-    cacheWriteback = cacheWritebackFromLinkRefresh(
-      await refreshCachedIssueByIdentifier(selfIdentifier, {
-        repoHash: config.repoHash,
-        repoRoot: config.repoRoot,
-      }),
-    );
-    if (cacheWriteback.status === "failed") {
-      for (const result of results) {
-        if (result.status === "created") result.status = "created-writeback-failed";
-        if (result.status === "deleted") result.status = "deleted-writeback-failed";
-      }
-    }
-  } catch (err) {
-    cacheWriteback = { status: "failed", error: (err as Error).message };
-    for (const result of results) {
-      if (result.status === "created") result.status = "created-writeback-failed";
-      if (result.status === "deleted") result.status = "deleted-writeback-failed";
-    }
-  }
+  const result = await executeRelationUpdate(
+    buildRelationUpdateInputFromCli({
+      id,
+      tokens: linkArgs,
+      opts: { yes: confirmed },
+    }),
+    cliRelationCacheDeps,
+  );
+  const payload = relationUpdateCliPayload(result);
+  const cacheWriteback = payload.cache_writeback;
 
   if (opts.json) {
-    process.stdout.write(
-      `${JSON.stringify(
-        envelope({ identifier: selfIdentifier, results, cache_writeback: cacheWriteback }),
-        null,
-        2,
-      )}\n`,
-    );
+    process.stdout.write(`${JSON.stringify(envelope(payload), null, 2)}\n`);
   } else {
-    for (const r of results) {
+    for (const r of payload.results) {
       const icon =
         r.status === "error" || r.status.endsWith("-writeback-failed")
           ? chalk.red("✗")
@@ -688,31 +523,11 @@ async function handleLinks(id: string, valueArgs: string[], opts: SetOpts): Prom
       const label = `${r.op}${r.kind}:${r.target}`;
       const note =
         r.status === "error" ? ` ${chalk.red(r.error ?? "")}` : ` ${chalk.gray(r.status)}`;
-      process.stdout.write(`${icon} ${chalk.bold(selfIdentifier)} ${label}${note}\n`);
+      process.stdout.write(`${icon} ${chalk.bold(payload.identifier)} ${label}${note}\n`);
     }
   }
 
-  if (results.some((r) => r.status === "error") || cacheWriteback.status === "failed") {
+  if (payload.results.some((r) => r.status === "error") || cacheWriteback.status === "failed") {
     process.exitCode = 1;
   }
-}
-
-function cacheWritebackFromLinkRefresh(result: {
-  present: boolean;
-  refreshed: boolean;
-  dirty?: { fields: string[] };
-  error?: { code: string; message: string; hint?: string };
-}): CacheWritebackResult {
-  if (result.refreshed) return { status: "refreshed" };
-  if (!result.present && result.error === undefined) return { status: "not-cached" };
-  if (result.error?.code === "not_found") return { status: "skipped-no-remote-row" };
-  if (result.error) {
-    return {
-      status: "failed",
-      error: result.error.message,
-      code: result.error.code,
-      ...(result.dirty ? { dirty: result.dirty } : {}),
-    };
-  }
-  return { status: "failed", error: "cache refresh did not complete" };
 }

@@ -1,8 +1,13 @@
 import chalk from "chalk";
 import type { Command } from "commander";
-import { diffIssueCacheVsRemote, diffProjectCacheVsRemote, type FieldDiff } from "../lib/diff.ts";
 import { envelope } from "../lib/envelope.ts";
-import { ValidationError } from "../lib/errors.ts";
+import {
+  buildCacheDiffIssueInputFromCli,
+  buildCacheDiffProjectInputFromCli,
+  executeCacheDiffIssue,
+  executeCacheDiffProject,
+  type FieldDiff,
+} from "../surface/cache.ts";
 
 interface DiffOpts {
   team?: string;
@@ -21,13 +26,9 @@ export function registerDiff(program: Command): void {
     .option("--json", "emit structured diff instead of human output")
     .action(async (id: string | undefined, opts: DiffOpts) => {
       if (opts.projectId) {
-        if (id) {
-          throw new ValidationError(
-            "pass either an issue id or --project-id, not both",
-            "choose one diff target",
-          );
-        }
-        const result = await diffProjectCacheVsRemote(opts.projectId, { team: opts.team });
+        const result = await executeCacheDiffProject(
+          buildCacheDiffProjectInputFromCli({ id, opts }),
+        );
         const hasDrift = result.fields.length > 0;
         process.exitCode = hasDrift ? 1 : 0;
         if (opts.json) {
@@ -43,13 +44,7 @@ export function registerDiff(program: Command): void {
         );
         return;
       }
-      if (!id) {
-        throw new ValidationError(
-          "missing issue id; pass an issue id or --project-id <uuid>",
-          "pass an issue identifier or --project-id <uuid>",
-        );
-      }
-      const result = await diffIssueCacheVsRemote(id, { team: opts.team });
+      const result = await executeCacheDiffIssue(buildCacheDiffIssueInputFromCli({ id, opts }));
 
       // Set exit code BEFORE branching on output mode — both --json and
       // human paths must honor `git diff --exit-code` semantics so CI gates

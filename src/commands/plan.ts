@@ -1,17 +1,30 @@
 import chalk from "chalk";
 import type { Command } from "commander";
-import { resolveConfig } from "../lib/config.ts";
 import { envelope } from "../lib/envelope.ts";
-import { ValidationError } from "../lib/errors.ts";
-import { applyPlan, preflightPlanApply } from "../lib/planApply.ts";
+import type { ApplyResult } from "../lib/planApply.ts";
 import type { PlanDiffResult } from "../lib/planDiff.ts";
-import { diffPlan } from "../lib/planDiff.ts";
-import { countRemainingPlanLintWarnings, lintPlanFiles } from "../lib/planLint.ts";
-import { parsePlan } from "../lib/planParse.ts";
-import { pullPlan } from "../lib/planPull.ts";
+import type { PullResult } from "../lib/planPull.ts";
 import type { ParsedPlan, ValidationResult } from "../lib/planTypes.ts";
-import { validatePlanWithFreshTeamMetadata } from "../lib/planValidate.ts";
-import { getTeamMetadata } from "../lib/resolve.ts";
+import {
+  buildPlanApplyInputFromCli,
+  buildPlanDiffInputFromCli,
+  buildPlanLintInputFromCli,
+  buildPlanPullInputFromCli,
+  buildPlanValidateInputFromCli,
+  executePlanApply,
+  executePlanDiff,
+  executePlanLint,
+  executePlanPull,
+  executePlanValidate,
+  hasPlanDiffFailure,
+  planApplyCliPayload,
+  planApplyHasErrors,
+  planDiffCliPayload,
+  planLintCliPayload,
+  planPullCliPayload,
+  planPullHasErrors,
+  planValidateCliPayload,
+} from "../surface/plan.ts";
 
 interface CommonOpts {
   team?: string;
@@ -49,25 +62,14 @@ export function registerPlan(program: Command): void {
     .option("--team <key>", "override the resolved team")
     .option("--json", "emit structured result")
     .action(async (dir: string, opts: CommonOpts) => {
-      const parsed = await parsePlan(dir);
-      const team = opts.team ?? parsed.project.frontmatter.team;
-      const config = await resolveConfig({ teamOverride: team });
-      const lintCtx = {
-        repoConfig: config.repoConfig,
-        workspaceUrlPrefix: config.workspaceUrlPrefix,
-      };
-      const { validation: result } = await validatePlanWithFreshTeamMetadata(parsed, {
-        repoHash: config.repoHash,
-        team: config.team,
-        lintCtx,
-      });
+      const result = await executePlanValidate(buildPlanValidateInputFromCli({ dir, opts }));
 
       if (opts.json) {
         process.stdout.write(
-          `${JSON.stringify(envelope({ ...summarizeParse(parsed), ...result }), null, 2)}\n`,
+          `${JSON.stringify(envelope(planValidateCliPayload(result)), null, 2)}\n`,
         );
       } else {
-        printValidate(parsed, result);
+        printValidate(result.parsed, result.validation);
       }
       if (result.errors.length > 0) process.exitCode = 1;
     });
@@ -86,52 +88,33 @@ export function registerPlan(program: Command): void {
     .option("--strict", "block any issue whose body has lint warnings")
     .option("--json", "emit structured result")
     .action(async (dir: string, opts: ApplyCmdOpts) => {
-      const dryRun = opts.dryRun === true;
-      if (opts.force === true && !dryRun && !isConfirmed(opts)) {
-        throw new ValidationError(
-          "refusing to apply plan with --force without --yes/--confirm",
-          "run with --dry-run to preview, or pass --yes/--confirm after verifying plan stale-guard bypass is intended",
-        );
-      }
-      const parsed = await parsePlan(dir);
-      const team = opts.team ?? parsed.project.frontmatter.team;
-      const config = await resolveConfig({ teamOverride: team });
-      const lintCtx = {
-        repoConfig: config.repoConfig,
-        workspaceUrlPrefix: config.workspaceUrlPrefix,
-      };
-      const { teamMetadata, validation } = await validatePlanWithFreshTeamMetadata(parsed, {
-        repoHash: config.repoHash,
-        team: config.team,
-        lintCtx,
-      });
+      const outcome = await executePlanApply(buildPlanApplyInputFromCli({ dir, opts }));
 
-      // Fail fast on validation errors; proceed on warnings.
-      if (validation.errors.length > 0) {
+      if (outcome.kind === "validation_failed") {
         if (opts.json) {
-          process.stdout.write(`${JSON.stringify(envelope({ validation }), null, 2)}\n`);
+          process.stdout.write(
+            `${JSON.stringify(envelope(planApplyCliPayload(outcome)), null, 2)}\n`,
+          );
         } else {
-          printValidate(parsed, validation);
+          printValidate(outcome.parsed, outcome.validation);
         }
         process.exitCode = 1;
         return;
       }
 
-      // Surface warnings non-fatally.
-      if (validation.warnings.length > 0 && !opts.json) {
-        printWarnings(validation.warnings);
+      if (outcome.warnings.length > 0 && !opts.json) {
+        printWarnings(outcome.warnings);
       }
 
-      const preflight = await preflightPlanApply(parsed);
-      if (!preflight.ready) {
+      if (outcome.kind === "preflight_failed") {
         if (opts.json) {
           process.stdout.write(
-            `${JSON.stringify(envelope({ dry_run: dryRun, preflight }), null, 2)}\n`,
+            `${JSON.stringify(envelope(planApplyCliPayload(outcome)), null, 2)}\n`,
           );
         } else {
-          const label = dryRun ? "refusing dry-run preview:" : "refusing to apply:";
+          const label = outcome.dryRun ? "refusing dry-run preview:" : "refusing to apply:";
           process.stderr.write(`${chalk.yellow(label)} plan preflight failed\n`);
-          for (const blocker of preflight.blockers) {
+          for (const blocker of outcome.preflight.blockers) {
             process.stderr.write(`  - ${blocker}\n`);
           }
         }
@@ -139,34 +122,15 @@ export function registerPlan(program: Command): void {
         return;
       }
 
-      const result = await applyPlan(parsed, teamMetadata, {
-        dryRun,
-        force: opts.force,
-        strict: opts.strict,
-        lintCtx,
-      });
-
       if (opts.json) {
         process.stdout.write(
-          `${JSON.stringify(envelope({ dry_run: dryRun, ...result }), null, 2)}\n`,
+          `${JSON.stringify(envelope(planApplyCliPayload(outcome)), null, 2)}\n`,
         );
       } else {
-        printApply(result, dryRun);
+        printApply(outcome.result, outcome.dryRun);
       }
 
-      const hasErrors =
-        result.project.status === "error" ||
-        result.project.status === "created-writeback-failed" ||
-        result.project.status === "updated-writeback-failed" ||
-        result.issues.some(
-          (i) =>
-            i.status === "error" ||
-            i.status === "lint-blocked" ||
-            i.status === "created-writeback-failed" ||
-            i.status === "updated-writeback-failed",
-        ) ||
-        result.relations.some((r) => r.status === "error");
-      if (hasErrors) process.exitCode = 1;
+      if (planApplyHasErrors(outcome)) process.exitCode = 1;
     });
 
   plan
@@ -175,18 +139,14 @@ export function registerPlan(program: Command): void {
     .option("--team <key>", "override the resolved team")
     .option("--json", "emit structured result")
     .action(async (dir: string, opts: CommonOpts) => {
-      const parsed = await parsePlan(dir);
-      const team = opts.team ?? parsed.project.frontmatter.team;
-      const config = await resolveConfig({ teamOverride: team });
-      const teamMetadata = await getTeamMetadata(config.repoHash, config.team);
-      const result = await diffPlan(parsed, teamMetadata);
+      const outcome = await executePlanDiff(buildPlanDiffInputFromCli({ dir, opts }));
 
       if (opts.json) {
-        process.stdout.write(`${JSON.stringify(envelope({ ...result }), null, 2)}\n`);
+        process.stdout.write(`${JSON.stringify(envelope(planDiffCliPayload(outcome)), null, 2)}\n`);
       } else {
-        printDiff(result);
+        printDiff(outcome.result);
       }
-      if (hasDiffFailure(result)) process.exitCode = 1;
+      if (hasPlanDiffFailure(outcome.result)) process.exitCode = 1;
     });
 
   plan
@@ -197,38 +157,14 @@ export function registerPlan(program: Command): void {
     .option("--strict", "exit non-zero when any warning remains")
     .option("--json", "emit structured result")
     .action(async (dir: string, opts: PlanLintOpts) => {
-      const parsed = await parsePlan(dir);
-      const team = opts.team ?? parsed.project.frontmatter.team;
-      const config = await resolveConfig({ teamOverride: team });
-      const lintCtx = {
-        repoConfig: config.repoConfig,
-        workspaceUrlPrefix: config.workspaceUrlPrefix,
-      };
-
-      const perFile = await lintPlanFiles(parsed, { fix: opts.fix, lintCtx });
+      const result = await executePlanLint(buildPlanLintInputFromCli({ dir, opts }));
 
       if (opts.json) {
-        const remaining = countRemainingPlanLintWarnings(perFile, Boolean(opts.fix));
-        process.stdout.write(
-          `${JSON.stringify(
-            envelope({
-              dir,
-              files: perFile.map((f) => ({
-                path: f.path,
-                warnings: f.warnings,
-                fixed: f.fixed,
-              })),
-              remaining_warnings: remaining,
-              strict_failed: opts.strict === true && remaining > 0,
-            }),
-            null,
-            2,
-          )}\n`,
-        );
+        process.stdout.write(`${JSON.stringify(envelope(planLintCliPayload(result)), null, 2)}\n`);
       } else {
         let total = 0;
         let fixed = 0;
-        for (const f of perFile) {
+        for (const f of result.files) {
           if (f.warnings.length === 0) continue;
           process.stdout.write(`\n${chalk.bold(f.path)}\n`);
           for (const w of f.warnings) {
@@ -252,13 +188,12 @@ export function registerPlan(program: Command): void {
         }
         process.stdout.write(
           `\n${chalk.gray(
-            `${perFile.length} file(s) checked · ${total} warning(s)${opts.fix ? ` · ${fixed} fixed` : ""}\n`,
+            `${result.files.length} file(s) checked · ${total} warning(s)${opts.fix ? ` · ${fixed} fixed` : ""}\n`,
           )}`,
         );
       }
 
-      const remaining = countRemainingPlanLintWarnings(perFile, Boolean(opts.fix));
-      if (opts.strict && remaining > 0) process.exitCode = 1;
+      if (result.strict && result.remaining_warnings > 0) process.exitCode = 1;
     });
 
   plan
@@ -271,89 +206,42 @@ export function registerPlan(program: Command): void {
     .option("--include-new", "also import issues that exist on remote but not in the plan")
     .option("--json", "emit structured result")
     .action(async (dir: string, opts: PullCmdOpts) => {
-      if (opts.force === true && !isConfirmed(opts)) {
-        throw new ValidationError(
-          "refusing to pull plan with --force without --yes/--confirm",
-          "run `lebop plan diff` to inspect first, or pass --yes/--confirm after verifying local file overwrite is intended",
-        );
-      }
-      const parsed = await parsePlan(dir);
-      const team = opts.team ?? parsed.project.frontmatter.team;
-      const config = await resolveConfig({ teamOverride: team });
-      const teamMetadata = await getTeamMetadata(config.repoHash, config.team);
+      const outcome = await executePlanPull(buildPlanPullInputFromCli({ dir, opts }));
 
-      if (!opts.force) {
-        const preDiff = await diffPlan(parsed, teamMetadata);
-        if (hasDiffFailure(preDiff)) {
-          const refused = preDiff.has_incomplete_scan
-            ? "diff-scan-incomplete"
-            : preDiff.has_blockers
-              ? "diff-blocker-detected"
-              : "drift-detected";
-          const hint = preDiff.has_incomplete_scan
-            ? "run `lebop plan diff` to inspect the scan failure, then retry once Linear is reachable or re-run with --force --yes after verifying local file overwrite is intended"
-            : "run `lebop plan diff` to inspect, then re-run with --force --yes after verifying local file overwrite is intended";
-          if (opts.json) {
-            process.stdout.write(
-              `${JSON.stringify(
-                envelope({
-                  refused,
-                  hint,
-                  diff: preDiff,
-                }),
-                null,
-                2,
-              )}\n`,
-            );
-          } else {
-            if (preDiff.has_incomplete_scan) {
-              process.stderr.write(
-                `${chalk.yellow("refusing to pull:")} remote-only issue scan failed. Run \`lebop plan diff ${dir}\` to inspect, then retry once Linear is reachable or \`lebop plan pull ${dir} --force --yes\` after verifying local file overwrite is intended.\n`,
-              );
-            } else {
-              process.stderr.write(
-                `${chalk.yellow("refusing to pull:")} local plan has drift. Run \`lebop plan diff ${dir}\` to inspect, then \`lebop plan pull ${dir} --force --yes\` after verifying local file overwrite is intended.\n`,
-              );
-            }
-          }
-          process.exitCode = 1;
-          return;
+      if (outcome.kind === "refused") {
+        if (opts.json) {
+          process.stdout.write(
+            `${JSON.stringify(
+              envelope({
+                refused: outcome.refused,
+                hint: outcome.cliHint,
+                diff: outcome.diff,
+              }),
+              null,
+              2,
+            )}\n`,
+          );
+        } else if (outcome.diff.has_incomplete_scan) {
+          process.stderr.write(
+            `${chalk.yellow("refusing to pull:")} remote-only issue scan failed. Run \`lebop plan diff ${dir}\` to inspect, then retry once Linear is reachable or \`lebop plan pull ${dir} --force --yes\` after verifying local file overwrite is intended.\n`,
+          );
+        } else {
+          process.stderr.write(
+            `${chalk.yellow("refusing to pull:")} local plan has drift. Run \`lebop plan diff ${dir}\` to inspect, then \`lebop plan pull ${dir} --force --yes\` after verifying local file overwrite is intended.\n`,
+          );
         }
+        process.exitCode = 1;
+        return;
       }
 
-      const result = await pullPlan(parsed, teamMetadata, { includeNew: opts.includeNew });
       if (opts.json) {
-        process.stdout.write(`${JSON.stringify(envelope({ ...result }), null, 2)}\n`);
+        process.stdout.write(`${JSON.stringify(envelope(planPullCliPayload(outcome)), null, 2)}\n`);
       } else {
-        printPull(result);
+        printPull(outcome.result);
       }
 
-      const hasErrors =
-        result.project.status === "error" ||
-        result.issues.some((i) => i.status === "error" || i.status === "missing-remote") ||
-        result.new_import_errors.length > 0 ||
-        result.remote_scan_error !== undefined;
-      if (hasErrors) process.exitCode = 1;
+      if (planPullHasErrors(outcome.result)) process.exitCode = 1;
     });
-}
-
-function summarizeParse(plan: ParsedPlan) {
-  return {
-    dir: plan.dir,
-    project: {
-      name: plan.project.frontmatter.name,
-      linear_id: plan.project.frontmatter.linear_id ?? null,
-    },
-    issues: plan.issues.map((i) => ({
-      slug: i.slug,
-      title: i.frontmatter.title,
-      linear_id: i.frontmatter.linear_id ?? null,
-    })),
-  };
-}
-
-function isConfirmed(opts: { yes?: boolean; confirm?: boolean }): boolean {
-  return opts.yes === true || opts.confirm === true;
 }
 
 function printValidate(parsed: ParsedPlan, result: ValidationResult): void {
@@ -381,7 +269,7 @@ function printWarnings(warnings: ValidationResult["warnings"]): void {
   }
 }
 
-function printApply(result: Awaited<ReturnType<typeof applyPlan>>, dryRun: boolean): void {
+function printApply(result: ApplyResult, dryRun: boolean): void {
   const tag = dryRun ? chalk.gray("[dry-run] ") : "";
   const projIcon = statusIcon(result.project.status);
   process.stdout.write(
@@ -413,7 +301,7 @@ function printApply(result: Awaited<ReturnType<typeof applyPlan>>, dryRun: boole
 }
 
 function printDiff(result: PlanDiffResult): void {
-  if (!hasDiffFailure(result)) {
+  if (!hasPlanDiffFailure(result)) {
     process.stdout.write(`${chalk.green("✓")} plan matches Linear — no drift\n`);
   }
 
@@ -476,11 +364,7 @@ function printDiff(result: PlanDiffResult): void {
   }
 }
 
-function hasDiffFailure(result: PlanDiffResult): boolean {
-  return result.has_drift || result.has_blockers || result.has_incomplete_scan;
-}
-
-function printPull(result: Awaited<ReturnType<typeof pullPlan>>): void {
+function printPull(result: PullResult): void {
   const p = result.project;
   process.stdout.write(
     `${pullIcon(p.status)} project/${chalk.bold(p.name)}  ${chalk.gray(p.status)}${p.error ? `  ${chalk.red(p.error)}` : ""}\n`,

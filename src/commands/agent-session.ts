@@ -1,9 +1,16 @@
 import chalk from "chalk";
 import type { Command } from "commander";
-import { getAgentSession, listAgentSessions } from "../lib/agentSessions.ts";
-import { parseCliLimit } from "../lib/cliOptions.ts";
 import { envelope } from "../lib/envelope.ts";
-import { NotFoundError } from "../lib/errors.ts";
+import {
+  agentSessionListPayload,
+  buildAgentSessionGetInput,
+  buildAgentSessionListInputFromCli,
+  executeAgentSessionGet,
+  executeAgentSessionList,
+} from "../surface/agent-sessions.ts";
+
+const AGENT_SESSION_NOT_FOUND_HINT =
+  "verify the agent session UUID; run `lebop agent-session list` to discover ids";
 
 export function registerAgentSession(program: Command): void {
   const cmd = program
@@ -18,29 +25,20 @@ export function registerAgentSession(program: Command): void {
     .option("--limit <n>", "default 50; pass 0 for no limit", "50")
     .option("--json", "emit structured records")
     .action(async (opts: { status?: string; issueId?: string; limit?: string; json?: boolean }) => {
-      const max = parseCliLimit(opts.limit, { defaultValue: 50, zeroMeansInfinity: true });
-      const sessions = await listAgentSessions({
-        status: opts.status,
-        issueId: opts.issueId,
-        max,
-      });
+      const result = await executeAgentSessionList(buildAgentSessionListInputFromCli({ opts }));
 
       if (opts.json) {
         process.stdout.write(
-          `${JSON.stringify(
-            envelope({ count: sessions.length, agent_sessions: sessions }),
-            null,
-            2,
-          )}\n`,
+          `${JSON.stringify(envelope(agentSessionListPayload(result)), null, 2)}\n`,
         );
         return;
       }
 
-      if (sessions.length === 0) {
+      if (result.agent_sessions.length === 0) {
         process.stdout.write("no agent sessions\n");
         return;
       }
-      for (const s of sessions) {
+      for (const s of result.agent_sessions) {
         const status = s.status ? chalk.cyan(`[${s.status}]`) : "";
         const issue = s.issue ? chalk.bold(s.issue.identifier) : chalk.gray("(no issue)");
         const who = s.creator ? chalk.gray(s.creator.name) : "";
@@ -53,12 +51,10 @@ export function registerAgentSession(program: Command): void {
     .description("show one agent session by UUID")
     .option("--json", "emit structured result")
     .action(async (id: string, opts: { json?: boolean }) => {
-      const session = await getAgentSession(id);
-      if (!session)
-        throw new NotFoundError(
-          `agent session not found: ${id}`,
-          "verify the agent session UUID; run `lebop agent-session list` to discover ids",
-        );
+      const session = await executeAgentSessionGet(
+        buildAgentSessionGetInput(id),
+        AGENT_SESSION_NOT_FOUND_HINT,
+      );
 
       if (opts.json) {
         process.stdout.write(`${JSON.stringify(envelope({ agent_session: session }), null, 2)}\n`);

@@ -1,12 +1,14 @@
 import chalk from "chalk";
 import type { Command } from "commander";
 import { envelope } from "../lib/envelope.ts";
-import { NotFoundError, ValidationError } from "../lib/errors.ts";
 import { resolveBody } from "../lib/io.ts";
-import { resolveExistingProjectId, resolveProjectId } from "../lib/milestones.ts";
-import { createProjectUpdate, listProjectUpdates, type ProjectHealth } from "../lib/projects.ts";
-
-const HEALTH_VALUES = ["onTrack", "atRisk", "offTrack"] as const;
+import {
+  buildProjectUpdateCreateInputFromCli,
+  buildProjectUpdateListInputFromCli,
+  executeProjectUpdateCreate,
+  executeProjectUpdateList,
+  projectUpdateListPayload,
+} from "../surface/project-updates.ts";
 
 /**
  * `lebop project-update create|list` — manage project status updates with
@@ -37,35 +39,19 @@ export function registerProjectUpdate(program: Command): void {
           json?: boolean;
         },
       ) => {
-        const projectId = await resolveProjectId(project);
-        if (!projectId) throw new NotFoundError(`project not found: ${project}`);
-
         const body = await resolveBody(opts);
-        if (!body.trim()) {
-          throw new ValidationError("empty update body", "pass --body, --body-file, or --stdin");
-        }
-
-        let health: ProjectHealth | undefined;
-        if (opts.health) {
-          if (!(HEALTH_VALUES as readonly string[]).includes(opts.health)) {
-            throw new ValidationError(
-              `invalid --health "${opts.health}". expected: ${HEALTH_VALUES.join(", ")}`,
-              `expected one of: ${HEALTH_VALUES.join(", ")}`,
-            );
-          }
-          health = opts.health as ProjectHealth;
-        }
-
-        const created = await createProjectUpdate({ projectId, body, health });
+        const result = await executeProjectUpdateCreate(
+          buildProjectUpdateCreateInputFromCli({ project, body, health: opts.health }),
+        );
 
         if (opts.json) {
           process.stdout.write(
-            `${JSON.stringify(envelope({ project_update: created }), null, 2)}\n`,
+            `${JSON.stringify(envelope({ project_update: result.project_update }), null, 2)}\n`,
           );
           return;
         }
         process.stdout.write(
-          `${chalk.green("✓")} posted update on project ${chalk.gray(projectId)}${health ? `  ${chalk.cyan(health)}` : ""}\n`,
+          `${chalk.green("✓")} posted update on project ${chalk.gray(result.project_id)}${result.project_update.health ? `  ${chalk.cyan(result.project_update.health)}` : ""}\n`,
         );
       },
     );
@@ -75,30 +61,21 @@ export function registerProjectUpdate(program: Command): void {
     .description("list status updates on a project (project is name or UUID)")
     .option("--json", "emit structured records")
     .action(async (project: string, opts: { json?: boolean }) => {
-      const projectId = await resolveExistingProjectId(project);
-      if (!projectId) throw new NotFoundError(`project not found: ${project}`);
-
-      const updates = await listProjectUpdates(projectId);
+      const result = await executeProjectUpdateList(
+        buildProjectUpdateListInputFromCli({ project }),
+      );
       if (opts.json) {
         process.stdout.write(
-          `${JSON.stringify(
-            envelope({
-              project_id: projectId,
-              count: updates.length,
-              updates,
-            }),
-            null,
-            2,
-          )}\n`,
+          `${JSON.stringify(envelope(projectUpdateListPayload(result)), null, 2)}\n`,
         );
         return;
       }
 
-      if (updates.length === 0) {
+      if (result.updates.length === 0) {
         process.stdout.write("no updates\n");
         return;
       }
-      for (const u of updates) {
+      for (const u of result.updates) {
         const health = u.health ? `  ${chalk.cyan(u.health)}` : "";
         const who = u.user ? `${u.user.name} <${u.user.email}>` : "unknown";
         process.stdout.write(

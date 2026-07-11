@@ -1,22 +1,18 @@
 import chalk from "chalk";
 import type { Command } from "commander";
-import {
-  type IssueCacheRefreshResult,
-  refreshCachedIssueByIdentifier,
-} from "../lib/cacheRefresh.ts";
 import { envelope } from "../lib/envelope.ts";
-import { NotFoundError, ValidationError } from "../lib/errors.ts";
+import { LINK_KINDS } from "../lib/relations.ts";
 import {
-  assertRelationCreateConfirmed,
-  createLink,
-  deleteLink,
-  findLink,
-  LINK_KINDS,
-  type LinkKind,
-  listRelations,
-  preflightCreateLink,
-} from "../lib/relations.ts";
-import { withClient } from "../lib/sdk.ts";
+  buildRelationAddInputFromCli,
+  buildRelationDeleteInputFromCli,
+  buildRelationListInputFromCli,
+  executeRelationAdd,
+  executeRelationDelete,
+  executeRelationList,
+  relationAddCliPayload,
+  relationDeleteCliPayload,
+  relationListPayload,
+} from "../surface/relations.ts";
 
 /**
  * `lebop relation add|delete|list` — first-class wrapper around lib/relations.ts.
@@ -41,85 +37,39 @@ export function registerRelation(program: Command): void {
     .option("--json", "emit structured result")
     .action(
       async (id: string, kind: string, other: string, opts: { json?: boolean; yes?: boolean }) => {
-        const linkKind = parseKind(kind);
-        const upperId = id.toUpperCase();
-        const upperOther = other.toUpperCase();
-        const preflight = await preflightCreateLink(upperId, upperOther, linkKind);
-        assertRelationCreateConfirmed(preflight, opts.yes === true);
+        const result = await executeRelationAdd(
+          buildRelationAddInputFromCli({ id, kind, other, opts }),
+        );
 
-        // Resolve both issues to UUIDs in parallel.
-        const [self, target] = await Promise.all([
-          withClient((c) => c.issue(upperId)),
-          withClient((c) => c.issue(upperOther)),
-        ]);
-        if (!self) throw new NotFoundError(`issue not found: ${upperId}`);
-        if (!target) throw new NotFoundError(`link target not found: ${upperOther}`);
-
-        if (preflight.exact) {
-          const cacheWriteback: IssueCacheRefreshResult = {
-            checked: false,
-            present: false,
-            refreshed: false,
-            identifier: upperId,
-          };
+        if (result.status === "unchanged") {
           if (opts.json) {
             process.stdout.write(
-              `${JSON.stringify(
-                envelope({
-                  op: "add",
-                  from: upperId,
-                  kind: linkKind,
-                  to: upperOther,
-                  status: "unchanged",
-                  relation_id: preflight.exact.id,
-                  relation_preflight: preflight,
-                  cache_writeback: cacheWriteback,
-                }),
-                null,
-                2,
-              )}\n`,
+              `${JSON.stringify(envelope(relationAddCliPayload(result)), null, 2)}\n`,
             );
             return;
           }
           process.stdout.write(
-            `${chalk.gray("·")} ${chalk.bold(upperId)} ${chalk.cyan(linkKind)} ${chalk.bold(upperOther)} ${chalk.gray(`(${preflight.exact.id}, already present)`)}\n`,
+            `${chalk.gray("·")} ${chalk.bold(result.requestedFrom)} ${chalk.cyan(result.kind)} ${chalk.bold(result.to)} ${chalk.gray(`(${result.relationId}, already present)`)}\n`,
           );
           return;
         }
-
-        const result = await createLink(self.id, target.id, linkKind);
-        const cacheWriteback = await refreshCachedIssueByIdentifier(upperId);
-        const status = relationStatus("created", cacheWriteback);
 
         if (opts.json) {
           process.stdout.write(
-            `${JSON.stringify(
-              envelope({
-                op: "add",
-                from: upperId,
-                kind: linkKind,
-                to: upperOther,
-                status,
-                relation_id: result.id,
-                relation_preflight: preflight,
-                cache_writeback: cacheWriteback,
-              }),
-              null,
-              2,
-            )}\n`,
+            `${JSON.stringify(envelope(relationAddCliPayload(result)), null, 2)}\n`,
           );
-          if (relationWritebackFailed(cacheWriteback)) process.exitCode = 1;
+          if (result.writebackFailed) process.exitCode = 1;
           return;
         }
-        if (relationWritebackFailed(cacheWriteback)) {
+        if (result.writebackFailed) {
           process.stdout.write(
-            `${chalk.red("✗")} ${chalk.bold(upperId)} ${chalk.cyan(linkKind)} ${chalk.bold(upperOther)} created in Linear but local cache writeback failed: ${cacheWriteback.error?.message ?? "unknown error"}\n`,
+            `${chalk.red("✗")} ${chalk.bold(result.requestedFrom)} ${chalk.cyan(result.kind)} ${chalk.bold(result.to)} created in Linear but local cache writeback failed: ${result.cache.error?.message ?? "unknown error"}\n`,
           );
           process.exitCode = 1;
           return;
         }
         process.stdout.write(
-          `${chalk.green("✓")} ${chalk.bold(upperId)} ${chalk.cyan(linkKind)} ${chalk.bold(upperOther)} ${chalk.gray(`(${result.id})`)}${cacheWriteback.refreshed ? chalk.gray(" (cache refreshed)") : ""}\n`,
+          `${chalk.green("✓")} ${chalk.bold(result.requestedFrom)} ${chalk.cyan(result.kind)} ${chalk.bold(result.to)} ${chalk.gray(`(${result.relationId})`)}${result.cache.refreshed ? chalk.gray(" (cache refreshed)") : ""}\n`,
         );
       },
     );
@@ -131,71 +81,39 @@ export function registerRelation(program: Command): void {
     .option("--json", "emit structured result")
     .action(
       async (id: string, kind: string, other: string, opts: { json?: boolean; yes?: boolean }) => {
-        if (!opts.yes) {
-          throw new ValidationError(
-            "refusing to delete relation without --yes",
-            "re-run with --yes to confirm this destructive state change",
-          );
-        }
-        const linkKind = parseKind(kind);
-        const upperId = id.toUpperCase();
-        const upperOther = other.toUpperCase();
+        const result = await executeRelationDelete(
+          buildRelationDeleteInputFromCli({ id, kind, other, opts }),
+        );
 
-        const relationId = await findLink(upperId, upperOther, linkKind);
-        if (!relationId) {
+        if (result.status === "already-absent") {
           if (opts.json) {
             process.stdout.write(
-              `${JSON.stringify(
-                envelope({
-                  op: "delete",
-                  from: upperId,
-                  kind: linkKind,
-                  to: upperOther,
-                  status: "already-absent",
-                }),
-                null,
-                2,
-              )}\n`,
+              `${JSON.stringify(envelope(relationDeleteCliPayload(result)), null, 2)}\n`,
             );
           } else {
             process.stdout.write(
-              `${chalk.gray("·")} ${chalk.bold(upperId)} ${chalk.cyan(linkKind)} ${chalk.bold(upperOther)} ${chalk.gray("(already absent)")}\n`,
+              `${chalk.gray("·")} ${chalk.bold(result.from)} ${chalk.cyan(result.kind)} ${chalk.bold(result.to)} ${chalk.gray("(already absent)")}\n`,
             );
           }
           return;
         }
 
-        await deleteLink(relationId);
-        const cacheWriteback = await refreshCachedIssueByIdentifier(upperId);
-        const status = relationStatus("deleted", cacheWriteback);
         if (opts.json) {
           process.stdout.write(
-            `${JSON.stringify(
-              envelope({
-                op: "delete",
-                from: upperId,
-                kind: linkKind,
-                to: upperOther,
-                status,
-                relation_id: relationId,
-                cache_writeback: cacheWriteback,
-              }),
-              null,
-              2,
-            )}\n`,
+            `${JSON.stringify(envelope(relationDeleteCliPayload(result)), null, 2)}\n`,
           );
-          if (relationWritebackFailed(cacheWriteback)) process.exitCode = 1;
+          if (result.writebackFailed) process.exitCode = 1;
           return;
         }
-        if (relationWritebackFailed(cacheWriteback)) {
+        if (result.writebackFailed) {
           process.stdout.write(
-            `${chalk.red("✗")} removed ${chalk.bold(upperId)} ${chalk.cyan(linkKind)} ${chalk.bold(upperOther)} in Linear but local cache writeback failed: ${cacheWriteback.error?.message ?? "unknown error"}\n`,
+            `${chalk.red("✗")} removed ${chalk.bold(result.from)} ${chalk.cyan(result.kind)} ${chalk.bold(result.to)} in Linear but local cache writeback failed: ${result.cache?.error?.message ?? "unknown error"}\n`,
           );
           process.exitCode = 1;
           return;
         }
         process.stdout.write(
-          `${chalk.green("✓")} removed ${chalk.bold(upperId)} ${chalk.cyan(linkKind)} ${chalk.bold(upperOther)} ${chalk.gray(`(${relationId})`)}${cacheWriteback.refreshed ? chalk.gray(" (cache refreshed)") : ""}\n`,
+          `${chalk.green("✓")} removed ${chalk.bold(result.from)} ${chalk.cyan(result.kind)} ${chalk.bold(result.to)} ${chalk.gray(`(${result.relationId})`)}${result.cache?.refreshed ? chalk.gray(" (cache refreshed)") : ""}\n`,
         );
       },
     );
@@ -205,63 +123,26 @@ export function registerRelation(program: Command): void {
     .description("list outbound + inbound relations for an issue")
     .option("--json", "emit structured records")
     .action(async (id: string, opts: { json?: boolean }) => {
-      const upperId = id.toUpperCase();
-      const { outbound, inbound } = await listRelations(upperId);
+      const result = await executeRelationList(buildRelationListInputFromCli({ id }));
 
       if (opts.json) {
-        process.stdout.write(
-          `${JSON.stringify(
-            envelope({
-              identifier: upperId,
-              outbound,
-              inbound,
-            }),
-            null,
-            2,
-          )}\n`,
-        );
+        process.stdout.write(`${JSON.stringify(envelope(relationListPayload(result)), null, 2)}\n`);
         return;
       }
 
-      if (outbound.length === 0 && inbound.length === 0) {
+      if (result.outbound.length === 0 && result.inbound.length === 0) {
         process.stdout.write(`${chalk.gray("(no relations)")}\n`);
         return;
       }
-      for (const r of outbound) {
+      for (const r of result.outbound) {
         process.stdout.write(
           `${chalk.gray("→")} ${chalk.cyan(r.type)} ${chalk.bold(r.otherIdentifier)}\n`,
         );
       }
-      for (const r of inbound) {
+      for (const r of result.inbound) {
         process.stdout.write(
           `${chalk.gray("←")} ${chalk.cyan(r.type)} ${chalk.bold(r.otherIdentifier)}\n`,
         );
       }
     });
-}
-
-function relationWritebackFailed(cache: IssueCacheRefreshResult): boolean {
-  return cache.present && !cache.refreshed && cache.error !== undefined;
-}
-
-function relationStatus(
-  base: "created" | "deleted",
-  cache: IssueCacheRefreshResult,
-): "created" | "deleted" | "created-writeback-failed" | "deleted-writeback-failed" {
-  if (!relationWritebackFailed(cache)) return base;
-  return base === "created" ? "created-writeback-failed" : "deleted-writeback-failed";
-}
-
-function parseKind(input: string): LinkKind {
-  const normalized = input.toLowerCase().replace(/_/g, "-");
-  if (!(LINK_KINDS as readonly string[]).includes(normalized)) {
-    // Round-8 / R8-LOW-3: ValidationError instead of raw Error so `--json`
-    // emits `code: "validation_error"` (matches the documented taxonomy)
-    // instead of falling through to the `code: "unknown"` fallback.
-    throw new ValidationError(
-      `unknown relation kind "${input}". supported: ${LINK_KINDS.join(", ")}`,
-      `pick one of: ${LINK_KINDS.join(", ")} (use \`lebop raw\` for similar)`,
-    );
-  }
-  return normalized as LinkKind;
 }
