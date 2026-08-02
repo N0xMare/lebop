@@ -27,8 +27,8 @@ import { LEBOP_VERSION } from "../src/lib/version.ts";
 
 const repoRoot = path.resolve(new URL("..", import.meta.url).pathname);
 const DEFAULT_LEBOP_BIN = path.join(repoRoot, "bin", "lebop");
-const workspace = process.env.LEBOP_LIVE_WORKSPACE ?? "noxor";
-const team = process.env.LEBOP_LIVE_TEAM ?? "NOX";
+const workspace = process.env.LEBOP_LIVE_WORKSPACE ?? "lebop-playground";
+const team = process.env.LEBOP_LIVE_TEAM ?? "LEB";
 const timeoutMs = Number(process.env.LEBOP_LIVE_TIMEOUT_MS ?? 90_000);
 
 function defaultLiveStamp(date = new Date()) {
@@ -180,7 +180,7 @@ async function loginHome(home, token) {
 }
 
 async function readNoxorToken() {
-  const fromEnv = process.env.LEBOP_NOXOR_TOKEN?.trim();
+  const fromEnv = process.env.LEBOP_SANDBOX_TOKEN?.trim();
   if (fromEnv) return fromEnv;
   const invocation = resolveLebopInvocation([
     "--workspace",

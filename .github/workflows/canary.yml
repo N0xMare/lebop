@@ -1,17 +1,17 @@
 name: canary
 
-# Daily read smoke plus weekly full-surface smoke against the noxor sandbox
-# workspace. Catches Linear API schema drift before users do — the unit-test
-# suite mocks the SDK so it can't.
+# Daily read smoke plus weekly full-surface smoke against the lebop-playground
+# sandbox workspace. Catches Linear API schema drift before users do — the
+# unit-test suite mocks the SDK so it can't.
 #
-# Setup: requires repo secret `LEBOP_NOXOR_TOKEN` (a Linear PAK scoped to
-# the noxor sandbox workspace). The daily job is read-oriented; the weekly
-# and manual full live harness below needs write permission in that sandbox.
+# Setup: requires repo secret `LEBOP_SANDBOX_TOKEN` (a Linear PAK scoped to
+# the lebop-playground sandbox workspace). The daily job is read-oriented; the
+# weekly and manual full live harness below needs write permission in that sandbox.
 
 on:
   schedule:
     - cron: "0 14 * * *" # 14:00 UTC daily — keeps drift detection within ~24h.
-    - cron: "0 16 * * 1" # 16:00 UTC Mondays — full write/publish Noxor harness.
+    - cron: "0 16 * * 1" # 16:00 UTC Mondays — full write/publish sandbox harness.
   workflow_dispatch: {}
 
 permissions:
@@ -50,19 +50,19 @@ jobs:
           "$LEBOP_INSTALL_DIR/lebop" mcp --help > /dev/null
 
   smoke:
-    name: smoke vs noxor
+    name: smoke vs sandbox
     runs-on: ubuntu-latest
     timeout-minutes: 45
     concurrency:
-      group: noxor-live-write
+      group: sandbox-live-write
       cancel-in-progress: false
     env:
       # Job-level env can't use ${{ runner.temp }} — that context is only
       # available inside steps. /tmp is always writable on ubuntu-latest.
       LEBOP_HOME: /tmp/lebop-canary
-      LEBOP_NOXOR_TOKEN: ${{ secrets.LEBOP_NOXOR_TOKEN }}
-      LEBOP_CANARY_WORKSPACE: noxor
-      LEBOP_CANARY_TEAM: NOX
+      LEBOP_SANDBOX_TOKEN: ${{ secrets.LEBOP_SANDBOX_TOKEN }}
+      LEBOP_CANARY_WORKSPACE: lebop-playground
+      LEBOP_CANARY_TEAM: LEB
 
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
@@ -76,8 +76,8 @@ jobs:
 
       - name: gate on token presence
         run: |
-          if [ -z "$LEBOP_NOXOR_TOKEN" ]; then
-            echo "::error::LEBOP_NOXOR_TOKEN secret is not set. Skipping canary."
+          if [ -z "$LEBOP_SANDBOX_TOKEN" ]; then
+            echo "::error::LEBOP_SANDBOX_TOKEN secret is not set. Skipping canary."
             exit 1
           fi
 
@@ -94,7 +94,7 @@ jobs:
           }
           trap cleanup_tmp_auth EXIT
           tokenfile="$(mktemp)"
-          printf '%s' "$LEBOP_NOXOR_TOKEN" > "$tokenfile"
+          printf '%s' "$LEBOP_SANDBOX_TOKEN" > "$tokenfile"
           ./bin/lebop auth login --token-file "$tokenfile" > /dev/null
           auth_json="$(mktemp)"
           ./bin/lebop auth list --json > "$auth_json"
@@ -178,7 +178,7 @@ jobs:
           record 'select issue fixture'
           issue_id="$(
             ./bin/lebop --workspace "$LEBOP_CANARY_WORKSPACE" list --team "$LEBOP_CANARY_TEAM" --limit 1 --json \
-              | node -e 'let s=""; process.stdin.on("data", d => s += d); process.stdin.on("end", () => { const j = JSON.parse(s); const issue = (j.data?.issues ?? j.issues ?? [])[0]; if (!issue?.identifier) { console.error("no NOX issue available for show smoke"); process.exit(1); } process.stdout.write(issue.identifier); });'
+              | node -e 'let s=""; process.stdin.on("data", d => s += d); process.stdin.on("end", () => { const j = JSON.parse(s); const issue = (j.data?.issues ?? j.issues ?? [])[0]; if (!issue?.identifier) { console.error("no sandbox issue available for show smoke"); process.exit(1); } process.stdout.write(issue.identifier); });'
           )"
           record 'show issue'
           run_json_read 'show issue' ./bin/lebop --workspace "$LEBOP_CANARY_WORKSPACE" show "$issue_id" --json
@@ -323,7 +323,7 @@ jobs:
           record 'select issue fixture'
           issue_id="$(
             ./bin/lebop --workspace "$LEBOP_CANARY_WORKSPACE" list --team "$LEBOP_CANARY_TEAM" --limit 1 --json \
-              | node -e 'let s=""; process.stdin.on("data", d => s += d); process.stdin.on("end", () => { const j = JSON.parse(s); const issue = (j.data?.issues ?? j.issues ?? [])[0]; if (!issue?.identifier) { console.error("no NOX issue available for MCP fetch smoke"); process.exit(1); } process.stdout.write(issue.identifier); });'
+              | node -e 'let s=""; process.stdin.on("data", d => s += d); process.stdin.on("end", () => { const j = JSON.parse(s); const issue = (j.data?.issues ?? j.issues ?? [])[0]; if (!issue?.identifier) { console.error("no sandbox issue available for MCP fetch smoke"); process.exit(1); } process.stdout.write(issue.identifier); });'
           )"
           record 'mcp initialize tools/list and read calls'
           set +e
@@ -388,13 +388,16 @@ jobs:
         if: github.event_name == 'workflow_dispatch' || github.event.schedule == '0 16 * * 1'
         run: |
           set -euo pipefail
+          export LEBOP_LIVE_WORKSPACE=lebop-playground
+          export LEBOP_LIVE_TEAM=LEB
+          export LEBOP_SANDBOX_TOKEN="$LEBOP_SANDBOX_TOKEN"
           bun scripts/live-nox-surface-smoke.mjs
 
       - name: validate full live harness report
         if: github.event_name == 'workflow_dispatch' || github.event.schedule == '0 16 * * 1'
         env:
-          LEBOP_LIVE_EXPECT_WORKSPACE: noxor
-          LEBOP_LIVE_EXPECT_TEAM: NOX
+          LEBOP_LIVE_EXPECT_WORKSPACE: lebop-playground
+          LEBOP_LIVE_EXPECT_TEAM: LEB
         run: |
           set -euo pipefail
           report="$(
@@ -408,7 +411,7 @@ jobs:
         if: (github.event_name == 'workflow_dispatch' || github.event.schedule == '0 16 * * 1') && always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: live-noxor-reports
+          name: live-sandbox-reports
           path: docs/local/live-nox-surface-report-*.json
           if-no-files-found: warn
 

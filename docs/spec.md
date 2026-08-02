@@ -2199,7 +2199,7 @@ Shipped:
 - `.github/workflows/canary.yml` — daily read smoke against the noxor
   sandbox workspace (read-paths + MCP handshake), plus a write-enabled
   full-surface harness on Monday schedules and `workflow_dispatch` with
-  strict JSON report validation. Requires `LEBOP_NOXOR_TOKEN` repo secret
+  strict JSON report validation. Requires `LEBOP_SANDBOX_TOKEN` repo secret
   scoped to the sandbox workspace.
 - `bun scripts/live-nox-surface-smoke.mjs` —
   source-checkout-only full-surface live validation harness for the NOX/Noxor

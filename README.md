@@ -387,9 +387,9 @@ bun scripts/live-nox-surface-smoke.mjs --validate-report docs/local/live-nox-sur
 ```
 
 `scripts/live-nox-surface-smoke.mjs` is intentionally source-checkout-only. It
-runs the full CLI + MCP live surface harness against the NOX/Noxor sandbox
-workspace through the source wrapper. It uses `LEBOP_NOXOR_TOKEN`, or the
-existing `noxor` auth token when that env var is absent, writes a JSON report
+runs the full CLI + MCP live surface harness against the lebop-playground sandbox
+workspace through the source wrapper. It uses `LEBOP_SANDBOX_TOKEN`, or the
+existing `lebop-playground` auth token when that env var is absent, writes a JSON report
 under ignored `docs/local/`, and best-effort archives/deletes resources it
 creates.
 
