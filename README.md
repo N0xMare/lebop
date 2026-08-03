@@ -28,7 +28,7 @@ lebop teams
 lebop list --assignee me --state-type started --limit 10
 ```
 
-The installer drops a single self-contained binary (no Bun runtime needed) at `~/.local/bin/lebop` if writable, otherwise `/usr/local/bin/lebop` (sudo). Override with `LEBOP_INSTALL_DIR=...`. Pin a specific version with `LEBOP_VERSION=v0.0.4`.
+The installer drops a single self-contained binary (no Bun runtime needed) at `~/.local/bin/lebop` if writable, otherwise `/usr/local/bin/lebop` (sudo). Override with `LEBOP_INSTALL_DIR=...`. Pin a specific version with `LEBOP_VERSION=v0.0.5`.
 
 **From source** (Bun required):
 
@@ -387,9 +387,9 @@ bun scripts/live-nox-surface-smoke.mjs --validate-report docs/local/live-nox-sur
 ```
 
 `scripts/live-nox-surface-smoke.mjs` is intentionally source-checkout-only. It
-runs the full CLI + MCP live surface harness against the NOX/Noxor sandbox
-workspace through the source wrapper. It uses `LEBOP_NOXOR_TOKEN`, or the
-existing `noxor` auth token when that env var is absent, writes a JSON report
+runs the full CLI + MCP live surface harness against the lebop-playground sandbox
+workspace through the source wrapper. It uses `LEBOP_SANDBOX_TOKEN`, or the
+existing `lebop-playground` auth token when that env var is absent, writes a JSON report
 under ignored `docs/local/`, and best-effort archives/deletes resources it
 creates.
 

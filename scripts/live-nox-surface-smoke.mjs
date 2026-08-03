@@ -22,8 +22,8 @@ export { REQUIRED_CLI_LIVE_STEPS };
 
 const repoRoot = path.resolve(new URL("..", import.meta.url).pathname);
 export const DEFAULT_LEBOP_BIN = path.join(repoRoot, "bin", "lebop");
-const workspace = process.env.LEBOP_LIVE_WORKSPACE ?? "noxor";
-const team = process.env.LEBOP_LIVE_TEAM ?? "NOX";
+const workspace = process.env.LEBOP_LIVE_WORKSPACE ?? "lebop-playground";
+const team = process.env.LEBOP_LIVE_TEAM ?? "LEB";
 export function defaultLiveStamp(date = new Date()) {
   return date
     .toISOString()
@@ -2177,7 +2177,7 @@ async function setupTempAuth() {
   lebopHome = await mkdtemp(path.join(tmpdir(), "lebop-live-nox-"));
   report.temp_home = lebopHome;
 
-  const tokenFromEnv = process.env.LEBOP_NOXOR_TOKEN?.trim();
+  const tokenFromEnv = process.env.LEBOP_SANDBOX_TOKEN?.trim();
   let token = tokenFromEnv;
   if (!token) {
     const tokenInvocation = resolveLebopInvocation([

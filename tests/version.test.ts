@@ -69,7 +69,7 @@ function escapeRegExp(value: string): string {
 describe("runtime version metadata", () => {
   it("uses package.json as the single runtime source", () => {
     expect(LEBOP_VERSION).toBe(packageJson.version);
-    expect(packageJson.version).toBe("0.0.4");
+    expect(packageJson.version).toBe("0.0.5");
   });
 
   it("CLI and MCP server do not hardcode independent runtime versions", () => {
@@ -129,9 +129,10 @@ describe("runtime version metadata", () => {
     const compiledSmoke = workflowJob(release, "compiled-linux-live-smoke");
     expect(compiledSmoke.name).toBe("compiled Linux x64 full live smoke");
     expect(compiledSmoke.needs).toBe("build");
-    expect(compiledSmoke.concurrency).toMatchObject({ group: "noxor-live-write" });
+    expect(compiledSmoke.concurrency).toMatchObject({ group: "sandbox-live-write" });
     expect(compiledSmoke.env).toMatchObject({
-      LEBOP_HOME: "/tmp/lebop-release-compiled-noxor",
+      LEBOP_HOME: "/tmp/lebop-release-compiled-sandbox",
+      LEBOP_SANDBOX_TOKEN: `\${{ secrets.LEBOP_SANDBOX_TOKEN }}`,
     });
     const downloadCompiled = workflowUsesStep(compiledSmoke, "actions/download-artifact", {
       name: "lebop-linux-x64",
@@ -143,8 +144,8 @@ describe("runtime version metadata", () => {
     expect(compiledRun).toContain("bun scripts/live-nox-surface-smoke.mjs");
     expect(workflowStep(compiledSmoke, "validate compiled full live harness report").env).toEqual({
       LEBOP_LIVE_STAMP: `compiled-\${{ github.run_id }}-\${{ github.run_attempt }}`,
-      LEBOP_LIVE_EXPECT_WORKSPACE: "noxor",
-      LEBOP_LIVE_EXPECT_TEAM: "NOX",
+      LEBOP_LIVE_EXPECT_WORKSPACE: "lebop-playground",
+      LEBOP_LIVE_EXPECT_TEAM: "LEB",
       LEBOP_LIVE_EXPECT_STAMP: `compiled-\${{ github.run_id }}-\${{ github.run_attempt }}`,
       LEBOP_LIVE_EXPECT_BIN_MODE: "compiled-binary",
     });
@@ -225,10 +226,11 @@ describe("runtime version metadata", () => {
     expect(installerRun).toContain('"$LEBOP_INSTALL_DIR/lebop" mcp --help');
 
     const smoke = workflowJob(canary, "smoke");
-    expect(smoke.concurrency).toMatchObject({ group: "noxor-live-write" });
+    expect(smoke.concurrency).toMatchObject({ group: "sandbox-live-write" });
     expect(smoke.env).toMatchObject({
-      LEBOP_CANARY_WORKSPACE: "noxor",
-      LEBOP_CANARY_TEAM: "NOX",
+      LEBOP_SANDBOX_TOKEN: `\${{ secrets.LEBOP_SANDBOX_TOKEN }}`,
+      LEBOP_CANARY_WORKSPACE: "lebop-playground",
+      LEBOP_CANARY_TEAM: "LEB",
     });
     const cliReadSmoke = workflowStep(smoke, "read smoke (CLI surface)").run as string;
     expect(cliReadSmoke).toContain("workspace");
@@ -250,17 +252,18 @@ describe("runtime version metadata", () => {
       'bun scripts/live-nox-surface-smoke.mjs --validate-report "$report"',
     );
     expect(workflowStep(smoke, "validate full live harness report").env).toMatchObject({
-      LEBOP_LIVE_EXPECT_WORKSPACE: "noxor",
-      LEBOP_LIVE_EXPECT_TEAM: "NOX",
+      LEBOP_LIVE_EXPECT_WORKSPACE: "lebop-playground",
+      LEBOP_LIVE_EXPECT_TEAM: "LEB",
     });
 
     expect(spec).toContain("full-surface harness on Monday schedules and `workflow_dispatch`");
     expect(spec).toContain("compiled Linux x64 full live smoke");
     expect(spec).toContain("LEBOP_LIVE_EXPECT_BIN_MODE");
     expect(spec).toContain("LEBOP_LIVE_EXPECT_BIN_SHA256");
-    expect(prTemplate).toContain("Manual NOX/Noxor sandbox run");
-    expect(prTemplate).toContain("Compiled-binary NOX/Noxor sandbox run");
+    expect(prTemplate).toContain("Manual sandbox (lebop-playground/LEB) run");
+    expect(prTemplate).toContain("Compiled-binary sandbox run");
     expect(prTemplate).toContain("LEBOP_LIVE_BIN=/path/to/lebop");
+    expect(prTemplate).toContain("LEBOP_LIVE_WORKSPACE=lebop-playground LEBOP_LIVE_TEAM=LEB");
   });
 
   it("pins all third-party workflow actions to full commit SHAs", () => {

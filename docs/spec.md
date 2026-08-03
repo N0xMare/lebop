@@ -61,7 +61,7 @@ declarative authoring).
 
 ## 3. Scope
 
-### In scope (`0.0.4` shipped surface)
+### In scope (`0.0.5` shipped surface)
 
 | Group | Commands |
 |---|---|
@@ -163,7 +163,7 @@ curl -fsSL https://raw.githubusercontent.com/N0xMare/lebop/main/scripts/install.
 The installer downloads the matching GitHub Releases binary for macOS/Linux
 x64/arm64, verifies it against `SHA256SUMS`, and writes it to
 `~/.local/bin/lebop` or `/usr/local/bin/lebop`. Pin a release with
-`LEBOP_VERSION=v0.0.4`.
+`LEBOP_VERSION=v0.0.5`.
 
 From source (Bun required):
 
@@ -190,7 +190,7 @@ sudo ln -sf "$HOME/.bun/bin/lebop" /usr/local/bin/lebop
 Verify:
 
 ```sh
-lebop --version       # 0.0.4
+lebop --version       # 0.0.5
 which lebop           # /opt/homebrew/bin/lebop (or /usr/local/bin/lebop)
 ```
 
@@ -1814,7 +1814,7 @@ Facts that cost time on first encounter. **Check here before re-deriving.**
 
 ## 13. Release surface and validation
 
-The shipped surface in §3 is the public release surface for the `0.0.4`
+The shipped surface in §3 is the public release surface for the `0.0.5`
 line: agent-oriented CLI + MCP tooling, reviewed publish, context
 materialization, cache/stale-guard workflows, and deliberately skipped
 interactive-only ergonomics (see §3 out-of-scope).
@@ -2199,7 +2199,7 @@ Shipped:
 - `.github/workflows/canary.yml` — daily read smoke against the noxor
   sandbox workspace (read-paths + MCP handshake), plus a write-enabled
   full-surface harness on Monday schedules and `workflow_dispatch` with
-  strict JSON report validation. Requires `LEBOP_NOXOR_TOKEN` repo secret
+  strict JSON report validation. Requires `LEBOP_SANDBOX_TOKEN` repo secret
   scoped to the sandbox workspace.
 - `bun scripts/live-nox-surface-smoke.mjs` —
   source-checkout-only full-surface live validation harness for the NOX/Noxor
