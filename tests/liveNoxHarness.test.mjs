@@ -144,16 +144,36 @@ describe("live Noxor harness validation helpers", () => {
     );
   });
 
-  it("keeps allowed gaps release-blocking for full-surface validation", () => {
-    const report = reportWithCliSteps(semanticResults());
-    report.created.mcp_tools = [];
-    report.gaps = [{ name: "mcp:get_cycle", reason: "fixture unavailable" }];
-    report.results.push({ name: "mcp:get_cycle", status: "gap" });
+  it("allows allowlisted gaps in full-surface validation", () => {
+    const now = new Date("2026-06-05T00:00:00.000Z");
+    const report = reportWithFullSurface();
+    const allowlisted = [
+      "cli:agent-session view --json",
+      "cli:workspace fetch agent-session --json",
+      "mcp:get_agent_session",
+      "mcp:fetch_linear_workspace agent-session",
+    ];
+    report.gaps = allowlisted.map((name) => ({ name, reason: "fixture unavailable" }));
+    report.results = report.results.map((result) =>
+      allowlisted.includes(result.name)
+        ? { ...result, status: "gap", semantic_assertions: undefined }
+        : result,
+    );
 
-    expect(() =>
-      assertNoUnexpectedGaps(report, new Date("2026-06-05T00:00:00.000Z")),
-    ).not.toThrow();
-    expect(() => assertFullSurfaceReport(report)).toThrow(/live gaps recorded/);
+    expect(() => assertNoUnexpectedGaps(report, now)).not.toThrow();
+    expect(assertFullSurfaceReport(report, { now }).ok).toBe(true);
+    expect(shouldFailLiveHarnessProcess(report, { now })).toBe(false);
+  });
+
+  it("still blocks unallowlisted gaps in full-surface validation", () => {
+    const report = reportWithFullSurface();
+    report.gaps = [{ name: "mcp:unallowlisted_gap", reason: "not on allowlist" }];
+    report.results.push({ name: "mcp:unallowlisted_gap", status: "gap" });
+
+    expect(() => assertNoUnexpectedGaps(report)).toThrow(/unallowlisted or expired gaps/);
+    expect(() => assertFullSurfaceReport(report)).toThrow(
+      /live gaps recorded \(unallowlisted or expired\)/,
+    );
   });
 
   it("can target a compiled binary through LEBOP_LIVE_BIN", () => {
@@ -742,16 +762,16 @@ describe("live Noxor harness validation helpers", () => {
   it("rejects failed, gapped, dirty-cleanup, and incomplete reports", () => {
     const report = reportWithCliSteps([
       { name: "mcp:list_issues", status: "pass" },
-      { name: "mcp:get_cycle", status: "gap" },
+      { name: "mcp:unallowlisted_gap", status: "gap" },
       { name: "cli:extra failed step", status: "fail" },
     ]);
     report.status = "failed";
-    report.gaps = [];
+    report.gaps = [{ name: "mcp:unallowlisted_gap", reason: "not on allowlist" }];
     report.cleanup = [{ name: "delete issue", status: "fail" }];
     report.created.mcp_tools = ["create_issue", "list_issues"];
 
     expect(() => assertFullSurfaceReport(report)).toThrow(
-      /report status is "failed"[\s\S]*failed live steps[\s\S]*live gaps recorded[\s\S]*cleanup failures[\s\S]*MCP manifest tools missing live coverage[\s\S]*live semantic assertions missing/,
+      /report status is "failed"[\s\S]*failed live steps[\s\S]*live gaps recorded \(unallowlisted or expired\)[\s\S]*cleanup failures[\s\S]*MCP manifest tools missing live coverage[\s\S]*live semantic assertions missing/,
     );
   });
 

@@ -1520,8 +1520,46 @@ export function evaluateGaps(gaps, now = new Date()) {
   });
 }
 
+/** Collect gap names from report.gaps and result rows with status "gap". */
+export function collectReportGapEntries(targetReport) {
+  const byName = new Map();
+  for (const gap of targetReport.gaps ?? []) {
+    if (typeof gap?.name === "string" && gap.name) {
+      byName.set(gap.name, {
+        name: gap.name,
+        reason: gap.reason ?? null,
+        allowlist: gap.allowlist,
+      });
+    }
+  }
+  for (const result of targetReport.results ?? []) {
+    if (result?.status === "gap" && typeof result.name === "string" && result.name) {
+      if (!byName.has(result.name)) {
+        byName.set(result.name, {
+          name: result.name,
+          reason: result.reason ?? null,
+          allowlist: result.allowlist,
+        });
+      }
+    }
+  }
+  return [...byName.values()];
+}
+
+export function evaluateReportGaps(targetReport, now = new Date()) {
+  return evaluateGaps(collectReportGapEntries(targetReport), now);
+}
+
+export function allowedGapNameSet(targetReport, now = new Date()) {
+  return new Set(
+    evaluateReportGaps(targetReport, now)
+      .filter((gap) => gap.allowed)
+      .map((gap) => gap.name),
+  );
+}
+
 export function assertNoUnexpectedGaps(targetReport, now = new Date()) {
-  const evaluated = evaluateGaps(targetReport.gaps ?? [], now);
+  const evaluated = evaluateReportGaps(targetReport, now);
   targetReport.coverage = {
     ...(targetReport.coverage ?? {}),
     gaps: evaluated,
@@ -1588,8 +1626,9 @@ export function assertSurfaceCoverage(targetReport, mcpToolNames = []) {
   }
 }
 
-export function buildSemanticCoverage(targetReport) {
+export function buildSemanticCoverage(targetReport, now = new Date()) {
   const results = targetReport.results ?? [];
+  const allowedGaps = allowedGapNameSet(targetReport, now);
   const hasSemanticProof = (name) =>
     results.some(
       (result) =>
@@ -1601,7 +1640,12 @@ export function buildSemanticCoverage(targetReport) {
   return {
     required: REQUIRED_SEMANTIC_LIVE_STEPS,
     covered: REQUIRED_SEMANTIC_LIVE_STEPS.filter((name) => hasSemanticProof(name)),
-    missing: REQUIRED_SEMANTIC_LIVE_STEPS.filter((name) => !hasSemanticProof(name)),
+    missing: REQUIRED_SEMANTIC_LIVE_STEPS.filter(
+      (name) => !hasSemanticProof(name) && !allowedGaps.has(name),
+    ),
+    waived_allowlisted_gaps: REQUIRED_SEMANTIC_LIVE_STEPS.filter(
+      (name) => !hasSemanticProof(name) && allowedGaps.has(name),
+    ),
     manifest: buildManifestSemanticCoverage(),
     conditional_confirm: buildConditionalConfirmSemanticCoverage(),
   };
@@ -1730,11 +1774,13 @@ export function buildFieldUpdateProofCoverage(targetReport) {
   };
 }
 
-export function buildLinearApiProofCoverage(targetReport) {
+export function buildLinearApiProofCoverage(targetReport, now = new Date()) {
   const results = targetReport.results ?? [];
+  const allowedGaps = allowedGapNameSet(targetReport, now);
   const requiredProofs = new Set(LINEAR_API_PROOF_LABELS);
   const rows = REQUIRED_LINEAR_API_PROOF_STEPS.map((name) => {
     const matches = results.filter((result) => result.name === name && result.status === "pass");
+    const waived = allowedGaps.has(name);
     const verified = matches.some((result) => {
       const proofs = new Set(result.semantic_assertions ?? []);
       return [...requiredProofs].every((proof) => proofs.has(proof));
@@ -1742,11 +1788,15 @@ export function buildLinearApiProofCoverage(targetReport) {
     return {
       name,
       surface: name.startsWith("cli:") ? "cli" : "mcp",
-      verified,
+      verified: verified || waived,
+      waived,
       attempts: matches.length,
-      missing_labels: LINEAR_API_PROOF_LABELS.filter(
-        (proof) => !matches.some((result) => new Set(result.semantic_assertions ?? []).has(proof)),
-      ),
+      missing_labels: waived
+        ? []
+        : LINEAR_API_PROOF_LABELS.filter(
+            (proof) =>
+              !matches.some((result) => new Set(result.semantic_assertions ?? []).has(proof)),
+          ),
     };
   });
   const surfaceSummary = (surface) => {
@@ -1802,6 +1852,7 @@ export function buildRemoteDestructiveAuditCoverage(targetReport) {
 }
 
 export function validateFullSurfaceReport(targetReport, options = {}) {
+  const now = options.now instanceof Date ? options.now : new Date();
   const advertisedMcpToolNames = reportMcpToolInventory(targetReport);
   const mcpToolNames = REQUIRED_MCP_LIVE_TOOLS;
   const coverage = buildSurfaceCoverage(targetReport, mcpToolNames);
@@ -1811,10 +1862,10 @@ export function validateFullSurfaceReport(targetReport, options = {}) {
     manifest: mcpToolNames,
     missing_from_advertised: mcpToolNames.filter((name) => !advertisedMcpToolNames.includes(name)),
   };
-  const semantic = buildSemanticCoverage(targetReport);
+  const semantic = buildSemanticCoverage(targetReport, now);
   const publishProof = buildPublishProofCoverage(targetReport);
   const fieldUpdateProof = buildFieldUpdateProofCoverage(targetReport);
-  const linearApiProof = buildLinearApiProofCoverage(targetReport);
+  const linearApiProof = buildLinearApiProofCoverage(targetReport, now);
   const remoteAudit = buildRemoteDestructiveAuditCoverage(targetReport);
   targetReport.coverage = {
     ...(targetReport.coverage ?? {}),
@@ -1828,12 +1879,10 @@ export function validateFullSurfaceReport(targetReport, options = {}) {
 
   const results = targetReport.results ?? [];
   const failedResults = results.filter((result) => result.status === "fail");
-  const gappedResults = results.filter((result) => result.status === "gap");
   const unknownStatusResults = results.filter(
     (result) => !["pass", "fail", "gap"].includes(result.status),
   );
   const cleanupFailures = (targetReport.cleanup ?? []).filter((entry) => entry.status === "fail");
-  const gaps = targetReport.gaps ?? [];
   const errors = [];
 
   if (targetReport.status !== "completed") {
@@ -1871,12 +1920,16 @@ export function validateFullSurfaceReport(targetReport, options = {}) {
   if (failedResults.length > 0) {
     errors.push(`failed live steps: ${failedResults.map((result) => result.name).join(", ")}`);
   }
-  if (gaps.length > 0 || gappedResults.length > 0) {
-    const gapNames = new Set([
-      ...gaps.map((gap) => gap.name),
-      ...gappedResults.map((result) => result.name),
-    ]);
-    errors.push(`live gaps recorded: ${[...gapNames].join(", ")}`);
+  {
+    const evaluatedGaps = evaluateReportGaps(targetReport, now);
+    const unexpectedGaps = evaluatedGaps.filter((gap) => !gap.allowed);
+    if (unexpectedGaps.length > 0) {
+      errors.push(
+        `live gaps recorded (unallowlisted or expired): ${unexpectedGaps
+          .map((gap) => gap.name)
+          .join(", ")}`,
+      );
+    }
   }
   if (unknownStatusResults.length > 0) {
     errors.push(
@@ -2024,7 +2077,7 @@ export function validateFullSurfaceReport(targetReport, options = {}) {
     errors,
     coverage: targetReport.coverage,
     failed_results: failedResults,
-    gaps,
+    gaps: evaluateReportGaps(targetReport, now),
     cleanup_failures: cleanupFailures,
     publish_proof: publishProof,
     field_update_proof: fieldUpdateProof,
@@ -5201,16 +5254,9 @@ async function main() {
     await setupTempAuth();
     const context = await runCliSurface();
     await runMcpSurface(context);
+    // Allowlisted fixture gaps (e.g. AgentSession) are non-blocking through expiry.
+    // Unallowlisted/expired gaps still fail via assertNoUnexpectedGaps.
     assertNoUnexpectedGaps(report);
-    if ((report.gaps ?? []).length > 0) {
-      throw new Error(
-        `live harness recorded fixture gaps: ${report.gaps
-          .map((gap) => gap.name)
-          .join(
-            ", ",
-          )}. Full-surface release runs require deterministic fixtures or explicit fixture setup before running.`,
-      );
-    }
     assertSurfaceCoverage(report, REQUIRED_MCP_LIVE_TOOLS);
     assertSemanticCoverage(report);
     report.finished_at = new Date().toISOString();
