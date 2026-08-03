@@ -119,7 +119,7 @@ function compiledBinaryProvenance() {
     path: "./dist/lebop",
     sha256: "a".repeat(64),
     size_bytes: 123456,
-    version: "0.0.4",
+    version: "0.0.5",
     platform: "darwin",
     arch: "arm64",
   };
@@ -208,7 +208,7 @@ describe("live Noxor harness validation helpers", () => {
     expect(() =>
       assertFullSurfaceReport(report, {
         expectedBinaryMode: "compiled-binary",
-        expectedBinaryVersion: "0.0.4",
+        expectedBinaryVersion: "0.0.5",
       }),
     ).toThrow(/binary_under_test\.version/);
   });

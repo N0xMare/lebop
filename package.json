@@ -1,6 +1,6 @@
 {
   "name": "lebop",
-  "version": "0.0.4",
+  "version": "0.0.5",
   "description": "Agentic Linear CLI + MCP server for workspace explore/fetch, reviewed publish, guarded cache edits, and markdown plan workflows.",
   "type": "module",
   "license": "MIT",
