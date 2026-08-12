@@ -562,7 +562,9 @@ describe("fetchLinearWorkspace", () => {
     expect(result.selected_includes).not.toContain("agent_sessions");
     expect(result.counts.issue_agent_sessions).toBeUndefined();
     expect(mocks.listAgentSessionsPage).not.toHaveBeenCalled();
-    await expect(readFile(join(out, "issues/TEAM-1/agent-sessions.json"), "utf8")).rejects.toThrow();
+    await expect(
+      readFile(join(out, "issues/TEAM-1/agent-sessions.json"), "utf8"),
+    ).rejects.toThrow();
     await rm(out, { recursive: true, force: true });
   });
 
@@ -1471,7 +1473,9 @@ describe("fetchLinearWorkspace", () => {
         },
       }),
     ]);
-    expect(await readFile(join(out, "issues/TEAM-1/issue.md"), "utf8")).toContain("Full issue body");
+    expect(await readFile(join(out, "issues/TEAM-1/issue.md"), "utf8")).toContain(
+      "Full issue body",
+    );
     await rm(out, { recursive: true, force: true });
   });
 
@@ -1518,7 +1522,9 @@ describe("fetchLinearWorkspace", () => {
         },
       }),
     ]);
-    expect(await readFile(join(out, "issues/TEAM-1/issue.md"), "utf8")).toContain("Full issue body");
+    expect(await readFile(join(out, "issues/TEAM-1/issue.md"), "utf8")).toContain(
+      "Full issue body",
+    );
     await rm(out, { recursive: true, force: true });
   });
 
@@ -1692,7 +1698,9 @@ describe("fetchLinearWorkspace", () => {
     expect(result.counts.issue_attachments).toBe(1);
     expect(result.counts.issue_documents).toBe(1);
     expect(result.counts.issue_document_details).toBe(1);
-    expect(await readFile(join(out, "issues/TEAM-1/issue.md"), "utf8")).toContain("Full issue body");
+    expect(await readFile(join(out, "issues/TEAM-1/issue.md"), "utf8")).toContain(
+      "Full issue body",
+    );
     expect(await readFile(join(out, "issues/TEAM-1/comments.md"), "utf8")).toContain("Comment");
     expect(await readFile(join(out, "issues/TEAM-1/relations.json"), "utf8")).toContain("TEAM-2");
     expect(await readFile(join(out, "issues/TEAM-1/attachments.json"), "utf8")).toContain("Spec");
@@ -1749,8 +1757,12 @@ describe("fetchLinearWorkspace", () => {
     expect(metadata.find((entry) => entry.path === "index.md")).toMatchObject({
       role: "index",
     });
-    expect(await readFile(join(out, "issues/TEAM-1/issue.md"), "utf8")).toContain("TEAM-1 full body");
-    expect(await readFile(join(out, "issues/TEAM-2/issue.md"), "utf8")).toContain("TEAM-2 full body");
+    expect(await readFile(join(out, "issues/TEAM-1/issue.md"), "utf8")).toContain(
+      "TEAM-1 full body",
+    );
+    expect(await readFile(join(out, "issues/TEAM-2/issue.md"), "utf8")).toContain(
+      "TEAM-2 full body",
+    );
     await rm(out, { recursive: true, force: true });
   });
 

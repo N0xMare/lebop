@@ -918,7 +918,9 @@ describe("exploreLinearWorkspace search", () => {
     expect(mocks.listIssuesPage).toHaveBeenLastCalledWith(
       expect.objectContaining({ after: "issue-cursor-1" }),
     );
-    expect(second.items).toEqual([expect.objectContaining({ kind: "issue", identifier: "TEAM-2" })]);
+    expect(second.items).toEqual([
+      expect.objectContaining({ kind: "issue", identifier: "TEAM-2" }),
+    ]);
     expect(second.summary).toMatchObject({
       search: {
         project: { mode: "cursor_complete", complete: true, searched_count: 0 },

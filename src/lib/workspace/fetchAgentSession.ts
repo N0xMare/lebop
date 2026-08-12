@@ -1,6 +1,10 @@
 /**
  * Mechanical extract from workspaceFetch — kind context.
  */
+
+import { getAgentSession, listAgentSessionsPage } from "../agentSessions.ts";
+import { listAttachmentsPage } from "../attachments.ts";
+import { listCommentsPage } from "../comments.ts";
 import { mapLimit } from "../concurrency.ts";
 import { getCycle } from "../cycles.ts";
 import { getDocument, listDocumentsPage } from "../documents.ts";
@@ -11,9 +15,6 @@ import { type ListedIssue, listIssuesPage } from "../listIssues.ts";
 import { getMilestone, listMilestonesPage } from "../milestones.ts";
 import { getProject, listProjectUpdatesPage } from "../projects.ts";
 import { listRelationsPage } from "../relations.ts";
-import { getAgentSession, listAgentSessionsPage } from "../agentSessions.ts";
-import { listAttachmentsPage } from "../attachments.ts";
-import { listCommentsPage } from "../comments.ts";
 import {
   type ContextFile,
   markdownJsonBlock,
@@ -22,29 +23,37 @@ import {
 import type { ExploreCursor } from "../workspaceExplore.ts";
 import type { ParsedWorkspacePath } from "../workspacePaths.ts";
 import { safeSegment } from "../workspacePaths.ts";
-import type {
-  FetchCompletenessEntry,
-  FetchContinuation,
-  FetchDepth,
-  FetchLinearWorkspaceResult,
-  FetchSelection,
-} from "./fetchTypes.ts";
 import {
+  ALLOWED_CYCLE_INCLUDES,
+  ALLOWED_DOCUMENT_INCLUDES,
+  ALLOWED_INITIATIVE_INCLUDES,
+  ALLOWED_ISSUE_INCLUDES,
+  ALLOWED_MILESTONE_INCLUDES,
+  ALLOWED_PROJECT_INCLUDES,
+  addIssueDocumentFiles,
   addIssueDossierFiles,
   addIssueDossiersConcurrent,
-  addIssueDocumentFiles,
   continuationHints,
   continuationIncludeFor,
+  DEFAULT_CYCLE_INCLUDES,
+  DEFAULT_DEPTH,
+  DEFAULT_DOCUMENT_INCLUDES,
+  DEFAULT_INITIATIVE_INCLUDES,
+  DEFAULT_ISSUE_INCLUDES,
+  DEFAULT_LIMIT,
+  DEFAULT_MILESTONE_INCLUDES,
+  DEFAULT_PROJECT_INCLUDES,
   dedupeContinuations,
   exploreContinuation,
   fetchContinuation,
   focusedCursorAfter,
   focusedRelationCursors,
+  ISSUE_DOSSIER_CONCURRENCY,
   includeSet,
   initiativeProjectContinuationInclude,
-  isTruncated,
   issueCollectionContinuationInclude,
   issueDocumentsContinuationInclude,
+  isTruncated,
   markComplete,
   markDocumentDetailsCompleteness,
   markIssueDetailsCompletenessAggregate,
@@ -75,22 +84,14 @@ import {
   renderListMarkdown,
   selectionFor,
   sortedIncludeArgs,
-  DEFAULT_LIMIT,
-  DEFAULT_DEPTH,
-  DEFAULT_PROJECT_INCLUDES,
-  DEFAULT_ISSUE_INCLUDES,
-  DEFAULT_INITIATIVE_INCLUDES,
-  DEFAULT_DOCUMENT_INCLUDES,
-  DEFAULT_CYCLE_INCLUDES,
-  DEFAULT_MILESTONE_INCLUDES,
-  ALLOWED_PROJECT_INCLUDES,
-  ALLOWED_ISSUE_INCLUDES,
-  ALLOWED_INITIATIVE_INCLUDES,
-  ALLOWED_DOCUMENT_INCLUDES,
-  ALLOWED_CYCLE_INCLUDES,
-  ALLOWED_MILESTONE_INCLUDES,
-  ISSUE_DOSSIER_CONCURRENCY,
 } from "./fetchShared.ts";
+import type {
+  FetchCompletenessEntry,
+  FetchContinuation,
+  FetchDepth,
+  FetchLinearWorkspaceResult,
+  FetchSelection,
+} from "./fetchTypes.ts";
 
 export async function fetchAgentSessionContext(input: {
   target: string;
@@ -166,4 +167,3 @@ export async function fetchAgentSessionContext(input: {
     ...written,
   };
 }
-

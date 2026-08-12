@@ -77,12 +77,15 @@ export function peekAuthWorkspacesSync(): { default: string | null; slugs: strin
       workspaces?: Record<string, unknown>;
       token?: string;
     };
-    if (data && typeof data === "object" && data.workspaces && typeof data.workspaces === "object") {
+    if (
+      data &&
+      typeof data === "object" &&
+      data.workspaces &&
+      typeof data.workspaces === "object"
+    ) {
       const slugs = Object.keys(data.workspaces).filter(Boolean).sort();
       const def =
-        typeof data.default === "string" && data.default.trim() !== ""
-          ? data.default.trim()
-          : null;
+        typeof data.default === "string" && data.default.trim() !== "" ? data.default.trim() : null;
       return { default: def, slugs };
     }
     if (data && typeof data === "object" && typeof data.token === "string") {

@@ -16,33 +16,31 @@ export function registerHistory(program: Command): void {
     .option("--cursor <token>", "continue from next_cursor");
   addMachineOutputOptions(cmd);
   cmd.action(
-      async (
-        id: string,
-        opts: {
-          since?: string;
-          limit?: string;
-          cursor?: string;
-          json?: boolean;
-          format?: string;
-          pretty?: boolean;
-        },
-      ) => {
-        const result = await executeIssueHistoryList(
-          buildIssueHistoryListInputFromCli({ id, opts }),
-        );
-        const body = issueHistoryListPayload(result) as Record<string, unknown>;
-        // Always machine-dense for history (control plane).
-        writeMachineEnvelope(
-          {
-            ...body,
-            next: listNext(Boolean(result.has_more), result.next_cursor, {
-              show: "show <id>",
-              extra: ["comment list <id>"],
-            }),
-          },
-          { json: true, format: opts.format, pretty: opts.pretty },
-          undefined,
-        );
+    async (
+      id: string,
+      opts: {
+        since?: string;
+        limit?: string;
+        cursor?: string;
+        json?: boolean;
+        format?: string;
+        pretty?: boolean;
       },
-    );
+    ) => {
+      const result = await executeIssueHistoryList(buildIssueHistoryListInputFromCli({ id, opts }));
+      const body = issueHistoryListPayload(result) as Record<string, unknown>;
+      // Always machine-dense for history (control plane).
+      writeMachineEnvelope(
+        {
+          ...body,
+          next: listNext(Boolean(result.has_more), result.next_cursor, {
+            show: "show <id>",
+            extra: ["comment list <id>"],
+          }),
+        },
+        { json: true, format: opts.format, pretty: opts.pretty },
+        undefined,
+      );
+    },
+  );
 }

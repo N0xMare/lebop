@@ -331,7 +331,9 @@ describe("findLink — round-6 / H4 case-folding regression coverage", () => {
         data: {
           issue: {
             relations: {
-              nodes: [{ id: "rel-other", type: "blocks", relatedIssue: { identifier: "TEAM-100" } }],
+              nodes: [
+                { id: "rel-other", type: "blocks", relatedIssue: { identifier: "TEAM-100" } },
+              ],
               pageInfo: { hasNextPage: true, endCursor: "outbound-cursor-1" },
             },
             inverseRelations: {

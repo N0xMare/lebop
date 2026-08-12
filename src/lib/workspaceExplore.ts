@@ -20,17 +20,17 @@ import { linear } from "./sdk.ts";
 import { listTeamMembersPage } from "./teamMembers.ts";
 import { getTeam } from "./teams.ts";
 import { listWorkflowStates } from "./workflowStates.ts";
-import { childPaths, parseWorkspacePath } from "./workspacePaths.ts";
 import {
-  type LinearWorkspaceExploreItem,
-  issueItem,
-  concreteIssueItem,
-  projectItem,
-  documentItem,
-  cycleItem,
-  milestoneItem,
   agentSessionItem,
+  concreteIssueItem,
+  cycleItem,
+  documentItem,
+  issueItem,
+  type LinearWorkspaceExploreItem,
+  milestoneItem,
+  projectItem,
 } from "./workspace/exploreItems.ts";
+import { childPaths, parseWorkspacePath } from "./workspacePaths.ts";
 
 export type { LinearWorkspaceExploreItem };
 

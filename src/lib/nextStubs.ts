@@ -146,7 +146,8 @@ export function linkNext(identifier?: string): string[] {
 /** CLI attachment list/update/delete. */
 export function attachmentNext(action: "list" | "update" | "delete" = "list"): string[] {
   if (action === "delete") return ["attachment list <issue>", "show <id>", "link <issue> <url>"];
-  if (action === "update") return ["attachment list <issue>", "show <id>", "attachment delete <id>"];
+  if (action === "update")
+    return ["attachment list <issue>", "show <id>", "attachment delete <id>"];
   return ["show <id>", "link <issue> <url>", "attachment update <id>"];
 }
 
@@ -157,8 +158,5 @@ export function bulkNext(): string[] {
 
 /** MCP get_document / get_project / get_initiative when body truncated. */
 export function mcpEntityTruncatedNext(tool: string, idArg: string): string[] {
-  return [
-    `${tool} ${idArg} content_file=./content.md`,
-    `${tool} ${idArg} full_content=true`,
-  ];
+  return [`${tool} ${idArg} content_file=./content.md`, `${tool} ${idArg} full_content=true`];
 }

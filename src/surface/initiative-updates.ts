@@ -262,17 +262,25 @@ export function buildInitiativeUpdateDeleteInputFromCli(
       "re-run with --yes to confirm.",
     );
   }
-  return parseSurfaceInput("initiative_updates.soft_delete", initiativeUpdateDeleteCanonicalSchema, {
-    id: input.id,
-  });
+  return parseSurfaceInput(
+    "initiative_updates.soft_delete",
+    initiativeUpdateDeleteCanonicalSchema,
+    {
+      id: input.id,
+    },
+  );
 }
 
 export function buildInitiativeUpdateDeleteInputFromMcp(
   input: InitiativeUpdateDeleteMcpInput,
 ): InitiativeUpdateDeleteInput {
-  return parseSurfaceInput("initiative_updates.soft_delete", initiativeUpdateDeleteCanonicalSchema, {
-    id: input.id,
-  });
+  return parseSurfaceInput(
+    "initiative_updates.soft_delete",
+    initiativeUpdateDeleteCanonicalSchema,
+    {
+      id: input.id,
+    },
+  );
 }
 
 // ── Execute ─────────────────────────────────────────────────────────────────

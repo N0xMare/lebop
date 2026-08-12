@@ -161,7 +161,8 @@ describe("runtime version metadata", () => {
       LEBOP_HOME: "/tmp/lebop-release-discovery-sandbox",
       LEBOP_SANDBOX_TOKEN: `\${{ secrets.LEBOP_SANDBOX_TOKEN }}`,
     });
-    const discoveryRun = workflowStep(discoverySmoke, "compiled discovery live harness").run as string;
+    const discoveryRun = workflowStep(discoverySmoke, "compiled discovery live harness")
+      .run as string;
     expect(discoveryRun).toContain('export LEBOP_LIVE_BIN="$PWD/compiled-live/lebop-linux-x64"');
     expect(discoveryRun).toContain(
       'export LEBOP_LIVE_STAMP="discovery-${{ github.run_id }}-${{ github.run_attempt }}"',

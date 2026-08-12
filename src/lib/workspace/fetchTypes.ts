@@ -50,13 +50,11 @@ export interface FetchCompletenessEntry {
   reason?: string;
 }
 
-
 export interface FetchSelection {
   requested_path_kind: string;
   focused_collection: string | null;
   selected_includes: string[];
 }
-
 
 export interface FetchCollectionFragment {
   files: ContextFile[];

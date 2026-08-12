@@ -19,7 +19,12 @@ export function surfaceCoreMcpToolNames(): string[] {
   const names: string[] = [];
   for (const op of SURFACE_OPERATIONS) {
     const mcp = (op as { mcp?: { tool?: string; profile?: string } }).mcp;
-    if (mcp?.profile === "core" && typeof mcp.tool === "string" && mcp.tool && !seen.has(mcp.tool)) {
+    if (
+      mcp?.profile === "core" &&
+      typeof mcp.tool === "string" &&
+      mcp.tool &&
+      !seen.has(mcp.tool)
+    ) {
       seen.add(mcp.tool);
       names.push(mcp.tool);
     }

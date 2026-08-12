@@ -200,7 +200,7 @@ export const pullIssuesOperation = {
   },
   mcp: {
     tool: "pull_issues",
-      profile: "core",
+    profile: "core",
     title: "Fetch issues into the local cache",
     description:
       "Pull issues by id/range into cache (or export with to). refresh+confirm overwrite dirty cache; export skips cache.",

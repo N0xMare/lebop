@@ -201,7 +201,7 @@ export const rawGraphqlOperation = {
   },
   mcp: {
     tool: "raw_graphql",
-      profile: "core",
+    profile: "core",
     title: "GraphQL escape hatch — execute an arbitrary query/mutation",
     description: rawGraphqlDescription,
     annotations: {

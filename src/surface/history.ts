@@ -89,15 +89,14 @@ export const issueHistoryListOperation = {
   resource: "issue_history",
   action: "list",
   title: "List issue history",
-  description:
-    "Dense field changelog for an issue (not comments). Use since for restart recovery.",
+  description: "Dense field changelog for an issue (not comments). Use since for restart recovery.",
   cli: {
     command: "history",
     liveSteps: ["cli:history --json"],
   },
   mcp: {
     tool: "list_issue_history",
-      profile: "core",
+    profile: "core",
     title: "List issue history",
     description:
       "Dense field changelog for an issue (not comments). Use since for restart recovery.",

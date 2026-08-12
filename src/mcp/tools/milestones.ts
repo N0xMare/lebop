@@ -85,9 +85,7 @@ export function buildMilestoneToolSpecs(deps: MilestoneToolDeps): McpToolSpec[] 
       ),
       handler: async (args: MilestoneCreateMcpInput) => {
         const milestone = await executeMilestoneCreate(buildMilestoneCreateInputFromMcp(args));
-        return text(
-          envelope({ milestone, next: mcpGetNext("get_milestone", "list_milestones") }),
-        );
+        return text(envelope({ milestone, next: mcpGetNext("get_milestone", "list_milestones") }));
       },
     },
     {
@@ -100,9 +98,7 @@ export function buildMilestoneToolSpecs(deps: MilestoneToolDeps): McpToolSpec[] 
         const milestone = await executeMilestoneUpdate(buildMilestoneUpdateInputFromMcp(args), {
           projectNotFoundHint: MILESTONE_MCP_PROJECT_NOT_FOUND_HINT,
         });
-        return text(
-          envelope({ milestone, next: mcpGetNext("get_milestone", "list_milestones") }),
-        );
+        return text(envelope({ milestone, next: mcpGetNext("get_milestone", "list_milestones") }));
       },
     },
     {

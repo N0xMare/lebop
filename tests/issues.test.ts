@@ -280,7 +280,9 @@ describe("updateIssue", () => {
     // NotFoundError with code=not_found, not a raw Error.
     reset();
     issueLookupOverride = () => null;
-    const err = await updateIssue({ identifier: "TEAM-DOES-NOT-EXIST", title: "x" }).catch((e) => e);
+    const err = await updateIssue({ identifier: "TEAM-DOES-NOT-EXIST", title: "x" }).catch(
+      (e) => e,
+    );
     expect(err).toBeInstanceOf(NotFoundError);
     expect(err.code).toBe("not_found");
     expect(err.message).toMatch(/issue not found: TEAM-DOES-NOT-EXIST/);

@@ -2,10 +2,11 @@
  * Issue surface barrel — re-exports domain modules.
  * Prefer importing domain modules directly for new code when the boundary is clear.
  */
-export * from "./issue-list.ts";
+
 export * from "./issue-get.ts";
-export * from "./issue-write.ts";
 export * from "./issue-lifecycle.ts";
+export * from "./issue-list.ts";
+export * from "./issue-write.ts";
 
 import { issueGetOperation } from "./issue-get.ts";
 import {

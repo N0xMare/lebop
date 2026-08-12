@@ -185,7 +185,9 @@ const documentUpdateCanonicalSchema = z
   })
   .strict();
 
-const documentDeleteCanonicalSchema = z.object({ id: z.string().min(1), confirmed: z.boolean().optional() }).strict();
+const documentDeleteCanonicalSchema = z
+  .object({ id: z.string().min(1), confirmed: z.boolean().optional() })
+  .strict();
 
 // ── Builders ────────────────────────────────────────────────────────────────
 

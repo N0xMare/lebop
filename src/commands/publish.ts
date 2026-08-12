@@ -121,9 +121,7 @@ function printReview(result: ReviewLinearChangesResult): void {
     const call = result.next_call;
     const ws = call?.arguments.workspace;
     if (ws) {
-      process.stdout.write(
-        `next: lebop --workspace ${ws} publish apply ${result.review_id}\n`,
-      );
+      process.stdout.write(`next: lebop --workspace ${ws} publish apply ${result.review_id}\n`);
     } else if (result.next?.[0]) {
       process.stdout.write(`next: ${result.next[0]}\n`);
     }

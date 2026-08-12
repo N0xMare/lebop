@@ -38,37 +38,37 @@ export function registerList(program: Command): void {
     .option("--fields <list>", "default slim fields, or full, or comma list");
   addMachineOutputOptions(cmd);
   cmd.action(async (opts: ListOpts) => {
-      const result = await executeIssueList(buildIssueListInputFromCli({ opts }), {
-        resolveTeam: async (team) => (await resolveConfig({ teamOverride: team })).team,
-        getTeam: async (team) => getTeam(team),
-      });
-
-      const { issues: slimIssues, fields } = projectListedIssuesResult(result, opts.fields);
-      const payload = {
-        ...issueListPayload({ ...result, issues: slimIssues as typeof result.issues }),
-        fields,
-        next: listNext(Boolean(result.truncated), result.next_cursor, {
-          show: "show <id>",
-          fieldsCmd: "list --fields full",
-        }),
-      };
-
-      if (wantsMachineOutput(opts)) {
-        writeMachineEnvelope(payload, {
-          json: true,
-          format: opts.format,
-          pretty: opts.pretty,
-        });
-        return;
-      }
-
-      printHuman(slimIssues);
-      if (result.truncated) {
-        process.stdout.write(
-          `\nmore results available; use --cursor ${result.next_cursor} with the same filters\n`,
-        );
-      }
+    const result = await executeIssueList(buildIssueListInputFromCli({ opts }), {
+      resolveTeam: async (team) => (await resolveConfig({ teamOverride: team })).team,
+      getTeam: async (team) => getTeam(team),
     });
+
+    const { issues: slimIssues, fields } = projectListedIssuesResult(result, opts.fields);
+    const payload = {
+      ...issueListPayload({ ...result, issues: slimIssues as typeof result.issues }),
+      fields,
+      next: listNext(Boolean(result.truncated), result.next_cursor, {
+        show: "show <id>",
+        fieldsCmd: "list --fields full",
+      }),
+    };
+
+    if (wantsMachineOutput(opts)) {
+      writeMachineEnvelope(payload, {
+        json: true,
+        format: opts.format,
+        pretty: opts.pretty,
+      });
+      return;
+    }
+
+    printHuman(slimIssues);
+    if (result.truncated) {
+      process.stdout.write(
+        `\nmore results available; use --cursor ${result.next_cursor} with the same filters\n`,
+      );
+    }
+  });
 }
 
 interface ListOpts {

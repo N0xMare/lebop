@@ -61,14 +61,11 @@ export function registerPull(program: Command): void {
       }
 
       if (wantsMachineOutput(opts)) {
-        writeMachineEnvelope(
-          { ...result, next: pullNext() } as Record<string, unknown>,
-          {
-            json: true,
-            format: opts.format,
-            pretty: opts.pretty,
-          },
-        );
+        writeMachineEnvelope({ ...result, next: pullNext() } as Record<string, unknown>, {
+          json: true,
+          format: opts.format,
+          pretty: opts.pretty,
+        });
         if (result.errors.length > 0) process.exitCode = 1;
         return;
       }

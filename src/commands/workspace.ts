@@ -40,45 +40,45 @@ export function registerWorkspace(program: Command): void {
     .option("--cursor <token>", "continue from a prior explore result's next_cursor");
   addMachineOutputOptions(explore);
   explore.action(
-      async (
-        path: string | undefined,
-        opts: {
-          query?: string;
-          team?: string;
-          kind?: string[];
-          includeArchived?: boolean;
-          limit?: number;
-          cursor?: string;
-          json?: boolean;
-          format?: string;
-          pretty?: boolean;
-        },
-      ) => {
-        const input = buildExploreWorkspaceInputFromCli({
-          path,
-          opts,
-          context: { rootTeam: activeTeamOverride() },
-        });
-        const { value: result, telemetry } = await collectLinearRateLimitTelemetry(() =>
-          executeExploreWorkspace(input),
-        );
-        if (wantsMachineOutput(opts)) {
-          writeMachineEnvelope(
-            {
-              ...result,
-              next: listNext(Boolean(result.next_cursor), result.next_cursor, {
-                show: "workspace fetch <target>",
-                extra: ["list", "search --query …"],
-              }),
-            } as Record<string, unknown>,
-            { json: true, format: opts.format, pretty: opts.pretty, shape: "nested" },
-            linearApiEnvelopeMeta(telemetry),
-          );
-          return;
-        }
-        printExplore(result);
+    async (
+      path: string | undefined,
+      opts: {
+        query?: string;
+        team?: string;
+        kind?: string[];
+        includeArchived?: boolean;
+        limit?: number;
+        cursor?: string;
+        json?: boolean;
+        format?: string;
+        pretty?: boolean;
       },
-    );
+    ) => {
+      const input = buildExploreWorkspaceInputFromCli({
+        path,
+        opts,
+        context: { rootTeam: activeTeamOverride() },
+      });
+      const { value: result, telemetry } = await collectLinearRateLimitTelemetry(() =>
+        executeExploreWorkspace(input),
+      );
+      if (wantsMachineOutput(opts)) {
+        writeMachineEnvelope(
+          {
+            ...result,
+            next: listNext(Boolean(result.next_cursor), result.next_cursor, {
+              show: "workspace fetch <target>",
+              extra: ["list", "search --query …"],
+            }),
+          } as Record<string, unknown>,
+          { json: true, format: opts.format, pretty: opts.pretty, shape: "nested" },
+          linearApiEnvelopeMeta(telemetry),
+        );
+        return;
+      }
+      printExplore(result);
+    },
+  );
 
   const fetch = cmd
     .command("fetch <target>")
@@ -99,51 +99,52 @@ export function registerWorkspace(program: Command): void {
     .option("--to <dir>", "write dossier to this directory instead of ~/.lebop/context");
   addMachineOutputOptions(fetch);
   fetch.action(
-      async (
-        target: string,
-        opts: {
-          include?: string;
-          depth?: "shallow" | "full";
-          limit?: number;
-          cursor?: string;
-          to?: string;
-          json?: boolean;
-          format?: string;
-          pretty?: boolean;
-        },
-      ) => {
-        const input = buildFetchWorkspaceInputFromCli({
-          target,
-          opts,
-          context: {
-            rootWorkspace: activeWorkspaceOverride(),
-          },
-        });
-        const { value: result, telemetry } = await collectLinearRateLimitTelemetry(() =>
-          executeFetchWorkspace(input),
-        );
-        if (wantsMachineOutput(opts)) {
-          const cont =
-            "next_cursor" in result && typeof (result as { next_cursor?: string }).next_cursor === "string"
-              ? (result as { next_cursor: string }).next_cursor
-              : null;
-          writeMachineEnvelope(
-            {
-              ...result,
-              next: cont
-                ? [`--cursor ${cont}`]
-                : ["workspace explore /", "show <id>", "comment list <id>"],
-            } as Record<string, unknown>,
-            { json: true, format: opts.format, pretty: opts.pretty, shape: "nested" },
-            linearApiEnvelopeMeta(telemetry),
-          );
-          return;
-        }
-        process.stdout.write(`${chalk.green("ok")} wrote ${chalk.cyan(result.root)}\n`);
-        process.stdout.write(`index: ${chalk.cyan(result.index_file)}\n`);
-        process.stdout.write(`manifest: ${chalk.cyan(result.manifest_file)}\n`);
+    async (
+      target: string,
+      opts: {
+        include?: string;
+        depth?: "shallow" | "full";
+        limit?: number;
+        cursor?: string;
+        to?: string;
+        json?: boolean;
+        format?: string;
+        pretty?: boolean;
       },
-    );
+    ) => {
+      const input = buildFetchWorkspaceInputFromCli({
+        target,
+        opts,
+        context: {
+          rootWorkspace: activeWorkspaceOverride(),
+        },
+      });
+      const { value: result, telemetry } = await collectLinearRateLimitTelemetry(() =>
+        executeFetchWorkspace(input),
+      );
+      if (wantsMachineOutput(opts)) {
+        const cont =
+          "next_cursor" in result &&
+          typeof (result as { next_cursor?: string }).next_cursor === "string"
+            ? (result as { next_cursor: string }).next_cursor
+            : null;
+        writeMachineEnvelope(
+          {
+            ...result,
+            next: cont
+              ? [`--cursor ${cont}`]
+              : ["workspace explore /", "show <id>", "comment list <id>"],
+          } as Record<string, unknown>,
+          { json: true, format: opts.format, pretty: opts.pretty, shape: "nested" },
+          linearApiEnvelopeMeta(telemetry),
+        );
+        return;
+      }
+      process.stdout.write(`${chalk.green("ok")} wrote ${chalk.cyan(result.root)}\n`);
+      process.stdout.write(`index: ${chalk.cyan(result.index_file)}\n`);
+      process.stdout.write(`manifest: ${chalk.cyan(result.manifest_file)}\n`);
+    },
+  );
 }
 
 function collect(value: string, previous: string[]): string[] {

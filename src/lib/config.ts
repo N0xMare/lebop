@@ -4,9 +4,9 @@ import { dirname, join, resolve } from "node:path";
 import { parse as parseYaml } from "yaml";
 import { loadAuth } from "./auth.ts";
 import { ConfigError, ValidationError } from "./errors.ts";
+import { getConfigFilePath } from "./paths.ts";
 import { activeTeamOverride, activeWorkspaceOverride } from "./requestContext.ts";
 import type { RepoConfig, UserConfig } from "./types.ts";
-import { getConfigFilePath } from "./paths.ts";
 
 export interface ResolvedConfig {
   userConfig: UserConfig;

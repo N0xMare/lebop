@@ -20,10 +20,7 @@ import {
   unarchiveIssues,
 } from "../lib/issues.ts";
 import type { SurfaceOperationContract } from "./contracts.ts";
-import {
-  type IssueRepoCacheContext,
-  type IssueRepoCacheDeps,
-} from "./issue-write.ts";
+import type { IssueRepoCacheContext, IssueRepoCacheDeps } from "./issue-write.ts";
 import { parseSurfaceInput, repoRootArg, teamArg, workspaceArg } from "./schema.ts";
 
 export interface IssueLifecycleInput {

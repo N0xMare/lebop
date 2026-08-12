@@ -20,10 +20,7 @@ import { listMilestonesPage } from "../milestones.ts";
 import type { ConnectionPage } from "../paginate.ts";
 import { listProjectUpdatesPage } from "../projects.ts";
 import { type ListedRelationsPage, listRelationsPage } from "../relations.ts";
-import {
-  type ContextFile,
-  markdownJsonBlock,
-} from "../workspaceContextWriter.ts";
+import { type ContextFile, markdownJsonBlock } from "../workspaceContextWriter.ts";
 import {
   decodeExploreCursor,
   type ExploreCursor,
@@ -32,12 +29,12 @@ import {
 import type { ParsedWorkspacePath } from "../workspacePaths.ts";
 import { parseWorkspacePath, safeSegment } from "../workspacePaths.ts";
 import type {
+  FetchCollectionFragment,
   FetchCompletenessEntry,
   FetchContinuation,
   FetchDepth,
   FetchLinearWorkspaceResult,
   FetchSelection,
-  FetchCollectionFragment,
 } from "./fetchTypes.ts";
 
 export const DEFAULT_LIMIT = 100;
@@ -158,7 +155,6 @@ export const ALLOWED_MILESTONE_INCLUDES = new Set([
   "issue_document_details",
 ]);
 
-
 export function addWorkspaceToContinuations(
   result: FetchLinearWorkspaceResult,
   workspace: string | undefined,
@@ -241,7 +237,6 @@ export function focusedRelationCursors(
   if (selection.focused_collection !== "relations") return undefined;
   return cursor?.cursors;
 }
-
 
 export async function materializePages<T>(
   limit: number,
@@ -1438,4 +1433,3 @@ export function currentRepoHash(repoRootOverride?: string): string {
   }
   return repoRoot ? hashRepoRoot(repoRoot) : "_global";
 }
-

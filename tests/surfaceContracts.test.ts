@@ -473,10 +473,9 @@ describe("surface operation contracts", () => {
     expect(registeredMcp).toEqual(fromSurface);
 
     // H-2b: registration order lock is a permutation of surface MCP tools.
-    const {
-      deriveMcpRegistrationOrder,
-      surfaceMcpToolNames,
-    } = await import("../src/mcp/tools/index.ts");
+    const { deriveMcpRegistrationOrder, surfaceMcpToolNames } = await import(
+      "../src/mcp/tools/index.ts"
+    );
     const order = deriveMcpRegistrationOrder();
     expect([...order].toSorted()).toEqual(surfaceMcpToolNames().toSorted());
     expect([...order].toSorted()).toEqual(fromSurface);

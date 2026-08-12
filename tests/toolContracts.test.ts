@@ -237,9 +237,11 @@ describe("CLI/MCP parity manifest", () => {
       },
     ]);
     expect(
-      validateDestructiveMcpArgsContract("soft_delete_project", { id: "project-id", confirm: true }, [
+      validateDestructiveMcpArgsContract(
         "soft_delete_project",
-      ]),
+        { id: "project-id", confirm: true },
+        ["soft_delete_project"],
+      ),
     ).toEqual([]);
   });
 

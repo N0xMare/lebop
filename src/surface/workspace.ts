@@ -214,7 +214,7 @@ export const exploreWorkspaceOperation = {
   },
   mcp: {
     tool: "explore_linear_workspace",
-      profile: "core",
+    profile: "core",
     title: "Explore Linear workspace context",
     description:
       "Ls-style Linear discovery and search. Returns concise paths, ids, names, states, counts, and next_paths without long bodies.",
@@ -268,7 +268,7 @@ export const fetchWorkspaceOperation = {
   },
   mcp: {
     tool: "fetch_linear_workspace",
-      profile: "core",
+    profile: "core",
     title: "Fetch Linear workspace context",
     description:
       "Materialize a bounded Linear project, issue, initiative, agent session, document, cycle, or milestone dossier into local files and return a compact manifest.",

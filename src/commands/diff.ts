@@ -39,14 +39,11 @@ export function registerDiff(program: Command): void {
         const hasDrift = result.fields.length > 0;
         process.exitCode = hasDrift ? 1 : 0;
         if (wantsMachineOutput(opts)) {
-          writeMachineEnvelope(
-            { ...result, next: diffNext() } as Record<string, unknown>,
-            {
-              json: true,
-              format: opts.format,
-              pretty: opts.pretty,
-            },
-          );
+          writeMachineEnvelope({ ...result, next: diffNext() } as Record<string, unknown>, {
+            json: true,
+            format: opts.format,
+            pretty: opts.pretty,
+          });
           return;
         }
         printHumanProject(

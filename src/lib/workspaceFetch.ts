@@ -2,56 +2,56 @@
  * Workspace fetch orchestrator (kind contexts extracted to workspace/*).
  */
 import { NotFoundError, ValidationError } from "./errors.ts";
-import type { ParsedWorkspacePath } from "./workspacePaths.ts";
-import { parseWorkspacePath } from "./workspacePaths.ts";
-import type {
-  FetchDepth,
-  FetchLinearWorkspaceInput,
-  FetchLinearWorkspaceResult,
-  FetchContinuation,
-  FetchCompletenessEntry,
-} from "./workspace/fetchTypes.ts";
+import { fetchAgentSessionContext } from "./workspace/fetchAgentSession.ts";
+import { fetchCycleContext } from "./workspace/fetchCycle.ts";
+import { fetchDocumentContext } from "./workspace/fetchDocument.ts";
+import { fetchInitiativeContext } from "./workspace/fetchInitiative.ts";
+import { fetchIssueContext } from "./workspace/fetchIssue.ts";
+import { fetchMilestoneContext } from "./workspace/fetchMilestone.ts";
+import { fetchProjectContext } from "./workspace/fetchProject.ts";
 import {
-  currentRepoHash,
-  decodeFetchCursor,
-  validateExplicitOutputRoot,
-  includeSet,
-  selectionFor,
-  projectDefaults,
-  issueDefaults,
-  initiativeDefaults,
-  normalizeLimit,
-  normalizeDepth,
-  addWorkspaceToContinuations,
-  dedupeContinuations,
-  ALLOWED_PROJECT_INCLUDES,
-  ALLOWED_ISSUE_INCLUDES,
-  ALLOWED_INITIATIVE_INCLUDES,
-  ALLOWED_DOCUMENT_INCLUDES,
   ALLOWED_CYCLE_INCLUDES,
+  ALLOWED_DOCUMENT_INCLUDES,
+  ALLOWED_INITIATIVE_INCLUDES,
+  ALLOWED_ISSUE_INCLUDES,
   ALLOWED_MILESTONE_INCLUDES,
-  DEFAULT_DOCUMENT_INCLUDES,
+  ALLOWED_PROJECT_INCLUDES,
+  addWorkspaceToContinuations,
+  currentRepoHash,
   DEFAULT_CYCLE_INCLUDES,
+  DEFAULT_DOCUMENT_INCLUDES,
   DEFAULT_MILESTONE_INCLUDES,
-  normalizeProjectIncludes,
+  decodeFetchCursor,
+  dedupeContinuations,
+  includeSet,
+  initiativeDefaults,
+  issueDefaults,
+  normalizeDepth,
   normalizeDirectIssueIncludes,
   normalizeInitiativeIncludes,
   normalizeIssueCollectionIncludes,
+  normalizeLimit,
+  normalizeProjectIncludes,
+  projectDefaults,
+  selectionFor,
+  validateExplicitOutputRoot,
 } from "./workspace/fetchShared.ts";
-import { fetchProjectContext } from "./workspace/fetchProject.ts";
-import { fetchIssueContext } from "./workspace/fetchIssue.ts";
-import { fetchAgentSessionContext } from "./workspace/fetchAgentSession.ts";
-import { fetchInitiativeContext } from "./workspace/fetchInitiative.ts";
-import { fetchDocumentContext } from "./workspace/fetchDocument.ts";
-import { fetchCycleContext } from "./workspace/fetchCycle.ts";
-import { fetchMilestoneContext } from "./workspace/fetchMilestone.ts";
-
-export type {
+import type {
+  FetchCompletenessEntry,
+  FetchContinuation,
   FetchDepth,
   FetchLinearWorkspaceInput,
   FetchLinearWorkspaceResult,
-  FetchContinuation,
+} from "./workspace/fetchTypes.ts";
+import type { ParsedWorkspacePath } from "./workspacePaths.ts";
+import { parseWorkspacePath } from "./workspacePaths.ts";
+
+export type {
   FetchCompletenessEntry,
+  FetchContinuation,
+  FetchDepth,
+  FetchLinearWorkspaceInput,
+  FetchLinearWorkspaceResult,
 } from "./workspace/fetchTypes.ts";
 
 export async function fetchLinearWorkspace(
@@ -226,4 +226,3 @@ export async function fetchLinearWorkspace(
     "fetch a concrete /projects/<id>, /issues/<id>, /initiatives/<id>, /agent-sessions/<id>, /documents/<id>, /cycles/<id>, or /milestones/<id> path returned by explore_linear_workspace",
   );
 }
-

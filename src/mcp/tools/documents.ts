@@ -93,9 +93,7 @@ export function buildDocumentToolSpecs(deps: DocumentToolDeps): McpToolSpec[] {
       ),
       handler: async (args: DocumentCreateMcpInput) => {
         const document = await executeDocumentCreate(buildDocumentCreateInputFromMcp(args));
-        return text(
-          envelope({ document, next: mcpGetNext("get_document", "list_documents") }),
-        );
+        return text(envelope({ document, next: mcpGetNext("get_document", "list_documents") }));
       },
     },
     {
@@ -106,9 +104,7 @@ export function buildDocumentToolSpecs(deps: DocumentToolDeps): McpToolSpec[] {
       ),
       handler: async (args: DocumentUpdateMcpInput) => {
         const document = await executeDocumentUpdate(buildDocumentUpdateInputFromMcp(args));
-        return text(
-          envelope({ document, next: mcpGetNext("get_document", "list_documents") }),
-        );
+        return text(envelope({ document, next: mcpGetNext("get_document", "list_documents") }));
       },
     },
     {

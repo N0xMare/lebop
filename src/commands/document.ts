@@ -91,7 +91,11 @@ export function registerDocument(program: Command): void {
         },
       ) => {
         const fullForHuman = !wantsMachineOutput(opts);
-        const { document: doc, content, truncated } = await executeDocumentGet(
+        const {
+          document: doc,
+          content,
+          truncated,
+        } = await executeDocumentGet(
           buildDocumentGetInput(id, {
             fullContent: opts.fullContent === true || fullForHuman,
             contentFile: opts.contentFile,

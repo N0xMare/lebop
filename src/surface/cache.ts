@@ -648,7 +648,7 @@ export const cacheStatusOperation = {
   },
   mcp: {
     tool: "cache_status",
-      profile: "core",
+    profile: "core",
     title: cacheStatusTitle,
     description: cacheStatusDescription,
     annotations: {
@@ -683,7 +683,7 @@ export const cacheStatusAliasOperation = {
   },
   mcp: {
     tool: "cache_status",
-      profile: "core",
+    profile: "core",
     title: cacheStatusTitle,
     description: cacheStatusDescription,
     annotations: {

@@ -24,54 +24,54 @@ export function registerProjects(program: Command): void {
     .option("--cursor <token>", "continue from a previous JSON result's next_cursor");
   addMachineOutputOptions(cmd);
   cmd.action(
-      async (opts: {
-        team?: string;
-        allTeams?: boolean;
-        state?: string;
-        includeArchived?: boolean;
-        limit?: string;
-        cursor?: string;
-        json?: boolean;
-        format?: string;
-        pretty?: boolean;
-      }) => {
-        const result = await executeProjectList(buildProjectListInputFromCli({ opts }), {
-          resolveTeam: async (team) => (await resolveConfig({ teamOverride: team })).team,
-        });
+    async (opts: {
+      team?: string;
+      allTeams?: boolean;
+      state?: string;
+      includeArchived?: boolean;
+      limit?: string;
+      cursor?: string;
+      json?: boolean;
+      format?: string;
+      pretty?: boolean;
+    }) => {
+      const result = await executeProjectList(buildProjectListInputFromCli({ opts }), {
+        resolveTeam: async (team) => (await resolveConfig({ teamOverride: team })).team,
+      });
 
-        if (wantsMachineOutput(opts)) {
-          const body = projectListPayload(result);
-          writeMachineEnvelope(
-            {
-              ...body,
-              next: listNext(Boolean(body.has_more), body.next_cursor, {
-                show: "project view <id>",
-                extra: ["list --project <name>"],
-              }),
-            } as Record<string, unknown>,
-            {
-              json: true,
-              format: opts.format,
-              pretty: opts.pretty,
-            },
-          );
-          return;
-        }
+      if (wantsMachineOutput(opts)) {
+        const body = projectListPayload(result);
+        writeMachineEnvelope(
+          {
+            ...body,
+            next: listNext(Boolean(body.has_more), body.next_cursor, {
+              show: "project view <id>",
+              extra: ["list --project <name>"],
+            }),
+          } as Record<string, unknown>,
+          {
+            json: true,
+            format: opts.format,
+            pretty: opts.pretty,
+          },
+        );
+        return;
+      }
 
-        if (result.records.length === 0) {
-          process.stdout.write("no projects\n");
-          return;
-        }
+      if (result.records.length === 0) {
+        process.stdout.write("no projects\n");
+        return;
+      }
 
-        const stateWidth = Math.max(...result.records.map((r) => r.state.length));
-        for (const r of result.records) {
-          process.stdout.write(`[${r.state.padEnd(stateWidth)}]  ${r.name}\n`);
-        }
-        if (result.truncated) {
-          process.stdout.write(
-            `\nmore projects available; use --cursor ${result.next_cursor} with the same filters\n`,
-          );
-        }
-      },
-    );
+      const stateWidth = Math.max(...result.records.map((r) => r.state.length));
+      for (const r of result.records) {
+        process.stdout.write(`[${r.state.padEnd(stateWidth)}]  ${r.name}\n`);
+      }
+      if (result.truncated) {
+        process.stdout.write(
+          `\nmore projects available; use --cursor ${result.next_cursor} with the same filters\n`,
+        );
+      }
+    },
+  );
 }

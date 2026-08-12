@@ -83,9 +83,7 @@ function emitCheck(result: UpdateCheckResult, opts: UpdateOpts): void {
     writeMachineEnvelope(
       {
         ...result,
-        next: result.update_available
-          ? [`update → ${result.latest_tag}`]
-          : ["up to date"],
+        next: result.update_available ? [`update → ${result.latest_tag}`] : ["up to date"],
       } as Record<string, unknown>,
       { json: true, format: opts.format, pretty: opts.pretty },
     );

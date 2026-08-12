@@ -95,10 +95,7 @@ export function registerInitiative(program: Command): void {
     .option("--pretty", "pretty-printed JSON")
     .option("--human", "maintainer/dev chalk tables (opt-in; not agent path; bodies uncapped)")
     .option("--full-content", "full description on the wire (bypass 64 KiB cap)")
-    .option(
-      "--content-file <path>",
-      "write full description to path (host FS); wire stays dense",
-    )
+    .option("--content-file <path>", "write full description to path (host FS); wire stays dense")
     .action(
       async (
         idOrName: string,

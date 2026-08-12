@@ -57,7 +57,6 @@ export function resolveLebopInvocation(args = [], env = process.env) {
   };
 }
 
-
 /** Required discovery step name fragments for --validate-report (match real step titles). */
 export const DISCOVERY_REQUIRED_STEP_NAMES = [
   "search",
@@ -74,14 +73,23 @@ export const DISCOVERY_REQUIRED_STEP_NAMES = [
 
 export function sanitizeDiscoveryReport(report) {
   const sanitized = sanitizeLiveSurfaceReport(report);
-  if (sanitized && typeof sanitized === "object" && typeof sanitized.binary_under_test === "string") {
+  if (
+    sanitized &&
+    typeof sanitized === "object" &&
+    typeof sanitized.binary_under_test === "string"
+  ) {
     sanitized.binary_under_test = path.basename(sanitized.binary_under_test);
   }
   // whoami leaves a structured viewer shell; strip raw-looking fields after surface sanitize.
   if (sanitized && typeof sanitized === "object" && Array.isArray(sanitized.steps)) {
     for (const step of sanitized.steps) {
       const detail = step?.detail;
-      if (detail && typeof detail === "object" && detail.viewer && typeof detail.viewer === "object") {
+      if (
+        detail &&
+        typeof detail === "object" &&
+        detail.viewer &&
+        typeof detail.viewer === "object"
+      ) {
         detail.viewer = { id: detail.viewer.id ?? "[redacted]", name: "[redacted]" };
       }
     }
@@ -666,7 +674,6 @@ async function validateDiscoveryReportCli(reportPath) {
   }
   console.log(JSON.stringify({ status: "passed", report: reportPath }, null, 2));
 }
-
 
 // Only auto-run when this file is the entrypoint (not when imported for tests).
 const isMain =

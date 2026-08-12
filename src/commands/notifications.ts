@@ -14,29 +14,27 @@ export function registerNotifications(program: Command): void {
     .option("--cursor <token>");
   addMachineOutputOptions(cmd);
   cmd.action(
-      async (opts: {
-        limit?: string;
-        cursor?: string;
-        json?: boolean;
-        format?: string;
-        pretty?: boolean;
-      }) => {
-        const result = await executeNotificationsList(
-          buildNotificationsListInputFromCli({ opts }),
-        );
-        writeMachineEnvelope(
-          {
-            ...(result as unknown as Record<string, unknown>),
-            next: listNext(Boolean(result.has_more), result.next_cursor, {
-              show: "show <id>",
-            }),
-          },
-          {
-            json: true,
-            format: opts.format,
-            pretty: opts.pretty,
-          },
-        );
-      },
-    );
+    async (opts: {
+      limit?: string;
+      cursor?: string;
+      json?: boolean;
+      format?: string;
+      pretty?: boolean;
+    }) => {
+      const result = await executeNotificationsList(buildNotificationsListInputFromCli({ opts }));
+      writeMachineEnvelope(
+        {
+          ...(result as unknown as Record<string, unknown>),
+          next: listNext(Boolean(result.has_more), result.next_cursor, {
+            show: "show <id>",
+          }),
+        },
+        {
+          json: true,
+          format: opts.format,
+          pretty: opts.pretty,
+        },
+      );
+    },
+  );
 }

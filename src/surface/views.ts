@@ -5,9 +5,9 @@
 import { z } from "zod";
 import { parseCliLimit } from "../lib/cliOptions.ts";
 import {
-  createCustomView,
   type CustomViewListResult,
   type CustomViewSummary,
+  createCustomView,
   deleteCustomView,
   getCustomView,
   listCustomViews,
@@ -279,7 +279,9 @@ export type ViewDeleteExecutionResult = {
   success: boolean;
 };
 
-export async function executeViewDelete(input: ViewDeleteInput): Promise<ViewDeleteExecutionResult> {
+export async function executeViewDelete(
+  input: ViewDeleteInput,
+): Promise<ViewDeleteExecutionResult> {
   const r = await tryIdempotentDelete(() => deleteCustomView(input.id));
   return {
     id: input.id,

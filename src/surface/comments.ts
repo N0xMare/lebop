@@ -298,7 +298,7 @@ export const commentListOperation = {
   },
   mcp: {
     tool: "list_comments",
-      profile: "core",
+    profile: "core",
     title: "List comments on an issue",
     description: "Returns all comments on the given issue, chronologically.",
     annotations: {
@@ -333,7 +333,7 @@ export const commentAddOperation = {
   },
   mcp: {
     tool: "add_comment",
-      profile: "core",
+    profile: "core",
     title: "Add a comment to an issue",
     description: "Posts one comment. NOT retry-wrapped — would post a duplicate.",
     annotations: {

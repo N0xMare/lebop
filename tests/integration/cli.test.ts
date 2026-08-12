@@ -415,7 +415,15 @@ describe("pull read surface", () => {
   it("pull --no-comments clears stale cached comments after a successful refresh", async () => {
     const home = await makeAuthFile("lin_api_test_pull_no_comments");
     const cwd = await mkdtemp(join(tmpdir(), "lebop-pull-no-comments-cwd-"));
-    const staleCommentsDir = join(home, "cache", "test-workspace", "_global", "issues", "TEAM-8", "comments");
+    const staleCommentsDir = join(
+      home,
+      "cache",
+      "test-workspace",
+      "_global",
+      "issues",
+      "TEAM-8",
+      "comments",
+    );
     await mkdir(staleCommentsDir, { recursive: true });
     await writeFile(join(staleCommentsDir, "stale.md"), "stale cached comment");
 
@@ -1075,7 +1083,9 @@ describe("destructive CLI confirmation gates", () => {
     const cwd = await mkdtemp(join(tmpdir(), "lebop-set-links-cwd-"));
 
     try {
-      await mkdir(join(home, "cache", "test-workspace", "_global", "issues", "TEAM-1"), { recursive: true });
+      await mkdir(join(home, "cache", "test-workspace", "_global", "issues", "TEAM-1"), {
+        recursive: true,
+      });
       await writeFile(
         join(home, "cache", "test-workspace", "_global", "issues", "TEAM-1", "metadata.yaml"),
         [
@@ -1162,7 +1172,9 @@ describe("destructive CLI confirmation gates", () => {
     const cwd = await mkdtemp(join(tmpdir(), "lebop-relation-add-cwd-"));
 
     try {
-      await mkdir(join(home, "cache", "test-workspace", "_global", "issues", "TEAM-1"), { recursive: true });
+      await mkdir(join(home, "cache", "test-workspace", "_global", "issues", "TEAM-1"), {
+        recursive: true,
+      });
       await writeFile(
         join(home, "cache", "test-workspace", "_global", "issues", "TEAM-1", "metadata.yaml"),
         [
@@ -1255,7 +1267,9 @@ describe("destructive CLI confirmation gates", () => {
     const cwd = await mkdtemp(join(tmpdir(), "lebop-set-links-cwd-"));
 
     try {
-      await mkdir(join(home, "cache", "test-workspace", "_global", "issues", "TEAM-1"), { recursive: true });
+      await mkdir(join(home, "cache", "test-workspace", "_global", "issues", "TEAM-1"), {
+        recursive: true,
+      });
       await writeFile(
         join(home, "cache", "test-workspace", "_global", "issues", "TEAM-1", "metadata.yaml"),
         [
@@ -1342,10 +1356,20 @@ describe("destructive CLI confirmation gates", () => {
   it("set links refuses to overwrite cache edits that appear during refresh", async () => {
     const home = await makeAuthFile("lin_api_test_set_links_guarded_writeback");
     const cwd = await mkdtemp(join(tmpdir(), "lebop-set-links-guard-cwd-"));
-    const descriptionPath = join(home, "cache", "test-workspace", "_global", "issues", "TEAM-1", "description.md");
+    const descriptionPath = join(
+      home,
+      "cache",
+      "test-workspace",
+      "_global",
+      "issues",
+      "TEAM-1",
+      "description.md",
+    );
 
     try {
-      await mkdir(join(home, "cache", "test-workspace", "_global", "issues", "TEAM-1"), { recursive: true });
+      await mkdir(join(home, "cache", "test-workspace", "_global", "issues", "TEAM-1"), {
+        recursive: true,
+      });
       await writeFile(
         join(home, "cache", "test-workspace", "_global", "issues", "TEAM-1", "metadata.yaml"),
         [

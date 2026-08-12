@@ -4,12 +4,16 @@
  * CLI/MCP adapters that historically imported from coverage.ts.
  */
 
-export * from "./search.ts";
-export * from "./history.ts";
-export * from "./views.ts";
 export * from "./custom-fields.ts";
+export * from "./history.ts";
+export * from "./search.ts";
+export * from "./views.ts";
 
-import { customFieldGetIssueOperation, customFieldListOperation, customFieldSetIssueOperation } from "./custom-fields.ts";
+import {
+  customFieldGetIssueOperation,
+  customFieldListOperation,
+  customFieldSetIssueOperation,
+} from "./custom-fields.ts";
 import { issueHistoryListOperation } from "./history.ts";
 import { searchLinearOperation } from "./search.ts";
 import {

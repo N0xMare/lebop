@@ -20,8 +20,8 @@ import { dirname, join } from "node:path";
 import { Document, parseDocument } from "yaml";
 import { writeAtomic } from "./cache.ts";
 import { ValidationError } from "./errors.ts";
-import { ensureLebopHomeForWrite } from "./stateSafety.ts";
 import { getConfigFilePath, getLebopHome } from "./paths.ts";
+import { ensureLebopHomeForWrite } from "./stateSafety.ts";
 
 const CONFIG_WRITE_LOCK_TIMEOUT_MS = 30_000;
 const CONFIG_WRITE_LOCK_POLL_MS = 25;

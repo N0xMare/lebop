@@ -62,7 +62,7 @@ export const searchLinearOperation = {
   },
   mcp: {
     tool: "search_linear",
-      profile: "core",
+    profile: "core",
     title: "Search Linear",
     description: "Hybrid/semantic Linear search (keyword fallback). Returns dense hits for issues.",
     annotations: {

@@ -2111,9 +2111,7 @@ export function validateFullSurfaceReport(targetReport, options = {}) {
 export function assertFullSurfaceReport(targetReport, options = {}) {
   const validation = validateFullSurfaceReport(targetReport, options);
   if (!validation.ok) {
-    throw new Error(
-      `live surface report failed validation:\n${validation.errors.join("\n")}`,
-    );
+    throw new Error(`live surface report failed validation:\n${validation.errors.join("\n")}`);
   }
   return validation;
 }
@@ -2552,7 +2550,9 @@ async function runCliSurface() {
   const projectId = project.project.id;
   report.created.cli_project = projectId;
   registerRemoteAudit("soft_deleted_project", projectId, "CLI project");
-  const doneCliProjectCleanup = registerCliCleanup("soft-delete CLI project", ["project", "soft-delete",
+  const doneCliProjectCleanup = registerCliCleanup("soft-delete CLI project", [
+    "project",
+    "soft-delete",
     projectId,
     "--yes",
     "--json",
@@ -2621,7 +2621,9 @@ async function runCliSurface() {
   const cursorFixtureProjectId = cursorFixtureProject.project.id;
   report.created.cli_cursor_project = cursorFixtureProjectId;
   registerRemoteAudit("soft_deleted_project", cursorFixtureProjectId, "CLI cursor fixture project");
-  const doneCliCursorProjectCleanup = registerCliCleanup("soft-delete CLI cursor fixture project", ["project", "soft-delete",
+  const doneCliCursorProjectCleanup = registerCliCleanup("soft-delete CLI cursor fixture project", [
+    "project",
+    "soft-delete",
     cursorFixtureProjectId,
     "--yes",
     "--json",
@@ -2729,7 +2731,9 @@ async function runCliSurface() {
   const documentId = doc.document.id;
   report.created.cli_document = documentId;
   registerRemoteAudit("soft_deleted_document", documentId, "CLI document");
-  const doneCliDocumentCleanup = registerCliCleanup("soft-delete CLI document", ["document", "soft-delete",
+  const doneCliDocumentCleanup = registerCliCleanup("soft-delete CLI document", [
+    "document",
+    "soft-delete",
     documentId,
     "--yes",
     "--json",
@@ -2799,7 +2803,9 @@ async function runCliSurface() {
   const initiativeId = initiative.initiative.id;
   report.created.cli_initiative = initiativeId;
   registerRemoteAudit("soft_deleted_initiative", initiativeId, "CLI initiative");
-  const doneCliInitiativeCleanup = registerCliCleanup("soft-delete CLI initiative", ["initiative", "soft-delete",
+  const doneCliInitiativeCleanup = registerCliCleanup("soft-delete CLI initiative", [
+    "initiative",
+    "soft-delete",
     initiativeId,
     "--yes",
     "--json",
@@ -3024,7 +3030,9 @@ async function runCliSurface() {
   const cliIssueDocumentId = cliIssueDocument.id;
   report.created.cli_issue_document = cliIssueDocumentId;
   registerRemoteAudit("soft_deleted_document", cliIssueDocumentId, "CLI issue document");
-  const doneCliIssueDocumentCleanup = registerCliCleanup("soft-delete CLI issue document", ["document", "soft-delete",
+  const doneCliIssueDocumentCleanup = registerCliCleanup("soft-delete CLI issue document", [
+    "document",
+    "soft-delete",
     cliIssueDocumentId,
     "--yes",
     "--json",
@@ -3684,20 +3692,16 @@ async function runCliSurface() {
     },
   );
   // C2: assign an issue to the cycle so archive proves Linear unlinks issues.
-  await cli(
-    "set cycle for archive unlink --json",
-    ["set", "cycle", issueId1, cycleId, "--json"],
-    {
-      json: true,
-      assert: (payload) => {
-        const id = payload.identifier ?? payload.issue?.identifier;
-        if (!id) {
-          throw new Error("CLI set cycle missing identifier in machine envelope");
-        }
-        return ["issue assigned to smoke cycle"];
-      },
+  await cli("set cycle for archive unlink --json", ["set", "cycle", issueId1, cycleId, "--json"], {
+    json: true,
+    assert: (payload) => {
+      const id = payload.identifier ?? payload.issue?.identifier;
+      if (!id) {
+        throw new Error("CLI set cycle missing identifier in machine envelope");
+      }
+      return ["issue assigned to smoke cycle"];
     },
-  );
+  });
   await cli("cycle list --json", ["cycle", "list", "--team", team, "--json"], {
     json: true,
   });
@@ -3757,26 +3761,19 @@ async function runCliSurface() {
   });
   doneCliCycleCleanup();
   // C2: after archive, issue must no longer be on the cycle (Linear unlinks).
-  await cli(
-    "show after cycle archive --json",
-    ["show", issueId1, "--json"],
-    {
-      json: true,
-      assert: (payload) => {
-        const cycle =
-          payload.issue?.metadata?.cycle ??
-          payload.issue?.cycle ??
-          payload.issue?.cycle_id ??
-          null;
-        if (cycle) {
-          throw new Error(
-            `CLI cycle archive did not unlink issue ${issueId1} (still cycle=${JSON.stringify(cycle)})`,
-          );
-        }
-        return ["cycle archive unlinked issue from cycle"];
-      },
+  await cli("show after cycle archive --json", ["show", issueId1, "--json"], {
+    json: true,
+    assert: (payload) => {
+      const cycle =
+        payload.issue?.metadata?.cycle ?? payload.issue?.cycle ?? payload.issue?.cycle_id ?? null;
+      if (cycle) {
+        throw new Error(
+          `CLI cycle archive did not unlink issue ${issueId1} (still cycle=${JSON.stringify(cycle)})`,
+        );
+      }
+      return ["cycle archive unlinked issue from cycle"];
     },
-  );
+  });
   await cli(
     "cycle list --include-archived --json",
     ["cycle", "list", "--team", team, "--include-archived", "--limit", "20", "--json"],
@@ -3795,28 +3792,20 @@ async function runCliSurface() {
   );
 
   // C1: CLI discovery surfaces (search / history / views)
-  await cli(
-    "search --json",
-    ["search", "--query", prefix.slice(0, 24), "--limit", "5", "--json"],
-    {
-      json: true,
-      assert: (payload) => [
-        ...requireFields(payload, ["query", "count", "hits", "next"], "CLI search"),
-        "search returns hits + next continuations",
-      ],
-    },
-  );
-  await cli(
-    "history --json",
-    ["history", issueId1, "--limit", "10", "--json"],
-    {
-      json: true,
-      assert: (payload) => [
-        ...requireFields(payload, ["count", "history", "next"], "CLI history"),
-        "history returns rows + next",
-      ],
-    },
-  );
+  await cli("search --json", ["search", "--query", prefix.slice(0, 24), "--limit", "5", "--json"], {
+    json: true,
+    assert: (payload) => [
+      ...requireFields(payload, ["query", "count", "hits", "next"], "CLI search"),
+      "search returns hits + next continuations",
+    ],
+  });
+  await cli("history --json", ["history", issueId1, "--limit", "10", "--json"], {
+    json: true,
+    assert: (payload) => [
+      ...requireFields(payload, ["count", "history", "next"], "CLI history"),
+      "history returns rows + next",
+    ],
+  });
   const cliView = await cli(
     "view create --json",
     [
@@ -3861,17 +3850,13 @@ async function runCliSurface() {
   await cli("view issues --json", ["view", "issues", cliViewId, "--limit", "5", "--json"], {
     json: true,
   });
-  await cli(
-    "view delete --json",
-    ["view", "delete", cliViewId, "--yes", "--json"],
-    {
-      json: true,
-      assert: (payload) => [
-        ...requireFields(payload, ["id"], "CLI view delete"),
-        "view delete returns id",
-      ],
-    },
-  );
+  await cli("view delete --json", ["view", "delete", cliViewId, "--yes", "--json"], {
+    json: true,
+    assert: (payload) => [
+      ...requireFields(payload, ["id"], "CLI view delete"),
+      "view delete returns id",
+    ],
+  });
   doneCliViewCleanup();
 
   const sessions = await cli(
@@ -3933,30 +3918,42 @@ async function runCliSurface() {
     },
   );
   doneCliPrimaryIssueCleanup();
-  await cli("document soft-delete --json", ["document", "soft-delete", documentId, "--yes", "--json"], {
-    json: true,
-    assert: (payload) => assertDeletePayload(payload, "CLI document delete", documentId),
-  });
+  await cli(
+    "document soft-delete --json",
+    ["document", "soft-delete", documentId, "--yes", "--json"],
+    {
+      json: true,
+      assert: (payload) => assertDeletePayload(payload, "CLI document delete", documentId),
+    },
+  );
   doneCliDocumentCleanup();
   await cli("milestone delete --json", ["milestone", "delete", milestoneId, "--yes", "--json"], {
     json: true,
     assert: (payload) => assertDeletePayload(payload, "CLI milestone delete", milestoneId),
   });
   doneCliMilestoneCleanup();
-  await cli("initiative soft-delete --json", ["initiative", "soft-delete", initiativeId, "--yes", "--json"], {
-    json: true,
-    assert: (payload) => assertDeletePayload(payload, "CLI initiative delete", initiativeId),
-  });
+  await cli(
+    "initiative soft-delete --json",
+    ["initiative", "soft-delete", initiativeId, "--yes", "--json"],
+    {
+      json: true,
+      assert: (payload) => assertDeletePayload(payload, "CLI initiative delete", initiativeId),
+    },
+  );
   doneCliInitiativeCleanup();
   await cli("label delete --json", ["label", "delete", label.label.id, "--yes", "--json"], {
     json: true,
     assert: (payload) => assertDeletePayload(payload, "CLI label delete", label.label.id),
   });
   doneCliLabelCleanup();
-  await cli("project soft-delete --json", ["project", "soft-delete", projectId, "--yes", "--json"], {
-    json: true,
-    assert: (payload) => assertDeletePayload(payload, "CLI project delete", projectId),
-  });
+  await cli(
+    "project soft-delete --json",
+    ["project", "soft-delete", projectId, "--yes", "--json"],
+    {
+      json: true,
+      assert: (payload) => assertDeletePayload(payload, "CLI project delete", projectId),
+    },
+  );
   doneCliProjectCleanup();
 
   report.evidence_issue = { id: issueUuid1, identifier: issueId1 };
@@ -4169,7 +4166,9 @@ async function runMcpSurface(context) {
   const projectId = project.project.id;
   report.created.mcp_project = projectId;
   registerRemoteAudit("soft_deleted_project", projectId, "MCP project");
-  const doneMcpProjectCleanup = registerCliCleanup("soft-delete MCP project", ["project", "soft-delete",
+  const doneMcpProjectCleanup = registerCliCleanup("soft-delete MCP project", [
+    "project",
+    "soft-delete",
     projectId,
     "--yes",
     "--json",
@@ -4196,7 +4195,9 @@ async function runMcpSurface(context) {
   const cursorFixtureProjectId = cursorFixtureProject.project.id;
   report.created.mcp_cursor_project = cursorFixtureProjectId;
   registerRemoteAudit("soft_deleted_project", cursorFixtureProjectId, "MCP cursor fixture project");
-  const doneMcpCursorProjectCleanup = registerCliCleanup("soft-delete MCP cursor fixture project", ["project", "soft-delete",
+  const doneMcpCursorProjectCleanup = registerCliCleanup("soft-delete MCP cursor fixture project", [
+    "project",
+    "soft-delete",
     cursorFixtureProjectId,
     "--yes",
     "--json",
@@ -4242,7 +4243,9 @@ async function runMcpSurface(context) {
   });
   const docId = doc.document.id;
   registerRemoteAudit("soft_deleted_document", docId, "MCP document");
-  const doneMcpDocumentCleanup = registerCliCleanup("soft-delete MCP document", ["document", "soft-delete",
+  const doneMcpDocumentCleanup = registerCliCleanup("soft-delete MCP document", [
+    "document",
+    "soft-delete",
     docId,
     "--yes",
     "--json",
@@ -4280,7 +4283,9 @@ async function runMcpSurface(context) {
   });
   const initiativeId = initiative.initiative.id;
   registerRemoteAudit("soft_deleted_initiative", initiativeId, "MCP initiative");
-  const doneMcpInitiativeCleanup = registerCliCleanup("soft-delete MCP initiative", ["initiative", "soft-delete",
+  const doneMcpInitiativeCleanup = registerCliCleanup("soft-delete MCP initiative", [
+    "initiative",
+    "soft-delete",
     initiativeId,
     "--yes",
     "--json",
@@ -4459,7 +4464,9 @@ async function runMcpSurface(context) {
   const mcpIssueDocumentId = mcpIssueDocument.id;
   report.created.mcp_issue_document = mcpIssueDocumentId;
   registerRemoteAudit("soft_deleted_document", mcpIssueDocumentId, "MCP issue document");
-  const doneMcpIssueDocumentCleanup = registerCliCleanup("soft-delete MCP issue document", ["document", "soft-delete",
+  const doneMcpIssueDocumentCleanup = registerCliCleanup("soft-delete MCP issue document", [
+    "document",
+    "soft-delete",
     mcpIssueDocumentId,
     "--yes",
     "--json",
@@ -5450,7 +5457,9 @@ async function runMcpSurface(context) {
       },
     );
   } else {
-    throw new Error("MCP list_project_updates returned no updates for live coverage of update/delete");
+    throw new Error(
+      "MCP list_project_updates returned no updates for live coverage of update/delete",
+    );
   }
 
   const mcpIuList = await mcp.call("list_initiative_updates", { initiative: initiativeId });

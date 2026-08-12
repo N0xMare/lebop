@@ -62,11 +62,7 @@ import { deleteCustomView } from "../src/lib/customViews.ts";
 import { deleteDocument } from "../src/lib/documents.ts";
 import { deleteInitiative, deleteInitiativeUpdateEntry } from "../src/lib/initiatives.ts";
 import { listMilestones } from "../src/lib/milestones.ts";
-import {
-  deleteProject,
-  deleteProjectUpdateEntry,
-  listProjects,
-} from "../src/lib/projects.ts";
+import { deleteProject, deleteProjectUpdateEntry, listProjects } from "../src/lib/projects.ts";
 
 function reset() {
   mockResponses = [];

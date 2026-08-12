@@ -680,7 +680,11 @@ describe("linear publish review", () => {
       team: "UE",
       contentHash: "0".repeat(64),
       workspace: { url_key: "test", name: "Test Workspace" },
-      remoteSnapshot: { issues: [], projects: [], missing: [{ kind: "issue", target: "TEAM-404" }] },
+      remoteSnapshot: {
+        issues: [],
+        projects: [],
+        missing: [{ kind: "issue", target: "TEAM-404" }],
+      },
     });
 
     const published = await publish.publishLinearChanges({ reviewId: record.review_id });

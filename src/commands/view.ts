@@ -28,7 +28,8 @@ export function registerView(program: Command): void {
     .description("list saved views")
     .option("--limit <n>", "max views", "50");
   addMachineOutputOptions(list);
-  list.action(async (opts: { limit?: string; json?: boolean; format?: string; pretty?: boolean }) => {
+  list.action(
+    async (opts: { limit?: string; json?: boolean; format?: string; pretty?: boolean }) => {
       const result = await executeViewList(buildViewListInputFromCli({ opts }));
       writeMachineEnvelope(
         {
@@ -41,17 +42,18 @@ export function registerView(program: Command): void {
           pretty: opts.pretty,
         },
       );
-    });
+    },
+  );
 
   const get = view.command("get <id>").description("get one saved view");
   addMachineOutputOptions(get);
   get.action(async (id: string, opts: { json?: boolean; format?: string; pretty?: boolean }) => {
-      const v = await executeViewGet(buildViewGetInput(id));
-      writeMachineEnvelope(
-        { view: v, next: ["view issues <id>", "view update <id>"] },
-        { json: true, format: opts.format, pretty: opts.pretty },
-      );
-    });
+    const v = await executeViewGet(buildViewGetInput(id));
+    writeMachineEnvelope(
+      { view: v, next: ["view issues <id>", "view update <id>"] },
+      { json: true, format: opts.format, pretty: opts.pretty },
+    );
+  });
 
   const create = view
     .command("create")
@@ -62,22 +64,22 @@ export function registerView(program: Command): void {
     .option("--shared");
   addMachineOutputOptions(create);
   create.action(
-      async (opts: {
-        name: string;
-        description?: string;
-        teamId?: string;
-        shared?: boolean;
-        json?: boolean;
-        format?: string;
-        pretty?: boolean;
-      }) => {
-        const v = await executeViewCreate(buildViewCreateInputFromCli({ opts }));
-        writeMachineEnvelope(
-          { view: v, next: ["view issues <id>", "view get <id>"] },
-          { json: true, format: opts.format, pretty: opts.pretty },
-        );
-      },
-    );
+    async (opts: {
+      name: string;
+      description?: string;
+      teamId?: string;
+      shared?: boolean;
+      json?: boolean;
+      format?: string;
+      pretty?: boolean;
+    }) => {
+      const v = await executeViewCreate(buildViewCreateInputFromCli({ opts }));
+      writeMachineEnvelope(
+        { view: v, next: ["view issues <id>", "view get <id>"] },
+        { json: true, format: opts.format, pretty: opts.pretty },
+      );
+    },
+  );
 
   const update = view
     .command("update <id>")
@@ -87,24 +89,24 @@ export function registerView(program: Command): void {
     .option("--shared");
   addMachineOutputOptions(update);
   update.action(
-      async (
-        id: string,
-        opts: {
-          name?: string;
-          description?: string;
-          shared?: boolean;
-          json?: boolean;
-          format?: string;
-          pretty?: boolean;
-        },
-      ) => {
-        const v = await executeViewUpdate(buildViewUpdateInputFromCli({ id, opts }));
-        writeMachineEnvelope(
-          { view: v, next: ["view issues <id>", "view get <id>"] },
-          { json: true, format: opts.format, pretty: opts.pretty },
-        );
+    async (
+      id: string,
+      opts: {
+        name?: string;
+        description?: string;
+        shared?: boolean;
+        json?: boolean;
+        format?: string;
+        pretty?: boolean;
       },
-    );
+    ) => {
+      const v = await executeViewUpdate(buildViewUpdateInputFromCli({ id, opts }));
+      writeMachineEnvelope(
+        { view: v, next: ["view issues <id>", "view get <id>"] },
+        { json: true, format: opts.format, pretty: opts.pretty },
+      );
+    },
+  );
 
   const del = view
     .command("delete <id>")
@@ -112,17 +114,17 @@ export function registerView(program: Command): void {
     .option("--yes", "confirm delete");
   addMachineOutputOptions(del);
   del.action(
-      async (
-        id: string,
-        opts: { yes?: boolean; json?: boolean; format?: string; pretty?: boolean },
-      ) => {
-        const result = await executeViewDelete(buildViewDeleteInputFromCli({ id, opts }));
-        writeMachineEnvelope(
-          { ...result, next: ["view list"] },
-          { json: true, format: opts.format, pretty: opts.pretty },
-        );
-      },
-    );
+    async (
+      id: string,
+      opts: { yes?: boolean; json?: boolean; format?: string; pretty?: boolean },
+    ) => {
+      const result = await executeViewDelete(buildViewDeleteInputFromCli({ id, opts }));
+      writeMachineEnvelope(
+        { ...result, next: ["view list"] },
+        { json: true, format: opts.format, pretty: opts.pretty },
+      );
+    },
+  );
 
   const issues = view
     .command("issues <id>")
@@ -131,33 +133,31 @@ export function registerView(program: Command): void {
     .option("--cursor <token>");
   addMachineOutputOptions(issues);
   issues.action(
-      async (
-        id: string,
-        opts: {
-          limit?: string;
-          cursor?: string;
-          json?: boolean;
-          format?: string;
-          pretty?: boolean;
-        },
-      ) => {
-        const result = await executeViewMaterialize(
-          buildViewMaterializeInputFromCli({ id, opts }),
-        );
-        const body = viewMaterializePayload(result);
-        writeMachineEnvelope(
-          {
-            ...(body as Record<string, unknown>),
-            next: listNext(Boolean(body.has_more), body.next_cursor, {
-              show: "show <id>",
-            }),
-          },
-          {
-            json: true,
-            format: opts.format,
-            pretty: opts.pretty,
-          },
-        );
+    async (
+      id: string,
+      opts: {
+        limit?: string;
+        cursor?: string;
+        json?: boolean;
+        format?: string;
+        pretty?: boolean;
       },
-    );
+    ) => {
+      const result = await executeViewMaterialize(buildViewMaterializeInputFromCli({ id, opts }));
+      const body = viewMaterializePayload(result);
+      writeMachineEnvelope(
+        {
+          ...(body as Record<string, unknown>),
+          next: listNext(Boolean(body.has_more), body.next_cursor, {
+            show: "show <id>",
+          }),
+        },
+        {
+          json: true,
+          format: opts.format,
+          pretty: opts.pretty,
+        },
+      );
+    },
+  );
 }

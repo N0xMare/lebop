@@ -280,9 +280,7 @@ export function buildLabelCreateInputFromMcp(input: LabelCreateMcpInput): LabelC
 
 function hasLabelUpdateFields(update: LabelUpdateInput): boolean {
   return (
-    update.name !== undefined ||
-    update.color !== undefined ||
-    update.description !== undefined
+    update.name !== undefined || update.color !== undefined || update.description !== undefined
   );
 }
 

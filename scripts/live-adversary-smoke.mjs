@@ -22,9 +22,9 @@ import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { sanitizeLiveSurfaceReport } from "./live-surface-smoke.mjs";
 import { pathToFileURL } from "node:url";
 import { LEBOP_VERSION } from "../src/lib/version.ts";
+import { sanitizeLiveSurfaceReport } from "./live-surface-smoke.mjs";
 
 const repoRoot = path.resolve(new URL("..", import.meta.url).pathname);
 const DEFAULT_LEBOP_BIN = path.join(repoRoot, "bin", "lebop");
@@ -650,7 +650,9 @@ async function main() {
       async () => {
         await loginHome(homeA, token);
         await loginHome(homeB, token);
-        record("adv:dual-home-auth", "pass", { note: "two LEBOP_HOME sessions on lebop-playground" });
+        record("adv:dual-home-auth", "pass", {
+          note: "two LEBOP_HOME sessions on lebop-playground",
+        });
       },
     ],
     ["stale-push", () => scenarioStalePush(homeA, homeB)],

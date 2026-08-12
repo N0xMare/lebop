@@ -1,8 +1,8 @@
 import { z } from "zod";
 import type { ProjectCacheRefreshResult } from "../lib/cacheRefresh.ts";
 import { parseCliLimit } from "../lib/cliOptions.ts";
-import { NotFoundError, tryIdempotentDelete, ValidationError } from "../lib/errors.ts";
 import { applyEntityTextField } from "../lib/contentSize.ts";
+import { NotFoundError, tryIdempotentDelete, ValidationError } from "../lib/errors.ts";
 import {
   createProject,
   deleteProject,
@@ -237,7 +237,9 @@ const projectUpdateCanonicalSchema = z
   })
   .strict();
 
-const projectDeleteCanonicalSchema = z.object({ id: z.string(), confirmed: z.boolean().optional() }).strict();
+const projectDeleteCanonicalSchema = z
+  .object({ id: z.string(), confirmed: z.boolean().optional() })
+  .strict();
 
 export function buildProjectListInputFromCli(input: ProjectListCliInput): ProjectListInput {
   return validateProjectListInput(
@@ -601,7 +603,7 @@ export const projectListOperation = {
   cli: { command: "project list", liveSteps: ["cli:project list --json"] },
   mcp: {
     tool: "list_projects",
-      profile: "core",
+    profile: "core",
     title: "List Linear projects",
     description: "List projects scoped to a team (default) or workspace-wide.",
     annotations: {
@@ -632,7 +634,7 @@ export const projectListAliasOperation = {
   cli: { command: "projects", liveSteps: ["cli:projects alias --json"] },
   mcp: {
     tool: "list_projects",
-      profile: "core",
+    profile: "core",
     title: "List Linear projects",
     description: "List projects scoped to a team (default) or workspace-wide.",
     annotations: {
@@ -675,8 +677,7 @@ export const projectGetOperation = {
     },
   },
   safety: { readOnly: false, destructive: false, idempotent: true, openWorld: true },
-  notes:
-    "content_file writes host FS. Content size policy applied in execute (not adapters).",
+  notes: "content_file writes host FS. Content size policy applied in execute (not adapters).",
   execute: (input) =>
     executeProjectGet(input, "verify the project UUID; run list_projects to discover ids"),
 } satisfies SurfaceOperationContract<ProjectGetInput, ProjectGetExecutionResult>;
