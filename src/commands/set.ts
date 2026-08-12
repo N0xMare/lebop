@@ -2,9 +2,10 @@ import chalk from "chalk";
 import type { Command } from "commander";
 import { parseCliNumber } from "../lib/cliOptions.ts";
 import { findGitRoot, hashRepoRoot, resolveConfig } from "../lib/config.ts";
-import { envelope } from "../lib/envelope.ts";
+import { wantsMachineOutput } from "../lib/encode.ts";
 import { ConfigError, ValidationError } from "../lib/errors.ts";
 import { deriveTeamFromIdentifiers } from "../lib/resolve.ts";
+import { CLI_SET_ISSUE_FIELDS } from "../lib/toolSurfaceManifest.ts";
 import {
   buildIssueUpdateInputFromCli,
   executeIssueUpdate,
@@ -17,23 +18,13 @@ import {
   relationUpdateCliPayload,
 } from "../surface/relations.ts";
 
-const SUPPORTED_FIELDS = [
-  "title",
-  "description",
-  "state",
-  "priority",
-  "estimate",
-  "assignee",
-  "labels",
-  "parent",
-  "project",
-  "milestone",
-  "cycle",
-  "links",
-] as const;
+/** Inventory fields + local CLI aliases (single authority: CLI_SET_ISSUE_FIELDS). */
+const SUPPORTED_FIELDS = [...CLI_SET_ISSUE_FIELDS, "due-date"] as const;
 type SupportedField = (typeof SUPPORTED_FIELDS)[number];
-type UpdateField = Exclude<SupportedField, "links">;
+/** Canonical update fields (aliases normalized before handleUpdateField). */
+type UpdateField = Exclude<(typeof CLI_SET_ISSUE_FIELDS)[number], "links">;
 const UNSUPPORTED_FIELDS = new Set(["content"]);
+const SUPPORTED_FIELD_SET = new Set<string>(SUPPORTED_FIELDS);
 
 const cliRelationCacheDeps: RelationMutationDeps = {
   resolveCacheContext: () => {
@@ -53,7 +44,10 @@ export function registerSet(program: Command): void {
     .option("--description-file <path>", "read description from a file for `set description`")
     .option("--stdin", "read description from stdin for `set description`")
     .option("--yes", "confirm destructive link removal when using `set links -KIND:ID`")
-    .option("--json", "emit structured result")
+    .option("--json", "machine output (default; TOON)")
+    .option("--format <fmt>", "toon | json | pretty")
+    .option("--pretty", "pretty-printed JSON")
+    .option("--human", "maintainer/dev chalk tables (opt-in; not agent path; bodies uncapped)")
     .addHelpText(
       "after",
       `
@@ -84,6 +78,7 @@ Examples:
         ...opts,
         team: opts.team ?? tail.team,
         json: opts.json === true || tail.json === true,
+        human: opts.human,
       };
       // Round-9 / L-9: bad-field invocations are user-input rejections at the
       // CLI boundary — they belong under `code:"validation_error"` in the
@@ -94,7 +89,7 @@ Examples:
           `use \`lebop pull ${id}\` → edit → \`lebop push\` instead`,
         );
       }
-      if (!SUPPORTED_FIELDS.includes(field as SupportedField)) {
+      if (!SUPPORTED_FIELD_SET.has(field)) {
         throw new ValidationError(
           `unknown field "${field}"`,
           `supported fields: ${SUPPORTED_FIELDS.join(", ")}`,
@@ -106,7 +101,8 @@ Examples:
         return;
       }
 
-      await handleUpdateField(id, field as UpdateField, tail, tailOpts);
+      const canonicalField = (field === "due-date" ? "due_date" : field) as UpdateField;
+      await handleUpdateField(id, canonicalField, tail, tailOpts);
     });
 }
 
@@ -117,6 +113,9 @@ interface SetOpts {
   stdin?: boolean;
   yes?: boolean;
   json?: boolean;
+  format?: string;
+  pretty?: boolean;
+  human?: boolean;
 }
 
 async function handleUpdateField(
@@ -126,7 +125,7 @@ async function handleUpdateField(
   opts: SetOpts,
 ): Promise<void> {
   const teamOverride = opts.team ?? tail.team;
-  const json = opts.json === true || tail.json === true;
+  const machine = wantsMachineOutput(opts);
   const input: SurfaceIssueUpdateInput = {
     identifier: id,
   };
@@ -179,22 +178,22 @@ async function handleUpdateField(
   });
   const cacheWriteback = cacheWritebackFromIssueCache(result.cache);
 
-  if (json) {
-    process.stdout.write(
-      `${JSON.stringify(
-        envelope({
-          identifier: result.issue.identifier,
-          requested_identifier: id,
-          field,
-          input: sharedInputForOutput(field, input),
-          updated_at: result.issue.updatedAt,
-          remote: result.remote,
-          status: result.status,
-          cache_writeback: cacheWriteback,
-        }),
-        null,
-        2,
-      )}\n`,
+  if (machine) {
+    const { writeMachineEnvelope } = await import("../lib/output.ts");
+    const { setNext } = await import("../lib/nextStubs.ts");
+    writeMachineEnvelope(
+      {
+        identifier: result.issue.identifier,
+        requested_identifier: id,
+        field,
+        input: sharedInputForOutput(field, input),
+        updated_at: result.issue.updatedAt,
+        remote: result.remote,
+        status: result.status,
+        cache_writeback: cacheWriteback,
+        next: setNext(result.issue.identifier, field),
+      },
+      { json: true, format: opts.format, pretty: opts.pretty },
     );
     if (cacheWriteback.status === "failed") process.exitCode = 1;
     return;
@@ -240,6 +239,9 @@ function applyScalarUpdateInput(input: SurfaceIssueUpdateInput, field: UpdateFie
       return;
     case "cycle":
       input.cycle = parseNullableSelector(value);
+      return;
+    case "due_date":
+      input.dueDate = parseNullableSelector(value);
       return;
     case "description":
     case "labels":
@@ -480,7 +482,9 @@ function sharedInputForOutput(
     if (input.labels !== undefined) return { labels: input.labels };
     return { labels: input.labelDeltas };
   }
-  return { [field]: input[field] };
+  if (field === "due_date") return { dueDate: input.dueDate };
+  const key = field as keyof SurfaceIssueUpdateInput;
+  return { [field]: input[key] };
 }
 
 function parseEstimate(value: string): number | null {
@@ -510,8 +514,20 @@ async function handleLinks(id: string, valueArgs: string[], opts: SetOpts): Prom
   const payload = relationUpdateCliPayload(result);
   const cacheWriteback = payload.cache_writeback;
 
-  if (opts.json) {
-    process.stdout.write(`${JSON.stringify(envelope(payload), null, 2)}\n`);
+  if (wantsMachineOutput(opts)) {
+    const { writeMachineEnvelope } = await import("../lib/output.ts");
+    const { setNext } = await import("../lib/nextStubs.ts");
+    writeMachineEnvelope(
+      {
+        ...(payload as Record<string, unknown>),
+        next: setNext(payload.identifier, "links"),
+      },
+      {
+        json: true,
+        format: opts.format,
+        pretty: opts.pretty,
+      },
+    );
   } else {
     for (const r of payload.results) {
       const icon =

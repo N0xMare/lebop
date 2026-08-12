@@ -1,4 +1,5 @@
 import { envelope } from "../../lib/envelope.ts";
+import { mcpGetNext } from "../../lib/nextStubs.ts";
 import {
   buildDocumentCreateInputFromMcp,
   buildDocumentCreateMcpInputSchema,
@@ -50,7 +51,12 @@ export function buildDocumentToolSpecs(deps: DocumentToolDeps): McpToolSpec[] {
         const result = await executeDocumentList(buildDocumentListInputFromMcp(args), {
           projectNotFoundHint: DOCUMENT_MCP_PROJECT_NOT_FOUND_HINT,
         });
-        return text(envelope(documentListPayload(result)));
+        return text(
+          envelope({
+            ...documentListPayload(result),
+            next: mcpGetNext("get_document", "create_document"),
+          }),
+        );
       },
     },
     {
@@ -60,11 +66,23 @@ export function buildDocumentToolSpecs(deps: DocumentToolDeps): McpToolSpec[] {
         buildDocumentGetMcpInputSchema(deps.workspaceParamDescription),
       ),
       handler: async (args: ToolHandlerArgs) => {
-        const document = await executeDocumentGet(
-          buildDocumentGetInput(args.id as string),
+        const { mcpEntityTruncatedNext } = await import("../../lib/nextStubs.ts");
+        const { document, content, truncated } = await executeDocumentGet(
+          buildDocumentGetInput(args.id as string, {
+            fullContent: args.full_content === true,
+            contentFile: typeof args.content_file === "string" ? args.content_file : undefined,
+          }),
           DOCUMENT_MCP_GET_HINT,
         );
-        return text(envelope({ document }));
+        return text(
+          envelope({
+            document,
+            content,
+            next: truncated
+              ? mcpEntityTruncatedNext("get_document", `id=${args.id}`)
+              : mcpGetNext("update_document", "list_documents"),
+          }),
+        );
       },
     },
     {
@@ -75,7 +93,9 @@ export function buildDocumentToolSpecs(deps: DocumentToolDeps): McpToolSpec[] {
       ),
       handler: async (args: DocumentCreateMcpInput) => {
         const document = await executeDocumentCreate(buildDocumentCreateInputFromMcp(args));
-        return text(envelope({ document }));
+        return text(
+          envelope({ document, next: mcpGetNext("get_document", "list_documents") }),
+        );
       },
     },
     {
@@ -86,23 +106,26 @@ export function buildDocumentToolSpecs(deps: DocumentToolDeps): McpToolSpec[] {
       ),
       handler: async (args: DocumentUpdateMcpInput) => {
         const document = await executeDocumentUpdate(buildDocumentUpdateInputFromMcp(args));
-        return text(envelope({ document }));
+        return text(
+          envelope({ document, next: mcpGetNext("get_document", "list_documents") }),
+        );
       },
     },
     {
-      name: "delete_document",
+      name: "soft_delete_document",
       config: mcpToolConfig(
         documentDeleteOperation,
         buildDocumentDeleteMcpInputSchema(deps.workspaceParamDescription),
       ),
       handler: async (args: DocumentDeleteMcpInput) => {
-        deps.requireConfirm(args, "delete_document");
+        deps.requireConfirm(args, "soft_delete_document");
         const result = await executeDocumentDelete(buildDocumentDeleteInputFromMcp(args));
         return text(
           envelope({
             id: result.id,
             status: result.status,
             success: documentDeleteSuccessForMcp(result),
+            next: mcpGetNext("list_documents"),
           }),
         );
       },

@@ -7,7 +7,7 @@ import { commentFileName } from "../src/lib/cache.ts";
 import { writeIssueExport, writeProjectExport } from "../src/lib/pullExport.ts";
 
 const metadata: IssueMetadata = {
-  identifier: "NOX-1",
+  identifier: "TEAM-1",
   title: "Exported issue",
   state: "Todo",
   priority: 0,
@@ -20,8 +20,8 @@ const metadata: IssueMetadata = {
   parent: null,
   _server: {
     id: "issue-1",
-    identifier: "NOX-1",
-    url: "https://linear.app/noxor/issue/NOX-1",
+    identifier: "TEAM-1",
+    url: "https://linear.app/example/issue/TEAM-1",
     state_id: "state-1",
     state_name: "Todo",
     state_type: "unstarted",
@@ -54,7 +54,7 @@ const projectMetadata: ProjectMetadata = {
   state: "started",
   _server: {
     id: "project-1",
-    url: "https://linear.app/noxor/project/project-1",
+    url: "https://linear.app/example/project/project-1",
     state: "started",
     name: "Exported project",
     description: "Project description",
@@ -87,25 +87,25 @@ describe("writeIssueExport", () => {
   it("removes stale comment files when rewriting an issue export", async () => {
     const out = await mkdtemp(join(tmpdir(), "lebop-pull-export-comments-"));
     try {
-      await writeIssueExport(out, "NOX-1", metadata, "first body", [
+      await writeIssueExport(out, "TEAM-1", metadata, "first body", [
         comment("comment-a", "first comment"),
         comment("comment-b", "stale comment"),
       ]);
 
-      await writeIssueExport(out, "NOX-1", metadata, "second body", [
+      await writeIssueExport(out, "TEAM-1", metadata, "second body", [
         comment("comment-a", "updated comment"),
       ]);
 
       await expect(
-        readFile(join(out, "NOX-1", "comments", "comment-b.md"), "utf8"),
+        readFile(join(out, "TEAM-1", "comments", "comment-b.md"), "utf8"),
       ).rejects.toThrow();
       await expect(
-        readFile(join(out, "NOX-1", "comments", "comment-a.md"), "utf8"),
+        readFile(join(out, "TEAM-1", "comments", "comment-a.md"), "utf8"),
       ).resolves.toContain("updated comment");
 
-      await writeIssueExport(out, "NOX-1", metadata, "third body", []);
+      await writeIssueExport(out, "TEAM-1", metadata, "third body", []);
       await expect(
-        readFile(join(out, "NOX-1", "comments", "comment-a.md"), "utf8"),
+        readFile(join(out, "TEAM-1", "comments", "comment-a.md"), "utf8"),
       ).rejects.toThrow();
     } finally {
       await rm(out, { recursive: true, force: true });
@@ -116,11 +116,11 @@ describe("writeIssueExport", () => {
     const out = await mkdtemp(join(tmpdir(), "lebop-pull-export-comments-link-"));
     const outside = await mkdtemp(join(tmpdir(), "lebop-pull-export-comments-outside-"));
     try {
-      await mkdir(join(out, "NOX-1"), { recursive: true });
-      await symlink(outside, join(out, "NOX-1", "comments"), "dir");
+      await mkdir(join(out, "TEAM-1"), { recursive: true });
+      await symlink(outside, join(out, "TEAM-1", "comments"), "dir");
 
       await expect(
-        writeIssueExport(out, "NOX-1", metadata, "body", [comment("comment-a", "comment")]),
+        writeIssueExport(out, "TEAM-1", metadata, "body", [comment("comment-a", "comment")]),
       ).rejects.toMatchObject({
         code: "validation_error",
         message: expect.stringContaining("symlinked comments export directory"),
@@ -136,7 +136,7 @@ describe("writeIssueExport", () => {
   it("encodes traversal-shaped comment ids before writing export comment files", async () => {
     const out = await mkdtemp(join(tmpdir(), "lebop-pull-export-comment-id-"));
     try {
-      const dir = await writeIssueExport(out, "NOX-1", metadata, "body", [
+      const dir = await writeIssueExport(out, "TEAM-1", metadata, "body", [
         comment("../outside", "unsafe export comment"),
       ]);
       const encoded = commentFileName("../outside");

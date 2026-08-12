@@ -1,4 +1,5 @@
 import { envelope } from "../../lib/envelope.ts";
+import { mcpPublishApplyNext } from "../../lib/nextStubs.ts";
 import {
   buildPublishApplyInputFromMcp,
   buildPublishApplyMcpInputSchema,
@@ -37,7 +38,12 @@ export function buildPublishToolSpecs(deps: PublishToolDeps): McpToolSpec[] {
         buildPublishApplyMcpInputSchema(deps.workspaceParamDescription),
       ),
       handler: async (args: PublishApplyMcpInput) =>
-        text(envelope({ ...(await executePublishApply(buildPublishApplyInputFromMcp(args))) })),
+        text(
+          envelope({
+            ...(await executePublishApply(buildPublishApplyInputFromMcp(args))),
+            next: mcpPublishApplyNext(),
+          }),
+        ),
     },
   ];
 }

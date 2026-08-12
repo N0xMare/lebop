@@ -1,7 +1,9 @@
 import chalk from "chalk";
 import type { Command } from "commander";
-import { envelope } from "../lib/envelope.ts";
+import { wantsMachineOutput } from "../lib/encode.ts";
 import { NotFoundError } from "../lib/errors.ts";
+import { showNext } from "../lib/nextStubs.ts";
+import { addMachineOutputOptions, writeMachineEnvelope } from "../lib/output.ts";
 import { isUuid } from "../lib/uuid.ts";
 import {
   buildIssueGetInputFromCli,
@@ -10,29 +12,62 @@ import {
 } from "../surface/issues.ts";
 
 export function registerShow(program: Command): void {
-  program
+  const cmd = program
     .command("show <id>")
     .description(
-      "fetch and print an issue inline — no cache side-effect. use `pull` when you want to edit and push back.",
+      "fetch and print an issue shell — dense by default (no comments). use --comments or pull to edit.",
     )
-    .option("--no-comments", "skip comments for a terser output")
-    .option("--json", "emit structured JSON instead of formatted output")
-    .action(async (id: string, opts: { comments?: boolean; json?: boolean }) => {
+    .option("--comments", "include comments (off by default in 0.0.6)")
+    .option("--no-relations", "omit relation summary")
+    .option("--full-content", "return full description on the wire (bypass 64 KiB agent size cap)")
+    .option(
+      "--content-file <path>",
+      "write full description to path; wire stays dense (prefer for large bodies)",
+    );
+  addMachineOutputOptions(cmd);
+  cmd.action(
+    async (
+      id: string,
+      opts: {
+        comments?: boolean;
+        relations?: boolean;
+        fullContent?: boolean;
+        contentFile?: string;
+        json?: boolean;
+        format?: string;
+        pretty?: boolean;
+      },
+    ) => {
       // Round-6 / CLI 17: accept UUIDs (lowercase hex) without mangling
       // them via toUpperCase. TEAM-NN identifiers continue to upper-case
       // so `lebop show ue-359` keeps working.
       const idLooksUuid = isUuid(id);
       const upperId = idLooksUuid ? id : id.toUpperCase();
-      const result = await executeIssueGet(buildIssueGetInputFromCli({ id, opts }));
+      // Maintainer --human: full bodies. Agents use machine path + content flags.
+      const getOpts = wantsMachineOutput(opts) ? opts : { ...opts, fullContent: true };
+      const result = await executeIssueGet(buildIssueGetInputFromCli({ id, opts: getOpts }));
       if (!result) throw new NotFoundError(`not found: ${upperId}`);
 
-      if (opts.json) {
-        process.stdout.write(`${JSON.stringify(envelope({ ...result }), null, 2)}\n`);
+      if (wantsMachineOutput(opts)) {
+        const truncated = result.content?.description_truncated === true;
+        writeMachineEnvelope(
+          {
+            issue: result,
+            ...(result.content ? { content: result.content } : {}),
+            next: showNext({
+              includeComments: Boolean(opts.comments),
+              truncated,
+              identifier: result.metadata.identifier,
+            }),
+          },
+          { json: true, format: opts.format, pretty: opts.pretty, shape: "nested" },
+        );
         return;
       }
 
       printHuman(result);
-    });
+    },
+  );
 }
 
 function printHuman(issue: IssueContext): void {
@@ -54,6 +89,16 @@ function printHuman(issue: IssueContext): void {
   }
   process.stdout.write(`${chalk.gray("updated:")} ${server.updated_at}\n`);
   process.stdout.write(`${chalk.gray("url:")}     ${server.url}\n`);
+  if (issue.content?.content_file) {
+    process.stdout.write(
+      `${chalk.gray("content_file:")} ${issue.content.content_file} (${issue.content.content_bytes ?? "?"} bytes)\n`,
+    );
+  }
+  if (issue.content?.description_truncated) {
+    process.stdout.write(
+      `${chalk.yellow("note:")} description truncated (${issue.content.description_original_bytes} > ${issue.content.description_limit_bytes} bytes); re-run with --content-file or --full-content\n`,
+    );
+  }
 
   if (issue.description.trim()) {
     process.stdout.write(`\n${chalk.gray("── description ──")}\n\n${issue.description}\n`);

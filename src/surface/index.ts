@@ -4,6 +4,7 @@ import { AUTH_SURFACE_OPERATIONS } from "./auth.ts";
 import { CACHE_SURFACE_OPERATIONS } from "./cache.ts";
 import { CLI_ONLY_SURFACE_OPERATIONS } from "./cli-only.ts";
 import { COMMENT_SURFACE_OPERATIONS } from "./comments.ts";
+import { COVERAGE_SURFACE_OPERATIONS } from "./coverage.ts";
 import { CYCLES_SURFACE_OPERATIONS } from "./cycles.ts";
 import { DOCUMENT_SURFACE_OPERATIONS } from "./documents.ts";
 import { INITIATIVE_UPDATE_SURFACE_OPERATIONS } from "./initiative-updates.ts";
@@ -14,6 +15,7 @@ import { LINK_SURFACE_OPERATIONS } from "./link.ts";
 import { LINT_SURFACE_OPERATIONS } from "./lint.ts";
 import { LOOKUPS_SURFACE_OPERATIONS } from "./lookups.ts";
 import { MILESTONE_SURFACE_OPERATIONS } from "./milestones.ts";
+import { NOTIFICATIONS_SURFACE_OPERATIONS } from "./notifications.ts";
 import { PLAN_SURFACE_OPERATIONS } from "./plan.ts";
 import { PROJECT_UPDATE_SURFACE_OPERATIONS } from "./project-updates.ts";
 import { PROJECT_SURFACE_OPERATIONS } from "./projects.ts";
@@ -49,6 +51,8 @@ export const SURFACE_OPERATIONS = [
   ...AUTH_SURFACE_OPERATIONS,
   ...RAW_SURFACE_OPERATIONS,
   ...LINT_SURFACE_OPERATIONS,
+  ...COVERAGE_SURFACE_OPERATIONS,
+  ...NOTIFICATIONS_SURFACE_OPERATIONS,
   ...CLI_ONLY_SURFACE_OPERATIONS,
 ] as const;
 
@@ -59,6 +63,9 @@ export * from "./cache.ts";
 export * from "./cli-only.ts";
 export * from "./comments.ts";
 export * from "./contracts.ts";
+// coverage barrel aggregates search/history/views/custom-fields; do not also
+// export * those modules here (TS2308 ambiguous re-export).
+export * from "./coverage.ts";
 export * from "./cycles.ts";
 export * from "./deriveToolSurfaceManifest.ts";
 export * from "./documents.ts";
@@ -70,6 +77,7 @@ export * from "./link.ts";
 export * from "./lint.ts";
 export * from "./lookups.ts";
 export * from "./milestones.ts";
+export * from "./notifications.ts";
 export * from "./plan.ts";
 export * from "./project-updates.ts";
 export * from "./projects.ts";

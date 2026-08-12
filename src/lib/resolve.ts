@@ -238,8 +238,8 @@ export function priorityName(value: number): string {
 // ---------- identifier helpers ----------
 
 /**
- * Derive a single team key from a list of issue identifiers (e.g. ["NOX-34",
- * "NOX-35"] → "NOX"). Used by MCP tools that take an `identifiers` arg but
+ * Derive a single team key from a list of issue identifiers (e.g. ["TEAM-34",
+ * "TEAM-35"] → "TEAM"). Used by MCP tools that take an `identifiers` arg but
  * not a `team` arg — if every identifier shares a prefix we can short-circuit
  * the team-resolution step that would otherwise fail when no `team` is in
  * the resolved config.

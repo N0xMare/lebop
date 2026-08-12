@@ -1,6 +1,7 @@
 import chalk from "chalk";
 import type { Command } from "commander";
-import { envelope } from "../lib/envelope.ts";
+import { wantsMachineOutput } from "../lib/encode.ts";
+import { writeMachineEnvelope } from "../lib/output.ts";
 import {
   buildLookupStateByNameInputFromCli,
   buildLookupUserByEmailInputFromCli,
@@ -22,37 +23,53 @@ export function registerLookup(program: Command): void {
   cmd
     .command("state <team> <name>")
     .description("resolve a workflow state name to a UUID (team-scoped; case-sensitive)")
-    .option("--json", "emit structured result")
-    .action(async (team: string, name: string, opts: { json?: boolean }) => {
-      const result = await executeLookupStateByName(
-        buildLookupStateByNameInputFromCli({ team, name }),
-      );
-      if (opts.json) {
-        process.stdout.write(
-          `${JSON.stringify(envelope(lookupStateByNamePayload(result)), null, 2)}\n`,
+    .option("--json", "machine output (default; TOON)")
+    .option("--format <fmt>", "toon | json | pretty")
+    .option("--pretty", "pretty-printed JSON")
+    .option("--human", "maintainer/dev chalk tables (opt-in; not agent path; bodies uncapped)")
+    .action(
+      async (
+        team: string,
+        name: string,
+        opts: { json?: boolean; format?: string; pretty?: boolean },
+      ) => {
+        const result = await executeLookupStateByName(
+          buildLookupStateByNameInputFromCli({ team, name }),
         );
-        return;
-      }
-      if (!result.state) {
-        process.stderr.write(`${chalk.red("not found:")} state "${name}" in team ${team}\n`);
-        process.exitCode = 1;
-        return;
-      }
-      process.stdout.write(
-        `${chalk.bold(result.state.name)}  ${chalk.gray(result.state.type)}  ${chalk.gray(result.state.id)}\n`,
-      );
-    });
+        if (wantsMachineOutput(opts)) {
+          writeMachineEnvelope(lookupStateByNamePayload(result) as Record<string, unknown>, {
+            json: true,
+            format: opts.format,
+            pretty: opts.pretty,
+          });
+          return;
+        }
+        if (!result.state) {
+          process.stderr.write(`${chalk.red("not found:")} state "${name}" in team ${team}\n`);
+          process.exitCode = 1;
+          return;
+        }
+        process.stdout.write(
+          `${chalk.bold(result.state.name)}  ${chalk.gray(result.state.type)}  ${chalk.gray(result.state.id)}\n`,
+        );
+      },
+    );
 
   cmd
     .command("user <email>")
     .description("resolve a workspace user by email")
-    .option("--json", "emit structured result")
-    .action(async (email: string, opts: { json?: boolean }) => {
+    .option("--json", "machine output (default; TOON)")
+    .option("--format <fmt>", "toon | json | pretty")
+    .option("--pretty", "pretty-printed JSON")
+    .option("--human", "maintainer/dev chalk tables (opt-in; not agent path; bodies uncapped)")
+    .action(async (email: string, opts: { json?: boolean; format?: string; pretty?: boolean }) => {
       const result = await executeLookupUserByEmail(buildLookupUserByEmailInputFromCli({ email }));
-      if (opts.json) {
-        process.stdout.write(
-          `${JSON.stringify(envelope(lookupUserByEmailPayload(result)), null, 2)}\n`,
-        );
+      if (wantsMachineOutput(opts)) {
+        writeMachineEnvelope(lookupUserByEmailPayload(result) as Record<string, unknown>, {
+          json: true,
+          format: opts.format,
+          pretty: opts.pretty,
+        });
         return;
       }
       if (!result.user) {

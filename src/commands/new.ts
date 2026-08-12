@@ -1,7 +1,7 @@
 import chalk from "chalk";
 import type { Command } from "commander";
 import { resolveConfig } from "../lib/config.ts";
-import { envelope } from "../lib/envelope.ts";
+import { wantsMachineOutput } from "../lib/encode.ts";
 import { ValidationError } from "../lib/errors.ts";
 import { buildIssueCreateInputFromCli, executeIssueCreate } from "../surface/issues.ts";
 
@@ -15,10 +15,16 @@ interface NewOpts {
   estimate?: string;
   label?: string[];
   assignee?: string;
+  parent?: string;
+  milestone?: string;
+  cycle?: string;
+  dueDate?: string;
   description?: string;
   descriptionFile?: string;
   stdin?: boolean;
   json?: boolean;
+  format?: string;
+  pretty?: boolean;
 }
 
 export function registerNew(program: Command): void {
@@ -34,13 +40,20 @@ export function registerNew(program: Command): void {
     .option("--estimate <points>", "estimate points")
     .option("--label <name>", "repeatable; label to attach", collectLabel, [])
     .option("--assignee <who>", "assignee (email|name|@me)")
+    .option("--parent <id>", "parent issue identifier")
+    .option("--milestone <name-or-id>", "project milestone")
+    .option("--cycle <name-or-id>", "cycle")
+    .option("--due-date <date>", "due date YYYY-MM-DD")
     .option(
       "--description <text>",
       "description body; use --description-file or --stdin for longer content",
     )
     .option("--description-file <path>", "read description from a file")
     .option("--stdin", "read description from stdin")
-    .option("--json", "emit structured result")
+    .option("--json", "machine output (default; TOON)")
+    .option("--format <fmt>", "toon | json | pretty")
+    .option("--pretty")
+    .option("--human", "maintainer/dev chalk tables (opt-in; not agent path; bodies uncapped)")
     .action(async (opts: NewOpts) => {
       const description = await resolveDescription(opts);
 
@@ -49,8 +62,12 @@ export function registerNew(program: Command): void {
         { resolveConfig },
       );
 
-      if (opts.json) {
-        process.stdout.write(`${JSON.stringify(envelope({ issue }), null, 2)}\n`);
+      if (wantsMachineOutput(opts)) {
+        const { writeMachineEnvelope } = await import("../lib/output.ts");
+        writeMachineEnvelope(
+          { issue, next: ["show <id>", "set …", "comment add <id>", "pull <id>"] },
+          { json: true, format: opts.format, pretty: opts.pretty },
+        );
         return;
       }
 

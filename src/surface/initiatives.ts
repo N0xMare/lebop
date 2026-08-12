@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { parseCliLimit, parseCliNumber } from "../lib/cliOptions.ts";
+import { applyEntityTextField } from "../lib/contentSize.ts";
 import { NotFoundError, tryIdempotentDelete, ValidationError } from "../lib/errors.ts";
 import {
   archiveInitiative,
@@ -52,6 +53,14 @@ export type InitiativeListMcpInput = Record<string, unknown> & {
 export interface InitiativeGetInput {
   /** UUID or exact initiative name (resolved via `resolveInitiativeId`). */
   id: string;
+  fullContent?: boolean;
+  contentFile?: string;
+}
+
+export interface InitiativeGetExecutionResult {
+  initiative: FullInitiative;
+  content: Record<string, unknown>;
+  truncated: boolean;
 }
 
 export interface InitiativeCreateInput {
@@ -245,7 +254,13 @@ const initiativeListCanonicalSchema = z
   })
   .strict();
 
-const initiativeGetCanonicalSchema = z.object({ id: z.string() }).strict();
+const initiativeGetCanonicalSchema = z
+  .object({
+    id: z.string(),
+    fullContent: z.boolean().optional(),
+    contentFile: z.string().optional(),
+  })
+  .strict();
 
 const initiativeCreateCanonicalSchema = z
   .object({
@@ -321,8 +336,18 @@ export function buildInitiativeListInputFromMcp(
   });
 }
 
-export function buildInitiativeGetInput(id: string): InitiativeGetInput {
-  return parseSurfaceInput("initiatives.get", initiativeGetCanonicalSchema, { id });
+export function buildInitiativeGetInput(
+  id: string,
+  opts?: { fullContent?: boolean; contentFile?: string },
+): InitiativeGetInput {
+  return parseSurfaceInput("initiatives.get", initiativeGetCanonicalSchema, {
+    id,
+    fullContent: opts?.fullContent === true ? true : undefined,
+    contentFile:
+      typeof opts?.contentFile === "string" && opts.contentFile.trim()
+        ? opts.contentFile.trim()
+        : undefined,
+  });
 }
 
 export function buildInitiativeCreateInputFromCli(
@@ -441,7 +466,7 @@ export function buildInitiativeDeleteInputFromCli(
       "re-run with --yes to confirm. Use `initiative archive` for a reversible alternative.",
     );
   }
-  return parseSurfaceInput("initiatives.delete", initiativeIdCanonicalSchema, {
+  return parseSurfaceInput("initiatives.soft_delete", initiativeIdCanonicalSchema, {
     id: input.id,
   });
 }
@@ -449,7 +474,7 @@ export function buildInitiativeDeleteInputFromCli(
 export function buildInitiativeDeleteInputFromMcp(
   input: InitiativeDeleteMcpInput,
 ): InitiativeDeleteInput {
-  return parseSurfaceInput("initiatives.delete", initiativeIdCanonicalSchema, {
+  return parseSurfaceInput("initiatives.soft_delete", initiativeIdCanonicalSchema, {
     id: input.id,
   });
 }
@@ -536,7 +561,7 @@ export function initiativeListPayload(result: InitiativeListExecutionResult) {
 export async function executeInitiativeGet(
   input: InitiativeGetInput,
   notFoundHint?: string,
-): Promise<FullInitiative> {
+): Promise<InitiativeGetExecutionResult> {
   const resolved = await resolveInitiativeId(input.id);
   if (!resolved) {
     throw new NotFoundError(`initiative not found: ${input.id}`, notFoundHint);
@@ -545,7 +570,19 @@ export async function executeInitiativeGet(
   if (!initiative) {
     throw new NotFoundError(`initiative not found: ${input.id}`, notFoundHint);
   }
-  return initiative;
+  const applied = await applyEntityTextField(
+    initiative as unknown as Record<string, unknown>,
+    "description",
+    {
+      fullContent: input.fullContent === true,
+      contentFile: input.contentFile,
+    },
+  );
+  return {
+    initiative: applied.entity as unknown as FullInitiative,
+    content: applied.content,
+    truncated: applied.truncated,
+  };
 }
 
 export async function executeInitiativeCreate(
@@ -719,7 +756,6 @@ export const initiativeListOperation = {
       idempotentHint: true,
       openWorldHint: true,
     },
-    inputSchemaKeys: ["status", "owner_id", "include_archived", "limit", "workspace"],
   },
   safety: { readOnly: true, destructive: false, idempotent: true, openWorld: true },
   notes: "CLI --include-archived aliases --archived; limit 0 means unbounded on both channels.",
@@ -739,7 +775,7 @@ export const initiativeGetOperation = {
   action: "get",
   title: "Get one initiative (with linked projects)",
   description:
-    "Returns one initiative. Missing ids/names surface as structured not_found errors, matching `lebop initiative view --json`. `id` accepts UUID or initiative name.",
+    "Returns one initiative. Dense description (64 KiB default); prefer content_file for large bodies. content_file writes host FS. `id` accepts UUID or name.",
   cli: {
     command: "initiative view",
     liveSteps: ["cli:initiative view --json"],
@@ -748,18 +784,19 @@ export const initiativeGetOperation = {
     tool: "get_initiative",
     title: "Get one initiative (with linked projects)",
     description:
-      "Returns one initiative. Missing ids/names surface as structured not_found errors, matching `lebop initiative view --json`. `id` accepts UUID or initiative name.",
+      "Returns one initiative. Dense description (64 KiB default); prefer content_file for large bodies. content_file writes host FS.",
     annotations: {
       title: "Get one initiative (with linked projects)",
-      readOnlyHint: true,
+      readOnlyHint: false,
       idempotentHint: true,
       openWorldHint: true,
     },
-    inputSchemaKeys: ["id", "workspace"],
   },
-  safety: { readOnly: true, destructive: false, idempotent: true, openWorld: true },
-  notes: "MCP not-found hint points at list_initiatives; CLI omits hint.",
-} satisfies SurfaceOperationContract<InitiativeGetInput, FullInitiative>;
+  safety: { readOnly: false, destructive: false, idempotent: true, openWorld: true },
+  notes:
+    "MCP not-found hint points at list_initiatives; CLI omits hint. Content size policy applied in execute.",
+  execute: (input) => executeInitiativeGet(input),
+} satisfies SurfaceOperationContract<InitiativeGetInput, InitiativeGetExecutionResult>;
 
 export const initiativeCreateOperation = {
   id: "initiatives.create",
@@ -783,16 +820,6 @@ export const initiativeCreateOperation = {
       idempotentHint: false,
       openWorldHint: true,
     },
-    inputSchemaKeys: [
-      "name",
-      "description",
-      "status",
-      "owner_id",
-      "target_date",
-      "color",
-      "icon",
-      "workspace",
-    ],
   },
   safety: { readOnly: false, destructive: false, idempotent: false, openWorld: true },
   fromCli: buildInitiativeCreateInputFromCli,
@@ -828,17 +855,6 @@ export const initiativeUpdateOperation = {
       idempotentHint: true,
       openWorldHint: true,
     },
-    inputSchemaKeys: [
-      "id",
-      "name",
-      "description",
-      "status",
-      "owner_id",
-      "target_date",
-      "color",
-      "icon",
-      "workspace",
-    ],
   },
   safety: { readOnly: false, destructive: false, idempotent: true, openWorld: true },
   notes:
@@ -874,7 +890,6 @@ export const initiativeArchiveOperation = {
       idempotentHint: false,
       openWorldHint: true,
     },
-    inputSchemaKeys: ["id", "confirm", "workspace"],
   },
   safety: {
     readOnly: false,
@@ -914,36 +929,34 @@ export const initiativeUnarchiveOperation = {
       idempotentHint: true,
       openWorldHint: true,
     },
-    inputSchemaKeys: ["id", "workspace"],
   },
   safety: { readOnly: false, destructive: false, idempotent: true, openWorld: true },
 } satisfies SurfaceOperationContract<InitiativeUnarchiveInput, InitiativeUnarchiveExecutionResult>;
 
 export const initiativeDeleteOperation = {
-  id: "initiatives.delete",
+  id: "initiatives.soft_delete",
   domain: "initiatives",
   resource: "initiative",
-  action: "delete",
-  title: "Delete an initiative permanently",
+  action: "soft_delete",
+  title: "Soft-delete an initiative",
   description:
-    "Delete an initiative by UUID or exact name. Soft delete server-side (sets `archived_at`); not user-restorable via Linear's standard UI flows. Idempotent — re-deleting an already-soft-deleted initiative returns `{status: 'already-absent'}`.",
+    "Delete an initiative by UUID or exact name. Soft delete server-side (sets `archived_at`); not restored by unarchive; soft-delete via archived_at. Idempotent — re-deleting an already-soft-deleted initiative returns `{status: 'already-absent'}`.",
   cli: {
-    command: "initiative delete",
-    liveSteps: ["cli:initiative delete --json"],
+    command: "initiative soft-delete",
+    liveSteps: ["cli:initiative soft-delete --json"],
   },
   mcp: {
-    tool: "delete_initiative",
-    title: "Delete an initiative permanently",
+    tool: "soft_delete_initiative",
+    title: "Soft-delete an initiative",
     description:
-      "Delete an initiative by UUID or exact name. Soft delete server-side (sets `archived_at`); not user-restorable via Linear's standard UI flows. Idempotent — re-deleting an already-soft-deleted initiative returns `{status: 'already-absent'}`.",
+      "Delete an initiative by UUID or exact name. Soft delete server-side (sets `archived_at`); not restored by unarchive; soft-delete via archived_at. Idempotent — re-deleting an already-soft-deleted initiative returns `{status: 'already-absent'}`.",
     annotations: {
-      title: "Delete an initiative permanently",
+      title: "Soft-delete an initiative",
       readOnlyHint: false,
       destructiveHint: true,
       idempotentHint: true,
       openWorldHint: true,
     },
-    inputSchemaKeys: ["id", "confirm", "workspace"],
   },
   safety: {
     readOnly: false,
@@ -985,7 +998,6 @@ export const initiativeAddProjectOperation = {
       idempotentHint: true,
       openWorldHint: true,
     },
-    inputSchemaKeys: ["initiative", "project", "sort_order", "workspace"],
   },
   safety: { readOnly: false, destructive: false, idempotent: true, openWorld: true },
   notes:
@@ -1006,13 +1018,7 @@ export const initiativeRemoveProjectOperation = {
   action: "update",
   title: "Unlink a project from an initiative",
   description:
-    "Removes the link between a project and an initiative. " +
-    "Returns { removed: boolean, reason?, message? }. " +
-    "When `removed` is false, `reason` disambiguates the cause: " +
-    "`absent` (no such link existed — already-removed or never-linked), " +
-    "`archived` (the initiative is archived and refuses mutations — " +
-    "unarchive_initiative first), or `other` (server-side rejection; " +
-    "see `message`). When `removed` is true, no `reason` is set.",
+    "Unlink project from initiative. Returns {removed, reason?, message?}; reason=absent|archived|other when removed=false.",
   cli: {
     command: "initiative remove-project",
     liveSteps: ["cli:initiative remove-project --json"],
@@ -1021,13 +1027,7 @@ export const initiativeRemoveProjectOperation = {
     tool: "initiative_remove_project",
     title: "Unlink a project from an initiative",
     description:
-      "Removes the link between a project and an initiative. " +
-      "Returns { removed: boolean, reason?, message? }. " +
-      "When `removed` is false, `reason` disambiguates the cause: " +
-      "`absent` (no such link existed — already-removed or never-linked), " +
-      "`archived` (the initiative is archived and refuses mutations — " +
-      "unarchive_initiative first), or `other` (server-side rejection; " +
-      "see `message`). When `removed` is true, no `reason` is set.",
+      "Unlink project from initiative. Returns {removed, reason?, message?}; reason=absent|archived|other when removed=false.",
     annotations: {
       title: "Unlink a project from an initiative",
       readOnlyHint: false,
@@ -1035,7 +1035,6 @@ export const initiativeRemoveProjectOperation = {
       idempotentHint: false,
       openWorldHint: true,
     },
-    inputSchemaKeys: ["initiative", "project", "confirm", "workspace"],
   },
   safety: {
     readOnly: false,
@@ -1080,6 +1079,16 @@ export function buildInitiativeListMcpInputSchema(workspaceDescription: string) 
 export function buildInitiativeGetMcpInputSchema(workspaceDescription: string) {
   return {
     id: z.string().describe("Initiative UUID OR exact name (resolved via `resolveInitiativeId`)."),
+    full_content: z
+      .boolean()
+      .optional()
+      .describe("Full initiative description on the wire (bypass 64 KiB agent size cap)."),
+    content_file: z
+      .string()
+      .optional()
+      .describe(
+        "Write full description to this host path; wire stays dense. Prefer for large bodies. Side-effect: writes disk.",
+      ),
     workspace: workspaceArg.describe(workspaceDescription),
   };
 }

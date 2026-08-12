@@ -16,12 +16,21 @@ vi.mock("../src/lib/teams.ts", () => ({
   getTeam: mocks.getTeam,
 }));
 
-vi.mock("../src/lib/listIssues.ts", () => ({
-  listIssuesWithMetadata: mocks.listIssuesWithMetadata,
-}));
+vi.mock("../src/lib/listIssues.ts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/lib/listIssues.ts")>();
+  return {
+    ...actual,
+    listIssuesWithMetadata: mocks.listIssuesWithMetadata,
+  };
+});
 
 vi.mock("../src/lib/cycles.ts", () => ({
   listCycles: mocks.listCycles,
+  listCyclesPage: vi.fn(),
+  getCycle: vi.fn(),
+  createCycle: vi.fn(),
+  updateCycle: vi.fn(),
+  archiveCycle: vi.fn(),
 }));
 
 import { registerCycle } from "../src/commands/cycle.ts";
@@ -35,7 +44,7 @@ describe("CLI all-teams issue/cycle commands", () => {
     vi.clearAllMocks();
     stdoutSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
     mocks.resolveConfig.mockRejectedValue(new Error("resolveConfig should not be called"));
-    mocks.getTeam.mockResolvedValue({ id: "team-nox", key: "NOX" });
+    mocks.getTeam.mockResolvedValue({ id: "team-team", key: "TEAM" });
     mocks.listIssuesWithMetadata.mockResolvedValue({
       issues: [],
       count: 0,
@@ -102,18 +111,20 @@ describe("CLI all-teams issue/cycle commands", () => {
   });
 
   it("mine --json includes explicit scope and all_teams fields", async () => {
-    mocks.resolveConfig.mockResolvedValue({ team: "NOX" });
+    mocks.resolveConfig.mockResolvedValue({ team: "TEAM" });
     const program = new Command();
     registerMine(program);
 
-    await program.parseAsync(["mine", "--team", "NOX", "--json"], { from: "user" });
+    await program.parseAsync(["mine", "--team", "TEAM", "--json", "--format", "json"], {
+      from: "user",
+    });
 
     const body = JSON.parse(
       stdoutSpy.mock.calls.map((call: [unknown, ...unknown[]]) => String(call[0])).join(""),
     );
     expect(body).toMatchObject({
-      scope: { type: "team", team: "NOX" },
-      team: "NOX",
+      scope: { type: "team", team: "TEAM" },
+      team: "TEAM",
       all_teams: false,
     });
   });
@@ -125,7 +136,9 @@ describe("CLI all-teams issue/cycle commands", () => {
     await program.parseAsync(["cycle", "list", "--all-teams", "--json"], { from: "user" });
 
     expect(mocks.resolveConfig).not.toHaveBeenCalled();
-    expect(mocks.listCycles).toHaveBeenCalledWith(expect.objectContaining({ team: undefined }));
+    expect(mocks.listCycles).toHaveBeenCalledWith(
+      expect.objectContaining({ team: undefined, includeArchived: false }),
+    );
   });
 
   it("cycle list --team rejects unknown teams instead of returning an empty list", async () => {

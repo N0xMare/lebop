@@ -33,6 +33,10 @@ import {
 import { linear, withClient } from "./sdk.ts";
 import { isUuid } from "./uuid.ts";
 
+/** Shared empty-update field list for surface + lib validators (agent copy). */
+export const ISSUE_UPDATE_FIELD_HINT =
+  "pass at least one of title, description, state, priority, estimate, labels, labels_add/labels_remove, assignee, parent, project, milestone, cycle, due_date";
+
 export interface CreateIssueInput {
   /** Required when no team default has been resolved by the caller. */
   team: string;
@@ -51,6 +55,14 @@ export interface CreateIssueInput {
   labels?: string[];
   /** `me` / email / display-name. */
   assignee?: string;
+  /** Parent issue identifier or UUID. */
+  parent?: string;
+  /** Milestone name or UUID (requires project). */
+  milestone?: string;
+  /** Cycle name or UUID. */
+  cycle?: string;
+  /** Due date YYYY-MM-DD or ISO date. */
+  dueDate?: string;
   /** repoHash for team-metadata cache key (defaults to `_global`). */
   repoHash?: string;
 }
@@ -65,7 +77,7 @@ export interface CreatedIssue {
 }
 
 /**
- * Resolve a Linear issue identifier (e.g. "NOX-42") to a minimal
+ * Resolve a Linear issue identifier (e.g. "TEAM-42") to a minimal
  * `{id, identifier}` shape via a hand-rolled query. Avoids the 60+ field
  * fragment that the SDK-typed `c.issue(id)` ships, which instantiates
  * IssueSharedAccess and a half-dozen sibling classes from per-field data —
@@ -184,6 +196,29 @@ export async function createIssue(input: CreateIssueInput): Promise<CreatedIssue
   if (labelIds !== undefined) linearInput.labelIds = labelIds;
   if (assigneeId !== undefined) linearInput.assigneeId = assigneeId;
   if (projectId !== undefined) linearInput.projectId = projectId;
+  if (input.dueDate !== undefined) linearInput.dueDate = normalizeDueDate(input.dueDate);
+
+  if (input.parent) {
+    const parent = await resolveIssueIdByIdentifier(input.parent);
+    if (!parent) throw new NotFoundError(`not found: parent ${input.parent}`);
+    linearInput.parentId = parent.id;
+  }
+  if (input.milestone) {
+    if (!projectId && !input.projectId) {
+      throw new ValidationError(
+        "milestone on create requires a project",
+        "pass --project or --project-id with --milestone",
+      );
+    }
+    const milestoneId = await resolveMilestoneIdByName(input.milestone, {
+      projectId: projectId ?? input.projectId,
+    });
+    linearInput.projectMilestoneId = milestoneId;
+  }
+  if (input.cycle) {
+    const cycleId = await resolveCycleIdByName(input.cycle, input.team);
+    linearInput.cycleId = cycleId;
+  }
 
   // issueCreate is NOT wrapped with retry — duplicate creation could result.
   const client = await linear();
@@ -195,6 +230,17 @@ export async function createIssue(input: CreateIssueInput): Promise<CreatedIssue
     response.data.issueCreate as unknown as { success?: boolean } & Record<string, unknown>,
     "issue",
   );
+}
+
+/** Normalize due date to YYYY-MM-DD for Linear. */
+export function normalizeDueDate(raw: string): string {
+  const s = raw.trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  const d = new Date(s);
+  if (Number.isNaN(d.getTime())) {
+    throw new ValidationError(`invalid due date: ${raw}`, "use YYYY-MM-DD or an ISO timestamp");
+  }
+  return d.toISOString().slice(0, 10);
 }
 
 export interface UpdateIssueInput {
@@ -232,6 +278,8 @@ export interface UpdateIssueInput {
    * be provided when passing a name. UUID inputs skip team scoping.
    */
   cycle?: string | null;
+  /** Due date YYYY-MM-DD; pass `null` to clear. */
+  dueDate?: string | null;
 }
 
 export type UpdatedIssue = FetchedIssue;
@@ -526,11 +574,14 @@ export async function updateIssue(input: UpdateIssueInput): Promise<UpdatedIssue
   if (projectId !== undefined) linearInput.projectId = projectId;
   if (milestoneId !== undefined) linearInput.projectMilestoneId = milestoneId;
   if (cycleId !== undefined) linearInput.cycleId = cycleId;
+  if (input.dueDate !== undefined) {
+    linearInput.dueDate = input.dueDate === null ? null : normalizeDueDate(input.dueDate);
+  }
 
   if (Object.keys(linearInput).length === 0) {
     throw new ValidationError(
       "nothing to update — pass at least one field",
-      "pass at least one of title, description, state, priority, estimate, labels, assignee, parent, project, milestone, cycle",
+      ISSUE_UPDATE_FIELD_HINT,
     );
   }
 

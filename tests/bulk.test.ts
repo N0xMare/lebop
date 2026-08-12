@@ -49,8 +49,8 @@ vi.mock("../src/lib/resolve.ts", async (orig) => {
   return {
     ...original,
     getTeamMetadata: async () => ({
-      team_id: "team-uuid-nox",
-      team_key: "NOX",
+      team_id: "team-uuid-team",
+      team_key: "TEAM",
       fetched_at: new Date().toISOString(),
       states: [{ id: "state-done", name: "Done", type: "completed" }],
       labels: [],
@@ -62,8 +62,8 @@ vi.mock("../src/lib/resolve.ts", async (orig) => {
       use: (md: unknown) => Promise<T>,
     ): Promise<T> =>
       use({
-        team_id: "team-uuid-nox",
-        team_key: "NOX",
+        team_id: "team-uuid-team",
+        team_key: "TEAM",
         fetched_at: new Date().toISOString(),
         states: [{ id: "state-done", name: "Done", type: "completed" }],
         labels: [],
@@ -82,30 +82,30 @@ beforeEach(() => {
 
 describe("bulkUpdateIssues", () => {
   it("partial success: one good id + one not-found surfaces both rows", async () => {
-    // Step 1: resolve NOX-34 → uuid (parallel issue(id) lookups).
+    // Step 1: resolve TEAM-34 → uuid (parallel issue(id) lookups).
     mockRawResponses.push({
-      data: { issue: { id: "issue-uuid-34", identifier: "NOX-34" } },
+      data: { issue: { id: "issue-uuid-34", identifier: "TEAM-34" } },
     });
-    // Step 2: resolve NOX-999 → null.
+    // Step 2: resolve TEAM-999 → null.
     mockRawResponses.push({ data: { issue: null } });
     // Step 3: issueBatchUpdate
     mockRawResponses.push({
       data: {
         issueBatchUpdate: {
           success: true,
-          issues: [{ id: "issue-uuid-34", identifier: "NOX-34" }],
+          issues: [{ id: "issue-uuid-34", identifier: "TEAM-34" }],
         },
       },
     });
 
     const result = await bulkUpdateIssues({
-      identifiers: ["NOX-34", "NOX-999"],
+      identifiers: ["TEAM-34", "TEAM-999"],
       patch: { state: "Done" },
     });
 
     expect(result.summary).toMatchObject({ updated: 1, would_update: 0, failed: 1, total: 2 });
-    const updated = result.results.find((r) => r.identifier === "NOX-34");
-    const failed = result.results.find((r) => r.identifier === "NOX-999");
+    const updated = result.results.find((r) => r.identifier === "TEAM-34");
+    const failed = result.results.find((r) => r.identifier === "TEAM-999");
     expect(updated?.status).toBe("updated");
     expect(updated?.fields).toContain("state");
     expect(failed?.status).toBe("failed");
@@ -114,7 +114,7 @@ describe("bulkUpdateIssues", () => {
 
   it("rejects empty patch with a validation_error", async () => {
     const err = await bulkUpdateIssues({
-      identifiers: ["NOX-1"],
+      identifiers: ["TEAM-1"],
       patch: {},
     }).catch((e) => e);
     expect(err?.code).toBe("validation_error");
@@ -132,13 +132,13 @@ describe("bulkUpdateIssues", () => {
     });
 
     const result = await bulkUpdateIssues({
-      identifiers: ["NOX-35"],
+      identifiers: ["TEAM-35"],
       patch: { priority: 2 },
     });
 
     expect(result.summary).toMatchObject({ updated: 0, would_update: 0, failed: 1, total: 1 });
     const failed = result.results[0];
-    expect(failed?.identifier).toBe("NOX-35");
+    expect(failed?.identifier).toBe("TEAM-35");
     expect(failed?.status).toBe("failed");
     // Critical regression guard: the row's error code reflects the REAL
     // failure (rate_limit_error), not the silent `not_found` the pre-fix
@@ -158,11 +158,11 @@ describe("bulkUpdateIssues", () => {
 
   it("dry-run resolves target rows without calling issueBatchUpdate", async () => {
     mockRawResponses.push({
-      data: { issue: { id: "issue-uuid-50", identifier: "NOX-50" } },
+      data: { issue: { id: "issue-uuid-50", identifier: "TEAM-50" } },
     });
 
     const result = await bulkUpdateIssues({
-      identifiers: ["NOX-50"],
+      identifiers: ["TEAM-50"],
       patch: { priority: 2 },
       dryRun: true,
     });
@@ -176,7 +176,7 @@ describe("bulkUpdateIssues", () => {
     });
     expect(result.results).toEqual([
       expect.objectContaining({
-        identifier: "NOX-50",
+        identifier: "TEAM-50",
         status: "would_update",
         fields: ["priority"],
       }),
@@ -188,7 +188,7 @@ describe("bulkUpdateIssues", () => {
   it("rejects malformed priority before resolving issues", async () => {
     await expect(
       bulkUpdateIssues({
-        identifiers: ["NOX-50"],
+        identifiers: ["TEAM-50"],
         patch: { priority: "3abc" },
       }),
     ).rejects.toMatchObject({ code: "validation_error" });
@@ -201,7 +201,7 @@ describe("bulkUpdateIssues", () => {
       data: {
         projects: {
           nodes: [
-            { id: "project-nox", name: "Shared Name", teams: { nodes: [{ key: "NOX" }] } },
+            { id: "project-team", name: "Shared Name", teams: { nodes: [{ key: "TEAM" }] } },
             { id: "project-eng", name: "Shared Name", teams: { nodes: [{ key: "ENG" }] } },
           ],
         },
@@ -210,7 +210,7 @@ describe("bulkUpdateIssues", () => {
 
     await expect(
       bulkUpdateIssues({
-        identifiers: ["NOX-50"],
+        identifiers: ["TEAM-50"],
         patch: { project: "Shared Name" },
       }),
     ).rejects.toMatchObject({ code: "validation_error" });
@@ -225,23 +225,23 @@ describe("bulkUpdateIssues", () => {
 
     await expect(
       bulkUpdateIssues({
-        identifiers: ["NOX-50"],
-        team: "NOX",
+        identifiers: ["TEAM-50"],
+        team: "TEAM",
         patch: { project: "Other Team Project" },
       }),
     ).rejects.toMatchObject({
       code: "validation_error",
-      message: "project not found: Other Team Project (team NOX)",
+      message: "project not found: Other Team Project (team TEAM)",
     });
 
     expect(calls[0]?.query).toContain("accessibleTeams");
-    expect(calls[0]?.variables).toEqual({ name: "Other Team Project", teamKey: "NOX" });
+    expect(calls[0]?.variables).toEqual({ name: "Other Team Project", teamKey: "TEAM" });
   });
 
   it("rejects milestone names without a target project scope before resolving issues", async () => {
     await expect(
       bulkUpdateIssues({
-        identifiers: ["NOX-50"],
+        identifiers: ["TEAM-50"],
         patch: { milestone: "Beta" },
       }),
     ).rejects.toMatchObject({ code: "validation_error" });
@@ -263,19 +263,19 @@ describe("bulkUpdateIssues", () => {
       },
     });
     mockRawResponses.push({
-      data: { issue: { id: "issue-uuid-50", identifier: "NOX-50" } },
+      data: { issue: { id: "issue-uuid-50", identifier: "TEAM-50" } },
     });
     mockRawResponses.push({
       data: {
         issueBatchUpdate: {
           success: true,
-          issues: [{ id: "issue-uuid-50", identifier: "NOX-50" }],
+          issues: [{ id: "issue-uuid-50", identifier: "TEAM-50" }],
         },
       },
     });
 
     const result = await bulkUpdateIssues({
-      identifiers: ["NOX-50"],
+      identifiers: ["TEAM-50"],
       patch: { project: "Target", milestone: "Beta" },
     });
 
@@ -296,20 +296,20 @@ describe("bulkUpdateIssues", () => {
     // the workspace-wide viewer query independent of team scope.
     // Step 1: resolve identifier → uuid
     mockRawResponses.push({
-      data: { issue: { id: "issue-uuid-50", identifier: "NOX-50" } },
+      data: { issue: { id: "issue-uuid-50", identifier: "TEAM-50" } },
     });
     // Step 2: issueBatchUpdate
     mockRawResponses.push({
       data: {
         issueBatchUpdate: {
           success: true,
-          issues: [{ id: "issue-uuid-50", identifier: "NOX-50" }],
+          issues: [{ id: "issue-uuid-50", identifier: "TEAM-50" }],
         },
       },
     });
 
     const result = await bulkUpdateIssues({
-      identifiers: ["NOX-50"],
+      identifiers: ["TEAM-50"],
       patch: { assignee: "@me" },
     });
 
@@ -323,12 +323,12 @@ describe("bulkUpdateIssues", () => {
   });
 
   it("@me works even with multi-team identifiers (no team scope required)", async () => {
-    // Pre-fix this was the silent-drop case: NOX-1 + ENG-1 → deriveTeam
+    // Pre-fix this was the silent-drop case: TEAM-1 + ENG-1 → deriveTeam
     // throws → derived=null → teamKey=undefined → closure skipped →
     // assigneeId never set → linearInput empty → "patch is empty" error.
     // Post-fix: viewer hoist applies regardless of team derivation.
     mockRawResponses.push({
-      data: { issue: { id: "issue-uuid-nox-1", identifier: "NOX-1" } },
+      data: { issue: { id: "issue-uuid-team-1", identifier: "TEAM-1" } },
     });
     mockRawResponses.push({
       data: { issue: { id: "issue-uuid-eng-1", identifier: "ENG-1" } },
@@ -338,7 +338,7 @@ describe("bulkUpdateIssues", () => {
         issueBatchUpdate: {
           success: true,
           issues: [
-            { id: "issue-uuid-nox-1", identifier: "NOX-1" },
+            { id: "issue-uuid-team-1", identifier: "TEAM-1" },
             { id: "issue-uuid-eng-1", identifier: "ENG-1" },
           ],
         },
@@ -346,7 +346,7 @@ describe("bulkUpdateIssues", () => {
     });
 
     const result = await bulkUpdateIssues({
-      identifiers: ["NOX-1", "ENG-1"],
+      identifiers: ["TEAM-1", "ENG-1"],
       patch: { assignee: "@me" },
     });
 
@@ -358,32 +358,32 @@ describe("bulkUpdateIssues", () => {
 
   it("marks all resolved rows failed when issueBatchUpdate returns success:false", async () => {
     mockRawResponses.push({
-      data: { issue: { id: "issue-uuid-60", identifier: "NOX-60" } },
+      data: { issue: { id: "issue-uuid-60", identifier: "TEAM-60" } },
     });
     mockRawResponses.push({
-      data: { issue: { id: "issue-uuid-61", identifier: "NOX-61" } },
+      data: { issue: { id: "issue-uuid-61", identifier: "TEAM-61" } },
     });
     mockRawResponses.push({
       data: {
         issueBatchUpdate: {
           success: false,
           issues: [
-            { id: "issue-uuid-60", identifier: "NOX-60" },
-            { id: "issue-uuid-61", identifier: "NOX-61" },
+            { id: "issue-uuid-60", identifier: "TEAM-60" },
+            { id: "issue-uuid-61", identifier: "TEAM-61" },
           ],
         },
       },
     });
 
     const result = await bulkUpdateIssues({
-      identifiers: ["NOX-60", "NOX-61"],
+      identifiers: ["TEAM-60", "TEAM-61"],
       patch: { priority: 2 },
     });
 
     expect(result.summary).toMatchObject({ updated: 0, would_update: 0, failed: 2, total: 2 });
     expect(result.results).toEqual([
       expect.objectContaining({
-        identifier: "NOX-60",
+        identifier: "TEAM-60",
         status: "failed",
         error: expect.objectContaining({
           code: "validation_error",
@@ -391,7 +391,7 @@ describe("bulkUpdateIssues", () => {
         }),
       }),
       expect.objectContaining({
-        identifier: "NOX-61",
+        identifier: "TEAM-61",
         status: "failed",
         error: expect.objectContaining({
           code: "validation_error",

@@ -267,7 +267,7 @@ export function buildTeamMembersListMcpInputSchema(workspaceDescription: string)
     // calls the value a `teamKey` internally; the MCP boundary
     // normalizes naming. RELEASE NOTE BREAKING CHANGE: MCP clients
     // wiring up list_team_members must rename `team_key` → `team`.
-    team: teamArg.describe("Team key (e.g. 'NOX'). Omit to use the configured default team."),
+    team: teamArg.describe("Team key (e.g. 'TEAM'). Omit to use the configured default team."),
     include_inactive: z.boolean().optional(),
     workspace: workspaceArg.describe(workspaceDescription),
   };
@@ -317,7 +317,6 @@ export const teamListOperation = {
       idempotentHint: true,
       openWorldHint: true,
     },
-    inputSchemaKeys: ["workspace"],
   },
   safety: { readOnly: true, destructive: false, idempotent: true, openWorld: true },
   fromCli: buildTeamListInputFromCli,
@@ -348,7 +347,6 @@ export const teamMembersListOperation = {
       idempotentHint: true,
       openWorldHint: true,
     },
-    inputSchemaKeys: ["team", "include_inactive", "workspace"],
   },
   safety: { readOnly: true, destructive: false, idempotent: true, openWorld: true },
   fromCli: buildTeamMembersListInputFromCli,
@@ -379,7 +377,6 @@ export const teamGetOperation = {
       idempotentHint: true,
       openWorldHint: true,
     },
-    inputSchemaKeys: ["id", "workspace"],
   },
   safety: { readOnly: true, destructive: false, idempotent: true, openWorld: true },
   notes:
@@ -406,7 +403,6 @@ export const workflowStatesListOperation = {
       idempotentHint: true,
       openWorldHint: true,
     },
-    inputSchemaKeys: ["team", "workspace"],
   },
   safety: { readOnly: true, destructive: false, idempotent: true, openWorld: true },
   notes: "Team-not-found hints stay adapter-specific via WorkflowStatesListDeps.teamNotFoundHint.",

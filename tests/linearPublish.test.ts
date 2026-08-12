@@ -140,7 +140,7 @@ async function loadPublishLibWithCacheMocks(
   const applyCachePushPlans = vi.fn(
     options.applyCachePushPlans ??
       (async () => ({
-        results: [{ target: "NOX-1", kind: "issue", status: "pushed", fields: ["title"] }],
+        results: [{ target: "TEAM-1", kind: "issue", status: "pushed", fields: ["title"] }],
         summary: { total: 1, applied: 1, skipped: 0, failed: 0 },
       })),
   );
@@ -149,11 +149,11 @@ async function loadPublishLibWithCacheMocks(
       options.plans ?? [
         {
           kind: "issue",
-          identifier: "NOX-1",
+          identifier: "TEAM-1",
           metadata: {},
           description: "",
           changes: [{ field: "title", from: "Old", to: "New" }],
-          cache_path: "/tmp/cache/NOX-1",
+          cache_path: "/tmp/cache/TEAM-1",
         },
       ],
   );
@@ -531,7 +531,7 @@ describe("linear publish review", () => {
 
   it("returns published_with_drift when fresh cache verification finds remote drift", async () => {
     const { publish, store } = await loadPublishLibWithCacheMocks({
-      verification: { clean: false, dirty: ["NOX-1"] },
+      verification: { clean: false, dirty: ["TEAM-1"] },
     });
     const repoRoot = findGitRoot(process.cwd());
     const repoHash = repoRoot ? hashRepoRoot(repoRoot) : "_global";
@@ -551,7 +551,7 @@ describe("linear publish review", () => {
     const published = await publish.publishLinearChanges({ reviewId: record.review_id });
 
     expect(published.status).toBe("published_with_drift");
-    expect(published.verification).toEqual({ clean: false, dirty: ["NOX-1"] });
+    expect(published.verification).toEqual({ clean: false, dirty: ["TEAM-1"] });
   });
 
   it("returns published_with_drift when cache push mutated Linear but cache writeback failed", async () => {
@@ -559,7 +559,7 @@ describe("linear publish review", () => {
       applyCachePushPlans: async () => ({
         results: [
           {
-            target: "NOX-1",
+            target: "TEAM-1",
             kind: "issue",
             status: "pushed-writeback-failed",
             fields: ["title"],
@@ -590,7 +590,7 @@ describe("linear publish review", () => {
     expect(published.summary.ready).toBe(false);
     expect(published.summary.drift).toBe(true);
     expect(published.summary.blockers.join("\n")).toContain(
-      "issue/NOX-1: pushed to Linear but local cache writeback failed: disk full",
+      "issue/TEAM-1: pushed to Linear but local cache writeback failed: disk full",
     );
     const result = published.result as { summary: Record<string, unknown> } | null;
     expect(result?.summary).toMatchObject({
@@ -607,13 +607,13 @@ describe("linear publish review", () => {
       applyCachePushPlans: async () => ({
         results: [
           {
-            target: "NOX-1",
+            target: "TEAM-1",
             kind: "issue",
             status: "pushed",
             fields: ["title"],
           },
           {
-            target: "NOX-2",
+            target: "TEAM-2",
             kind: "issue",
             status: "error",
             fields: ["title"],
@@ -642,20 +642,20 @@ describe("linear publish review", () => {
 
     expect(published.status).toBe("published_with_drift");
     expect(published.summary.ready).toBe(false);
-    expect(published.summary.blockers.join("\n")).toContain("issue/NOX-2: issueUpdate failed");
+    expect(published.summary.blockers.join("\n")).toContain("issue/TEAM-2: issueUpdate failed");
     expect(verifyCachePushPlansClean).not.toHaveBeenCalled();
   });
 
   it("returns blocked for cache publish when review-time remote snapshot preflight fails", async () => {
     const { publish, store, applyCachePushPlans } = await loadPublishLibWithCacheMocks({
       snapshotValidationError: {
-        message: "Linear remote rows were missing during publish review: issue/NOX-404",
+        message: "Linear remote rows were missing during publish review: issue/TEAM-404",
         hint: "pull the latest cache or remove the missing row from the publish review target",
       },
       applyCachePushPlans: async (input) => ({
         results: [
           {
-            target: "NOX-404",
+            target: "TEAM-404",
             kind: "issue",
             status: input.dryRun === true ? "remote-missing" : "pushed",
             fields: ["title"],
@@ -680,7 +680,7 @@ describe("linear publish review", () => {
       team: "UE",
       contentHash: "0".repeat(64),
       workspace: { url_key: "test", name: "Test Workspace" },
-      remoteSnapshot: { issues: [], projects: [], missing: [{ kind: "issue", target: "NOX-404" }] },
+      remoteSnapshot: { issues: [], projects: [], missing: [{ kind: "issue", target: "TEAM-404" }] },
     });
 
     const published = await publish.publishLinearChanges({ reviewId: record.review_id });
@@ -712,7 +712,7 @@ describe("linear publish review", () => {
         source: {
           kind: "cache",
           repo_root: planDir,
-          identifiers: ["nox-1"],
+          identifiers: ["team-1"],
           project_ids: ["project-1"],
           all_modified: true,
         },
@@ -727,11 +727,11 @@ describe("linear publish review", () => {
       plans: [
         {
           kind: "issue",
-          identifier: "NOX-1",
+          identifier: "TEAM-1",
           metadata: {},
           description: "",
           changes: [],
-          cache_path: "/tmp/cache/NOX-1",
+          cache_path: "/tmp/cache/TEAM-1",
         },
         {
           kind: "project",
@@ -744,7 +744,7 @@ describe("linear publish review", () => {
       ],
       applyCachePushPlans: async () => ({
         results: [
-          { target: "NOX-1", kind: "issue", status: "unchanged" },
+          { target: "TEAM-1", kind: "issue", status: "unchanged" },
           { target: "Project 1", kind: "project", status: "unchanged" },
         ],
         summary: { total: 2, applied: 0, skipped: 2, failed: 0 },
@@ -757,7 +757,7 @@ describe("linear publish review", () => {
       source: {
         kind: "cache",
         repo_root: planDir,
-        identifiers: ["nox-1", ""],
+        identifiers: ["team-1", ""],
         project_ids: ["project-1"],
       },
       team: "UE",
@@ -767,25 +767,34 @@ describe("linear publish review", () => {
       kind: "cache",
       repo_hash: repoHash,
       repo_root: planDir,
-      identifiers: ["NOX-1"],
+      identifiers: ["TEAM-1"],
       project_ids: ["project-1"],
     });
     expect(review.requested_source).toMatchObject({
       kind: "cache",
       repo_hash: repoHash,
       repo_root: planDir,
-      identifiers: ["NOX-1"],
+      identifiers: ["TEAM-1"],
       project_ids: ["project-1"],
       all_modified: false,
     });
     const record = await store.readPublishReviewRecord(review.review_id);
     expect(record.source).toMatchObject(review.source);
     expect(record.requested_source).toMatchObject(review.requested_source ?? {});
-    expect(review.next?.arguments.workspace).toBe("test");
+    expect(review.next_call).toEqual({
+      tool: "publish_linear_changes",
+      arguments: {
+        review_id: review.review_id,
+        verify: true,
+        workspace: "test",
+      },
+    });
+    expect(Array.isArray(review.next)).toBe(true);
+    expect(review.next?.length).toBeGreaterThan(0);
     expect(collectCachePushPlans).toHaveBeenCalledWith(
       repoHash,
       expect.objectContaining({
-        identifiers: ["NOX-1"],
+        identifiers: ["TEAM-1"],
         projectIds: ["project-1"],
         includeUnchanged: true,
       }),
@@ -795,7 +804,7 @@ describe("linear publish review", () => {
     expect(collectCachePushPlans).toHaveBeenLastCalledWith(
       repoHash,
       expect.objectContaining({
-        identifiers: ["NOX-1"],
+        identifiers: ["TEAM-1"],
         projectIds: ["project-1"],
         includeUnchanged: true,
       }),
@@ -807,19 +816,19 @@ describe("linear publish review", () => {
       plans: [
         {
           kind: "issue",
-          identifier: "NOX-1",
+          identifier: "TEAM-1",
           metadata: {},
           description: "",
           changes: [],
-          cache_path: "/tmp/cache/NOX-1",
+          cache_path: "/tmp/cache/TEAM-1",
         },
         {
           kind: "issue",
-          identifier: "NOX-2",
+          identifier: "TEAM-2",
           metadata: {},
           description: "",
           changes: [],
-          cache_path: "/tmp/cache/NOX-2",
+          cache_path: "/tmp/cache/TEAM-2",
         },
       ],
     });
@@ -827,17 +836,17 @@ describe("linear publish review", () => {
     const repoHash = hashRepoRoot(planDir);
 
     const review = await publish.reviewLinearChanges({
-      source: { kind: "cache", repo_root: planDir, identifiers: ["nox-1..nox-2"] },
+      source: { kind: "cache", repo_root: planDir, identifiers: ["team-1..team-2"] },
       team: "UE",
     });
 
     expect(review.requested_source).toMatchObject({
-      identifiers: ["NOX-1", "NOX-2"],
+      identifiers: ["TEAM-1", "TEAM-2"],
     });
     expect(collectCachePushPlans).toHaveBeenCalledWith(
       repoHash,
       expect.objectContaining({
-        identifiers: ["NOX-1", "NOX-2"],
+        identifiers: ["TEAM-1", "TEAM-2"],
         includeUnchanged: true,
       }),
     );

@@ -13,7 +13,7 @@ describe("workspace surface contracts", () => {
       path: "/projects",
       opts: {
         query: "relayer",
-        team: "NOX",
+        team: "TEAM",
         kind: ["projects", "agent_sessions"],
         includeArchived: true,
         limit: 25,
@@ -23,7 +23,7 @@ describe("workspace surface contracts", () => {
     const mcp = buildExploreWorkspaceInputFromMcp({
       path: "/projects",
       query: "relayer",
-      team: "NOX",
+      team: "TEAM",
       kinds: ["projects", "agent_sessions"],
       include_archived: true,
       limit: 25,
@@ -34,7 +34,7 @@ describe("workspace surface contracts", () => {
     expect(cli).toEqual({
       path: "/projects",
       query: "relayer",
-      team: "NOX",
+      team: "TEAM",
       kinds: ["projects", "agent_sessions"],
       includeArchived: true,
       limit: 25,
@@ -47,16 +47,16 @@ describe("workspace surface contracts", () => {
       "/projects",
       "/issues",
       "/cycles",
-      "/teams/NOX/projects",
-      "/teams/NOX/cycles",
+      "/teams/TEAM/projects",
+      "/teams/TEAM/cycles",
     ]) {
       expect(
         buildExploreWorkspaceInputFromCli({
           path,
           opts: {},
-          context: { rootTeam: "NOX" },
+          context: { rootTeam: "TEAM" },
         }).team,
-      ).toBe("NOX");
+      ).toBe("TEAM");
     }
 
     for (const path of ["/", "/documents", "/initiatives", "/agent-sessions"]) {
@@ -64,7 +64,7 @@ describe("workspace surface contracts", () => {
         buildExploreWorkspaceInputFromCli({
           path,
           opts: {},
-          context: { rootTeam: "NOX" },
+          context: { rootTeam: "TEAM" },
         }).team,
       ).toBeUndefined();
     }
@@ -74,21 +74,21 @@ describe("workspace surface contracts", () => {
     expect(
       buildExploreWorkspaceInputFromCli({
         opts: { query: "needle", kind: ["projects", "issues"] },
-        context: { rootTeam: "NOX" },
+        context: { rootTeam: "TEAM" },
       }).team,
-    ).toBe("NOX");
+    ).toBe("TEAM");
 
     expect(
       buildExploreWorkspaceInputFromCli({
         opts: { query: "needle", kind: ["projects", "initiatives"] },
-        context: { rootTeam: "NOX" },
+        context: { rootTeam: "TEAM" },
       }).team,
     ).toBeUndefined();
 
     expect(
       buildExploreWorkspaceInputFromCli({
         opts: { query: "needle" },
-        context: { rootTeam: "NOX" },
+        context: { rootTeam: "TEAM" },
       }).team,
     ).toBeUndefined();
   });
@@ -116,7 +116,7 @@ describe("workspace surface contracts", () => {
 
   it("normalizes equivalent CLI and MCP fetch inputs to the same canonical shape", () => {
     const cli = buildFetchWorkspaceInputFromCli({
-      target: "/issues/NOX-1",
+      target: "/issues/TEAM-1",
       opts: {
         include: "comments,agent_sessions",
         depth: "full",
@@ -124,41 +124,41 @@ describe("workspace surface contracts", () => {
         cursor: "cursor-1",
         to: "/tmp/context",
       },
-      context: { rootWorkspace: "noxor" },
+      context: { rootWorkspace: "acme" },
     });
     const mcp = buildFetchWorkspaceInputFromMcp({
-      target: "/issues/NOX-1",
+      target: "/issues/TEAM-1",
       include: ["comments", "agent_sessions"],
       depth: "full",
       limit: 50,
       cursor: "cursor-1",
       to: "/tmp/context",
-      workspace: "noxor",
+      workspace: "acme",
     });
 
     expect(cli).toEqual(mcp);
     expect(cli).toEqual({
-      target: "/issues/NOX-1",
+      target: "/issues/TEAM-1",
       include: ["comments", "agent_sessions"],
       depth: "full",
       limit: 50,
       cursor: "cursor-1",
       to: "/tmp/context",
-      workspace: "noxor",
+      workspace: "acme",
     });
   });
 
   it("preserves omitted include versus explicit empty fetch include", () => {
     expect(
       buildFetchWorkspaceInputFromCli({
-        target: "/issues/NOX-1",
+        target: "/issues/TEAM-1",
         opts: {},
       }).include,
     ).toBeUndefined();
 
     expect(
       buildFetchWorkspaceInputFromCli({
-        target: "/issues/NOX-1",
+        target: "/issues/TEAM-1",
         opts: { include: "" },
       }).include,
     ).toEqual([""]);

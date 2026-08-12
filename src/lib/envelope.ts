@@ -9,15 +9,17 @@
  * envelope construction through one helper and the drift can't compound.
  *
  * Usage:
- *   CLI:  process.stdout.write(`${JSON.stringify(envelope({ issues, count }))}\n`);
- *   MCP:  return text(envelope({ issue }));
+ *   CLI:  writeMachineEnvelope(payload, { json: true, format })  // TOON/JSON encode
+ *   MCP:  return text(envelope({ issue }));  // compact JSON for hosts
  *
- * The single source of truth for `schema_version` lives here — if/when we
- * bump to `schema_version: 2`, this is the only line that changes.
+ * The single source of truth for `schema_version` lives here (currently 2).
  */
 
-/** Stable schema version for every CLI/MCP JSON result envelope. */
-export const SCHEMA_VERSION = 1 as const;
+/**
+ * Stable schema version for every CLI/MCP result envelope.
+ * Bumped to 2 for the 0.0.6 AXI dense-defaults train (encoding + slim schemas).
+ */
+export const SCHEMA_VERSION = 2 as const;
 
 export type ResultEnvelope<T extends Record<string, unknown>> = T & {
   schema_version: typeof SCHEMA_VERSION;

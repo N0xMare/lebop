@@ -200,9 +200,10 @@ export const pullIssuesOperation = {
   },
   mcp: {
     tool: "pull_issues",
+      profile: "core",
     title: "Fetch issues into the local cache",
     description:
-      "Pull a set of issues by identifier into ~/.lebop/cache/<repo-hash>/issues/<id>/, or export them to `to/<id>/` when `to` is provided. Accepts CLI-style ranges such as TEAM-1..TEAM-3. Refuses to overwrite cached issues with unpushed local edits unless refresh=true and confirm=true; export mode does not touch the cache.",
+      "Pull issues by id/range into cache (or export with to). refresh+confirm overwrite dirty cache; export skips cache.",
     annotations: {
       title: "Fetch issues into the local cache",
       readOnlyHint: false,
@@ -210,16 +211,6 @@ export const pullIssuesOperation = {
       idempotentHint: true,
       openWorldHint: true,
     },
-    inputSchemaKeys: [
-      "identifiers",
-      "include_comments",
-      "confirm",
-      "refresh",
-      "repo_root",
-      "team",
-      "to",
-      "workspace",
-    ],
     liveSemantics: "required",
   },
   safety: {
@@ -250,7 +241,7 @@ export const pullProjectOperation = {
     tool: "pull_project",
     title: "Fetch a project and child issues into the local cache",
     description:
-      "MCP parity with `lebop pull --project/--project-id`: writes project metadata/content plus all child issues into ~/.lebop/cache, or exports them to `to/` when provided. Refuses to overwrite local cache edits unless refresh=true and confirm=true; export mode does not touch the cache.",
+      "Pull project + child issues into cache (or export with to). refresh+confirm overwrite dirty cache; export skips cache.",
     annotations: {
       title: "Fetch a project and child issues into the local cache",
       readOnlyHint: false,
@@ -258,18 +249,6 @@ export const pullProjectOperation = {
       idempotentHint: true,
       openWorldHint: true,
     },
-    inputSchemaKeys: [
-      "extra_identifiers",
-      "include_comments",
-      "confirm",
-      "project",
-      "project_id",
-      "refresh",
-      "repo_root",
-      "team",
-      "to",
-      "workspace",
-    ],
     liveSemantics: "required",
   },
   safety: {

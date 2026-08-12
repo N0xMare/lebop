@@ -8,6 +8,7 @@ import {
   type ListedLabel,
   listLabels,
   resolveLabelSelectorToId,
+  updateLabel,
 } from "../lib/labels.ts";
 import { getTeam } from "../lib/teams.ts";
 import type { SurfaceOperationContract } from "./contracts.ts";
@@ -98,6 +99,29 @@ export interface LabelCreateDeps {
   }>;
 }
 
+export interface LabelUpdateInput {
+  id: string;
+  name?: string;
+  color?: string;
+  description?: string;
+}
+
+export interface LabelUpdateCliInput {
+  id: string;
+  opts: {
+    name?: string;
+    color?: string;
+    description?: string;
+  };
+}
+
+export type LabelUpdateMcpInput = Record<string, unknown> & {
+  id: string;
+  name?: string;
+  color?: string;
+  description?: string;
+};
+
 export interface LabelDeleteInput {
   selector: string;
   scope: LabelScope;
@@ -175,6 +199,15 @@ const labelCreateCanonicalSchema = z
   })
   .strict();
 
+const labelUpdateCanonicalSchema = z
+  .object({
+    id: z.string(),
+    name: z.string().optional(),
+    color: z.string().optional(),
+    description: z.string().optional(),
+  })
+  .strict();
+
 const labelDeleteCanonicalSchema = z
   .object({
     selector: z.string(),
@@ -243,6 +276,42 @@ export function buildLabelCreateInputFromMcp(input: LabelCreateMcpInput): LabelC
     color: input.color,
     description: input.description,
   });
+}
+
+function hasLabelUpdateFields(update: LabelUpdateInput): boolean {
+  return (
+    update.name !== undefined ||
+    update.color !== undefined ||
+    update.description !== undefined
+  );
+}
+
+export function buildLabelUpdateInputFromCli(input: LabelUpdateCliInput): LabelUpdateInput {
+  const update: LabelUpdateInput = { id: input.id };
+  if (input.opts.name !== undefined) update.name = input.opts.name;
+  if (input.opts.color !== undefined) update.color = input.opts.color;
+  if (input.opts.description !== undefined) update.description = input.opts.description;
+  if (!hasLabelUpdateFields(update)) {
+    throw new ValidationError(
+      "nothing to update — pass at least one of --name / --color / --description",
+      "pass at least one update field",
+    );
+  }
+  return parseSurfaceInput("labels.update", labelUpdateCanonicalSchema, update);
+}
+
+export function buildLabelUpdateInputFromMcp(input: LabelUpdateMcpInput): LabelUpdateInput {
+  const update: LabelUpdateInput = { id: input.id };
+  if (input.name !== undefined) update.name = input.name;
+  if (input.color !== undefined) update.color = input.color;
+  if (input.description !== undefined) update.description = input.description;
+  if (!hasLabelUpdateFields(update)) {
+    throw new ValidationError(
+      "nothing to update — pass at least one field",
+      "pass at least one of name, color, description",
+    );
+  }
+  return parseSurfaceInput("labels.update", labelUpdateCanonicalSchema, update);
 }
 
 export function buildLabelDeleteInputFromCli(input: LabelDeleteCliInput): LabelDeleteInput {
@@ -411,6 +480,14 @@ export async function executeLabelCreate(
   };
 }
 
+export async function executeLabelUpdate(input: LabelUpdateInput): Promise<ListedLabel> {
+  return updateLabel(input.id, {
+    name: input.name,
+    color: input.color,
+    description: input.description,
+  });
+}
+
 export async function executeLabelDelete(
   input: LabelDeleteInput,
 ): Promise<LabelDeleteExecutionResult> {
@@ -475,8 +552,18 @@ export function buildLabelCreateMcpInputSchema(workspaceDescription: string) {
       .describe(
         "Discriminator: 'team' uses team/team_id or the configured default team; 'workspace' forbids both. Defaults to team scope for CLI parity.",
       ),
-    team: teamArg.describe("Team key, e.g. NOX. Mutually exclusive with team_id."),
+    team: teamArg.describe("Team key, e.g. TEAM. Mutually exclusive with team_id."),
     team_id: z.string().optional().describe("Team UUID. Mutually exclusive with team."),
+    color: z.string().optional().describe("Hex color (e.g. '#ff0000')."),
+    description: z.string().optional(),
+    workspace: workspaceArg.describe(workspaceDescription),
+  };
+}
+
+export function buildLabelUpdateMcpInputSchema(workspaceDescription: string) {
+  return {
+    id: z.string().describe("Label UUID."),
+    name: z.string().optional(),
     color: z.string().optional().describe("Hex color (e.g. '#ff0000')."),
     description: z.string().optional(),
     workspace: workspaceArg.describe(workspaceDescription),
@@ -519,6 +606,7 @@ export function buildLabelLookupMcpInputSchema(workspaceDescription: string) {
 const listLabelsDescription = "List labels in a team, workspace-only, or all visible.";
 const createLabelDescription =
   'Create a team-scoped or workspace-scoped label. Pass `scope: "team"` with `team` (key) or `team_id` (UUID) for a team label, or `scope: "workspace"` for a workspace-wide label. NOT retry-wrapped (would duplicate).';
+const updateLabelDescription = "Update a label by UUID (name, color, description).";
 const deleteLabelDescription =
   "Delete by UUID or exact label name. Requires confirm:true. Idempotent — re-deleting an already-absent UUID returns `{status: 'already-absent'}` without error.";
 const lookupLabelDescription =
@@ -545,7 +633,6 @@ export const labelListOperation = {
       idempotentHint: true,
       openWorldHint: true,
     },
-    inputSchemaKeys: ["team", "workspace_only", "all", "workspace"],
   },
   safety: { readOnly: true, destructive: false, idempotent: true, openWorld: true },
   fromCli: buildLabelListInputFromCli,
@@ -580,7 +667,6 @@ export const labelCreateOperation = {
       idempotentHint: false,
       openWorldHint: true,
     },
-    inputSchemaKeys: ["name", "scope", "team", "team_id", "color", "description", "workspace"],
   },
   safety: { readOnly: false, destructive: false, idempotent: false, openWorld: true },
   notes:
@@ -593,6 +679,41 @@ export const labelCreateOperation = {
   LabelCreateExecutionResult,
   LabelCreateCliInput,
   LabelCreateMcpInput
+>;
+
+export const labelUpdateOperation = {
+  id: "labels.update",
+  domain: "labels",
+  resource: "label",
+  action: "update",
+  title: "Update a Linear label",
+  description: updateLabelDescription,
+  cli: {
+    command: "label update",
+    nonLiveReason:
+      "Covered by scripts/live-discovery-smoke.mjs (P0/P1 coverage surfaces), not the main live step inventory.",
+  },
+  mcp: {
+    tool: "update_label",
+    title: "Update label",
+    description: updateLabelDescription,
+    annotations: {
+      title: "Update label",
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: true,
+    },
+  },
+  safety: { readOnly: false, destructive: false, idempotent: true, openWorld: true },
+  fromCli: buildLabelUpdateInputFromCli,
+  fromMcp: buildLabelUpdateInputFromMcp,
+  execute: executeLabelUpdate,
+} satisfies SurfaceOperationContract<
+  LabelUpdateInput,
+  ListedLabel,
+  LabelUpdateCliInput,
+  LabelUpdateMcpInput
 >;
 
 export const labelDeleteOperation = {
@@ -617,7 +738,6 @@ export const labelDeleteOperation = {
       idempotentHint: true,
       openWorldHint: true,
     },
-    inputSchemaKeys: ["id", "name_or_id", "scope", "team", "confirm", "workspace"],
   },
   safety: {
     readOnly: false,
@@ -653,7 +773,6 @@ export const labelLookupByNameOperation = {
       idempotentHint: true,
       openWorldHint: true,
     },
-    inputSchemaKeys: ["name", "scope", "team", "workspace"],
   },
   safety: { readOnly: true, destructive: false, idempotent: true, openWorld: true },
   exception: {
@@ -673,6 +792,7 @@ export const labelLookupByNameOperation = {
 export const LABELS_SURFACE_OPERATIONS = [
   labelListOperation,
   labelCreateOperation,
+  labelUpdateOperation,
   labelDeleteOperation,
   labelLookupByNameOperation,
 ] as const;

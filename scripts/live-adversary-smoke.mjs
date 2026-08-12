@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 /**
- * Live Noxor adversary + dual-home concurrency smoke.
+ * Live sandbox adversary + dual-home concurrency smoke.
  *
- * Complements live-nox-surface-smoke.mjs (happy full surface) with:
+ * Complements live-surface-smoke.mjs (happy full surface) with:
  *  1. Stale cache push refusal (Agent A vs Agent B remote write)
  *  2. Stale publish review apply refusal after mid-flight remote change
  *  3. Double publish-apply lock / already-applied safety
@@ -14,14 +14,15 @@
  * Cleanup archives/deletes stamp fixtures. Not a full surface inventory.
  *
  * Usage:
- *   bun scripts/live-nox-adversary-smoke.mjs
- *   LEBOP_LIVE_BIN=/path/to/compiled bun scripts/live-nox-adversary-smoke.mjs
+ *   bun scripts/live-adversary-smoke.mjs
+ *   LEBOP_LIVE_BIN=/path/to/compiled bun scripts/live-adversary-smoke.mjs
  */
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { sanitizeLiveSurfaceReport } from "./live-surface-smoke.mjs";
 import { pathToFileURL } from "node:url";
 import { LEBOP_VERSION } from "../src/lib/version.ts";
 
@@ -103,6 +104,8 @@ function runProc(cmd, args, options = {}) {
         ...process.env,
         NO_COLOR: "1",
         FORCE_COLOR: "0",
+        // CLI --json defaults to TOON; harnesses JSON.parse machine stdout.
+        LEBOP_MACHINE_FORMAT: "json",
         ...options.env,
       },
       stdio: ["pipe", "pipe", "pipe"],
@@ -179,7 +182,7 @@ async function loginHome(home, token) {
   expect(teamSet.code === 0, `set-default-team failed\n${teamSet.stdout}\n${teamSet.stderr}`);
 }
 
-async function readNoxorToken() {
+async function readSandboxToken() {
   const fromEnv = process.env.LEBOP_SANDBOX_TOKEN?.trim();
   if (fromEnv) return fromEnv;
   const invocation = resolveLebopInvocation([
@@ -550,7 +553,8 @@ async function scenarioMcpConfirmNegatives(homeA) {
  * Minimal MCP stdio call: initialize + tools/call one tool.
  */
 async function callMcpTool(home, toolName, args) {
-  const invocation = resolveLebopInvocation(["mcp"]);
+  // archive_issue is full-profile only (not MCP Core).
+  const invocation = resolveLebopInvocation(["mcp", "--profile", "full"]);
   const init = {
     jsonrpc: "2.0",
     id: 1,
@@ -608,8 +612,24 @@ async function writeReport() {
   };
   const reportDir = path.join(repoRoot, "docs", "local");
   await mkdir(reportDir, { recursive: true });
-  const reportPath = path.join(reportDir, `live-nox-adversary-report-${stamp}.json`);
-  await writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`);
+  const reportPath = path.join(reportDir, `live-adversary-report-${stamp}.json`);
+  // Redact temp homes / tokens / issue ids before writing (R13-P1-3).
+  const toWrite = sanitizeLiveSurfaceReport({
+    ...report,
+    homes: undefined, // absolute LEBOP_HOME paths must not land on disk
+  });
+  if (toWrite && typeof toWrite === "object" && toWrite.binary_under_test) {
+    if (typeof toWrite.binary_under_test === "string") {
+      toWrite.binary_under_test = path.basename(toWrite.binary_under_test);
+    } else if (
+      toWrite.binary_under_test &&
+      typeof toWrite.binary_under_test === "object" &&
+      typeof toWrite.binary_under_test.path === "string"
+    ) {
+      toWrite.binary_under_test.path = path.basename(toWrite.binary_under_test.path);
+    }
+  }
+  await writeFile(reportPath, `${JSON.stringify(toWrite, null, 2)}\n`);
   return reportPath;
 }
 
@@ -619,7 +639,7 @@ async function main() {
   );
   await populateBinaryMeta();
 
-  const token = await readNoxorToken();
+  const token = await readSandboxToken();
   const homeA = await mkdtemp(path.join(tmpdir(), "lebop-adv-a-"));
   const homeB = await mkdtemp(path.join(tmpdir(), "lebop-adv-b-"));
   report.homes = { a: homeA, b: homeB };
@@ -630,7 +650,7 @@ async function main() {
       async () => {
         await loginHome(homeA, token);
         await loginHome(homeB, token);
-        record("adv:dual-home-auth", "pass", { note: "two LEBOP_HOME sessions on noxor" });
+        record("adv:dual-home-auth", "pass", { note: "two LEBOP_HOME sessions on lebop-playground" });
       },
     ],
     ["stale-push", () => scenarioStalePush(homeA, homeB)],

@@ -16,7 +16,7 @@ describe("project surface contracts", () => {
   it("normalizes equivalent CLI and MCP project list inputs", () => {
     const cli = buildProjectListInputFromCli({
       opts: {
-        team: "NOX",
+        team: "TEAM",
         state: "started",
         includeArchived: true,
         limit: "25",
@@ -24,7 +24,7 @@ describe("project surface contracts", () => {
       },
     });
     const mcp = buildProjectListInputFromMcp({
-      team: "NOX",
+      team: "TEAM",
       state: "started",
       include_archived: true,
       limit: 25,
@@ -33,7 +33,7 @@ describe("project surface contracts", () => {
 
     expect(cli).toEqual(mcp);
     expect(cli).toEqual({
-      team: "NOX",
+      team: "TEAM",
       allTeams: undefined,
       state: "started",
       includeArchived: true,
@@ -90,9 +90,9 @@ describe("project surface contracts", () => {
     const cli = buildProjectCreateInputFromCli({
       name: "Build It",
       opts: {
-        team: "NOX",
-        teamKey: ["NOX", "OPS"],
-        teamId: ["team-nox"],
+        team: "TEAM",
+        teamKey: ["TEAM", "OPS"],
+        teamId: ["team-team"],
         description: "desc",
         content: "content",
         icon: "Rocket",
@@ -103,9 +103,9 @@ describe("project surface contracts", () => {
     });
     const mcp = buildProjectCreateInputFromMcp({
       name: "Build It",
-      team: "NOX",
-      team_keys: ["NOX", "OPS"],
-      team_ids: ["team-nox"],
+      team: "TEAM",
+      team_keys: ["TEAM", "OPS"],
+      team_ids: ["team-team"],
       description: "desc",
       content: "content",
       icon: "Rocket",
@@ -117,11 +117,11 @@ describe("project surface contracts", () => {
     expect(cli).toEqual(mcp);
     const resolveTeamKeyToId = vi.fn(async (team: string) => `team-${team.toLowerCase()}`);
     const teamIds = await resolveProjectCreateTeamIds(cli, {
-      defaultTeamKey: async () => "NOX",
+      defaultTeamKey: async () => "TEAM",
       resolveTeamKeyToId,
     });
 
-    expect(teamIds).toEqual(["team-nox", "team-ops"]);
+    expect(teamIds).toEqual(["team-team", "team-ops"]);
     expect(resolveTeamKeyToId).toHaveBeenCalledTimes(2);
   });
 
@@ -131,11 +131,11 @@ describe("project surface contracts", () => {
 
     await expect(
       resolveProjectCreateTeamIds(input, {
-        defaultTeamKey: async () => "NOX",
+        defaultTeamKey: async () => "TEAM",
         resolveTeamKeyToId,
       }),
-    ).resolves.toEqual(["team-nox"]);
-    expect(resolveTeamKeyToId).toHaveBeenCalledWith("NOX");
+    ).resolves.toEqual(["team-team"]);
+    expect(resolveTeamKeyToId).toHaveBeenCalledWith("TEAM");
   });
 
   it("rejects empty explicit team ids before project create", async () => {
@@ -146,7 +146,7 @@ describe("project surface contracts", () => {
 
     await expect(
       resolveProjectCreateTeamIds(input, {
-        defaultTeamKey: async () => "NOX",
+        defaultTeamKey: async () => "TEAM",
         resolveTeamKeyToId: async (team) => `team-${team.toLowerCase()}`,
       }),
     ).rejects.toThrow(ValidationError);
@@ -199,15 +199,18 @@ describe("project surface contracts", () => {
     expect(() => buildProjectUpdateInputFromMcp({ id: "project-1" })).toThrow(ValidationError);
   });
 
-  it("normalizes delete after medium-specific confirmation", () => {
+  it("normalizes soft-delete after medium-specific confirmation", () => {
     expect(buildProjectDeleteInputFromCli({ id: "project-1", opts: { yes: true } })).toEqual({
       id: "project-1",
+      confirmed: true,
     });
     expect(buildProjectDeleteInputFromMcp({ id: "project-1", confirm: true })).toEqual({
       id: "project-1",
+      confirmed: true,
     });
     expect(() => buildProjectDeleteInputFromCli({ id: "project-1", opts: {} })).toThrow(
       ValidationError,
     );
+    expect(() => buildProjectDeleteInputFromMcp({ id: "project-1" })).toThrow(ValidationError);
   });
 });

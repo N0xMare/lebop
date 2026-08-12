@@ -97,8 +97,11 @@ export function agentSessionListPayload(result: AgentSessionListExecutionResult)
 export async function executeAgentSessionGet(
   input: AgentSessionGetInput,
   notFoundHint?: string,
+  opts?: { includeActivities?: boolean },
 ): Promise<ListedAgentSession> {
-  const session = await getAgentSession(input.id);
+  const session = await getAgentSession(input.id, {
+    includeActivities: opts?.includeActivities !== false,
+  });
   if (!session) {
     throw new NotFoundError(`agent session not found: ${input.id}`, notFoundHint);
   }

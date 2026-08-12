@@ -180,7 +180,7 @@ const lintFilesDescription =
   "MCP parity with `lebop lint`: lint explicit local markdown paths, or omit paths to lint cached issue/project markdown for the resolved repo/team. Supports fix and strict like the CLI.";
 
 const lintTextDescription =
-  "Run lebop's in-memory Linear renderer lint rules (L001, L002, L003, L005, L006) against text content. Catches table-cell ordered-list markers, setext H2 from `text\\n---`, etc. Pass fix=true to also return fixed_content and remaining warnings after in-memory autofixes. NOTE: this tool takes a content string, NOT a file path. Repo-scoped rules such as L004/R001/R002 require config/path context and run through the CLI/file lint surfaces instead.";
+  "In-memory Linear markdown lint (L001–L003,L005,L006) on a content string (not a path). fix=true returns fixed_content + remaining warnings. Repo rules L004/R001/R002 need lint_files/CLI.";
 
 export function buildLintFilesMcpInputSchema(workspaceDescription: string) {
   return {
@@ -230,7 +230,6 @@ export const lintFilesOperation = {
       idempotentHint: true,
       openWorldHint: false,
     },
-    inputSchemaKeys: ["paths", "team", "fix", "strict", "repo_root", "workspace"],
   },
   safety: { readOnly: false, destructive: false, idempotent: true, openWorld: false },
   notes:
@@ -262,7 +261,6 @@ export const lintTextOperation = {
       idempotentHint: true,
       openWorldHint: false,
     },
-    inputSchemaKeys: ["content", "fix"],
   },
   safety: { readOnly: true, destructive: false, idempotent: true, openWorld: false },
   exception: {

@@ -18,6 +18,7 @@ import {
   buildSemanticCoverage,
   buildSurfaceCoverage,
   evaluateGaps,
+  GAP_ALLOWLIST,
   FIELD_UPDATE_PROOF_LABELS,
   finalizeLiveReportStatus,
   isRemoteAuditNotFoundError,
@@ -37,13 +38,13 @@ import {
   shouldFailLiveHarnessProcess,
   validateReportFile,
   writeLiveSurfaceReport,
-} from "../scripts/live-nox-surface-smoke.mjs";
+} from "../scripts/live-surface-smoke.mjs";
 
 function remoteAuditFixture() {
   const target = {
-    key: "archived_issue:NOX-1",
+    key: "archived_issue:TEAM-1",
     kind: "archived_issue",
-    id: "NOX-1",
+    id: "TEAM-1",
     label: "test issue",
   };
   return {
@@ -119,22 +120,21 @@ function compiledBinaryProvenance() {
     path: "./dist/lebop",
     sha256: "a".repeat(64),
     size_bytes: 123456,
-    version: "0.0.5",
+    version: "0.0.6",
     platform: "darwin",
     arch: "arm64",
   };
 }
 
-describe("live Noxor harness validation helpers", () => {
+describe("live surface harness validation helpers", () => {
   it("allows only explicitly allowlisted, unexpired gaps", () => {
-    const gaps = [{ name: "mcp:get_cycle", reason: "fixture unavailable" }];
+    const gaps = [{ name: "mcp:get_agent_session", reason: "fixture unavailable" }];
 
     expect(evaluateGaps(gaps, new Date("2026-06-05T00:00:00.000Z"))).toEqual([
       {
-        name: "mcp:get_cycle",
+        name: "mcp:get_agent_session",
         allowed: true,
-        reason:
-          "NOX workspace lacks cycle/agent-session fixtures; allowlist extended for architecture release train until fixtures can be seeded; not a product gap. get_cycle has no valid UUID fixture.",
+        reason: GAP_ALLOWLIST["mcp:get_agent_session"].reason,
         expires: "2026-09-30",
         detail_reason: "fixture unavailable",
       },
@@ -228,23 +228,23 @@ describe("live Noxor harness validation helpers", () => {
     expect(() =>
       assertFullSurfaceReport(report, {
         expectedBinaryMode: "compiled-binary",
-        expectedBinaryVersion: "0.0.5",
+        expectedBinaryVersion: "0.0.6",
       }),
     ).toThrow(/binary_under_test\.version/);
   });
 
   it("can require exact live report workspace, team, stamp, and binary hash", () => {
     const report = reportWithFullSurface();
-    report.workspace = "noxor";
-    report.team = "NOX";
+    report.workspace = "lebop-playground";
+    report.team = "TEAM";
     report.stamp = "release-proof";
     report.prefix = "lebop-surface-release-proof";
     report.binary_under_test = compiledBinaryProvenance();
 
     expect(
       assertFullSurfaceReport(report, {
-        expectedWorkspace: "noxor",
-        expectedTeam: "NOX",
+        expectedWorkspace: "lebop-playground",
+        expectedTeam: "TEAM",
         expectedStamp: "release-proof",
         expectedBinaryMode: "compiled-binary",
         expectedBinarySha256: "a".repeat(64),
@@ -262,8 +262,8 @@ describe("live Noxor harness validation helpers", () => {
           binary_under_test: { ...compiledBinaryProvenance(), sha256: "b".repeat(64) },
         },
         {
-          expectedWorkspace: "noxor",
-          expectedTeam: "NOX",
+          expectedWorkspace: "lebop-playground",
+          expectedTeam: "TEAM",
           expectedStamp: "release-proof",
           expectedBinaryMode: "compiled-binary",
           expectedBinarySha256: "a".repeat(64),
@@ -675,9 +675,9 @@ describe("live Noxor harness validation helpers", () => {
 
   it("requires remote destructive cleanup audit target identity coverage", () => {
     const target = {
-      key: "archived_issue:NOX-1",
+      key: "archived_issue:TEAM-1",
       kind: "archived_issue",
-      id: "NOX-1",
+      id: "TEAM-1",
       label: "test issue",
     };
     const report = reportWithFullSurface();
@@ -718,7 +718,7 @@ describe("live Noxor harness validation helpers", () => {
     ];
 
     const coverage = buildRemoteDestructiveAuditCoverage(report);
-    expect(coverage.proofless).toEqual(["archived_issue:NOX-1"]);
+    expect(coverage.proofless).toEqual(["archived_issue:TEAM-1"]);
     expect(() => assertFullSurfaceReport(report)).toThrow(
       /remote destructive cleanup audit missing proof text/,
     );
@@ -730,7 +730,7 @@ describe("live Noxor harness validation helpers", () => {
 
     const coverage = buildRemoteDestructiveAuditCoverage(report);
     expect(coverage.checked).toBe(2);
-    expect(coverage.audited.map((target) => target.key)).toEqual(["archived_issue:NOX-1"]);
+    expect(coverage.audited.map((target) => target.key)).toEqual(["archived_issue:TEAM-1"]);
     expect(() => assertFullSurfaceReport(report)).toThrow(
       /remote destructive cleanup audit count mismatch/,
     );
@@ -792,7 +792,7 @@ describe("live Noxor harness validation helpers", () => {
         name: "cli:raw",
         status: "pass",
         command:
-          "lebop --workspace noxor --team NOX raw 'query { viewer { id email } }' --token-file /tmp/lebop-live-nox-abc/token.txt",
+          "lebop --workspace lebop-playground --team TEAM raw 'query { viewer { id email } }' --token-file /tmp/lebop-live-home-abc/token.txt",
         stdout_preview:
           '{"viewer":{"id":"user-id","email":"agent@example.com"},"token":"lin_secretvalue"}',
       },
@@ -801,18 +801,18 @@ describe("live Noxor harness validation helpers", () => {
         status: "pass",
         response_preview: '{"viewer":{"email":"agent@example.com"}}',
         semantic_assertions: [
-          "remote issue NOX-977 verified",
+          "remote issue TEAM-977 verified",
           "project afc0b9e5-236b-4059-af9d-fa9292569360 verified",
         ],
       },
     ]);
-    rawReport.temp_home = "/tmp/lebop-live-nox-abc";
+    rawReport.temp_home = "/tmp/lebop-live-home-abc";
     rawReport.created.viewer_email = "agent@example.com";
-    rawReport.created.macos_temp_home = "/var/folders/zz/abc/T/lebop-live-nox-abc";
-    rawReport.created.macos_token_path = "/var/folders/zz/abc/T/lebop-live-nox-abc/token.txt";
+    rawReport.created.macos_temp_home = "/var/folders/zz/abc/T/lebop-live-home-abc";
+    rawReport.created.macos_token_path = "/var/folders/zz/abc/T/lebop-live-home-abc/token.txt";
     rawReport.created.team_id = "7e94287e-95d8-476d-a97f-e69d8ff05d64";
     rawReport.created.cli_project = "afc0b9e5-236b-4059-af9d-fa9292569360";
-    rawReport.created.cli_issue_primary = "NOX-977";
+    rawReport.created.cli_issue_primary = "TEAM-977";
     rawReport.binary_under_test = {
       ...compiledBinaryProvenance(),
       path: "/Users/example/dev/unlink/lebop/docs/local/lebop-live-v003-darwin-arm64",
@@ -826,14 +826,14 @@ describe("live Noxor harness validation helpers", () => {
     const serialized = JSON.stringify(sanitized);
     expect(serialized).not.toContain("agent@example.com");
     expect(serialized).not.toContain("/Users/example");
-    expect(serialized).not.toContain("/tmp/lebop-live-nox-abc");
-    expect(serialized).not.toContain("/var/folders/zz/abc/T/lebop-live-nox-abc");
-    expect(serialized).not.toContain("lebop-live-nox-abc");
+    expect(serialized).not.toContain("/tmp/lebop-live-home-abc");
+    expect(serialized).not.toContain("/var/folders/zz/abc/T/lebop-live-home-abc");
+    expect(serialized).not.toContain("lebop-live-home-abc");
     expect(serialized).not.toContain("token.txt");
     expect(serialized).not.toContain("lin_secretvalue");
     expect(serialized).not.toContain("7e94287e-95d8-476d-a97f-e69d8ff05d64");
     expect(serialized).not.toContain("afc0b9e5-236b-4059-af9d-fa9292569360");
-    expect(serialized).not.toContain("NOX-977");
+    expect(serialized).not.toContain("TEAM-977");
     expect(serialized).toContain("redacted-uuid-");
     expect(serialized).toContain("redacted-issue-");
     expect(serialized).not.toContain("stdout_preview");
@@ -848,8 +848,8 @@ describe("live Noxor harness validation helpers", () => {
       const written = await readFile(reportPath, "utf8");
       expect(written).not.toContain("agent@example.com");
       expect(written).not.toContain("/Users/example");
-      expect(written).not.toContain("/tmp/lebop-live-nox-abc");
-      expect(written).not.toContain("lebop-live-nox-abc");
+      expect(written).not.toContain("/tmp/lebop-live-home-abc");
+      expect(written).not.toContain("lebop-live-home-abc");
       expect(written).not.toContain("stdout_preview");
     } finally {
       await rm(root, { recursive: true, force: true });
@@ -858,13 +858,13 @@ describe("live Noxor harness validation helpers", () => {
 
   it("rejects macOS-style live temp path segments even outside /tmp", () => {
     const rawReport = reportWithFullSurface();
-    rawReport.created.macos_temp_home = "/var/folders/zz/abc/T/lebop-live-nox-macos";
+    rawReport.created.macos_temp_home = "/var/folders/zz/abc/T/lebop-live-home-macos";
 
     expect(() => assertLiveSurfaceReportSanitized(rawReport)).toThrow(/temporary live auth path/);
 
     const sanitized = sanitizeLiveSurfaceReport(rawReport);
     expect(() => assertLiveSurfaceReportSanitized(sanitized)).not.toThrow();
-    expect(JSON.stringify(sanitized)).not.toContain("lebop-live-nox-macos");
+    expect(JSON.stringify(sanitized)).not.toContain("lebop-live-home-macos");
   });
 
   it("rejects unsanitized artifacts during validate-report", async () => {
@@ -873,10 +873,10 @@ describe("live Noxor harness validation helpers", () => {
         name: "cli:raw",
         status: "pass",
         command:
-          "lebop --workspace noxor raw 'query { viewer { id email } }' --token-file /tmp/lebop-live-nox-abc/token.txt",
+          "lebop --workspace lebop-playground raw 'query { viewer { id email } }' --token-file /tmp/lebop-live-home-abc/token.txt",
       },
     ]);
-    rawReport.temp_home = "/tmp/lebop-live-nox-abc";
+    rawReport.temp_home = "/tmp/lebop-live-home-abc";
     rawReport.created.viewer_email = "agent@example.com";
 
     const root = await mkdtemp(path.join(tmpdir(), "lebop-live-report-validate-sanitize-test-"));
@@ -954,7 +954,7 @@ describe("live Noxor harness validation helpers", () => {
         stamp: "20260605000000",
       });
 
-      expect(reportPath).toBe(path.join(reportDir, "live-nox-surface-report-20260605000000.json"));
+      expect(reportPath).toBe(path.join(reportDir, "live-surface-report-20260605000000.json"));
       expect(JSON.parse(await readFile(reportPath, "utf8")).status).toBe("completed");
     } finally {
       await rm(root, { recursive: true, force: true });

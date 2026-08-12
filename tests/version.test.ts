@@ -69,7 +69,7 @@ function escapeRegExp(value: string): string {
 describe("runtime version metadata", () => {
   it("uses package.json as the single runtime source", () => {
     expect(LEBOP_VERSION).toBe(packageJson.version);
-    expect(packageJson.version).toBe("0.0.5");
+    expect(packageJson.version).toBe("0.0.6");
   });
 
   it("CLI and MCP server do not hardcode independent runtime versions", () => {
@@ -141,7 +141,7 @@ describe("runtime version metadata", () => {
     expect(downloadCompiled.with).toMatchObject({ name: "lebop-linux-x64" });
     const compiledRun = workflowStep(compiledSmoke, "compiled full live harness").run as string;
     expect(compiledRun).toContain('export LEBOP_LIVE_BIN="$PWD/compiled-live/lebop-linux-x64"');
-    expect(compiledRun).toContain("bun scripts/live-nox-surface-smoke.mjs");
+    expect(compiledRun).toContain("bun scripts/live-surface-smoke.mjs");
     expect(workflowStep(compiledSmoke, "validate compiled full live harness report").env).toEqual({
       LEBOP_LIVE_STAMP: `compiled-\${{ github.run_id }}-\${{ github.run_attempt }}`,
       LEBOP_LIVE_EXPECT_WORKSPACE: "lebop-playground",
@@ -153,9 +153,48 @@ describe("runtime version metadata", () => {
       "LEBOP_LIVE_EXPECT_BIN_SHA256",
     );
 
+    const discoverySmoke = workflowJob(release, "compiled-linux-discovery-smoke");
+    expect(discoverySmoke.name).toBe("compiled Linux x64 discovery live smoke");
+    expect(discoverySmoke.needs).toBe("build");
+    expect(discoverySmoke.concurrency).toMatchObject({ group: "sandbox-live-write" });
+    expect(discoverySmoke.env).toMatchObject({
+      LEBOP_HOME: "/tmp/lebop-release-discovery-sandbox",
+      LEBOP_SANDBOX_TOKEN: `\${{ secrets.LEBOP_SANDBOX_TOKEN }}`,
+    });
+    const discoveryRun = workflowStep(discoverySmoke, "compiled discovery live harness").run as string;
+    expect(discoveryRun).toContain('export LEBOP_LIVE_BIN="$PWD/compiled-live/lebop-linux-x64"');
+    expect(discoveryRun).toContain("bun scripts/live-discovery-smoke.mjs");
+
+    // R13-P1-4: discovery co-gate must fail-closed on sanitized report inventory.
+    const discoveryValidate = workflowStep(discoverySmoke, "validate discovery live report").run as string;
+    expect(discoveryValidate).toContain("live-discovery-smoke.mjs --validate-report");
+
+    // Soft-delete hard cutover: discovery must not invoke obsolete status-update delete leaves.
+    const discoverySource = readFileSync(
+      join(process.cwd(), "scripts", "live-discovery-smoke.mjs"),
+      "utf8",
+    );
+    expect(discoverySource).not.toContain('["project-update", "delete"');
+    expect(discoverySource).not.toContain('["initiative-update", "delete"');
+    expect(discoverySource).toContain('["project-update", "soft-delete"');
+    expect(discoverySource).toContain('["initiative-update", "soft-delete"');
+
+    // Surface cleanup fallthrough must use soft-delete for soft-delete domains.
+    const surfaceSource = readFileSync(
+      join(process.cwd(), "scripts", "live-surface-smoke.mjs"),
+      "utf8",
+    );
+    expect(surfaceSource).not.toMatch(/\["project", "delete"/);
+    expect(surfaceSource).not.toMatch(/\["document", "delete"/);
+    expect(surfaceSource).not.toMatch(/\["initiative", "delete"/);
+
     const releasePublish = workflowJob(release, "release");
     expect(releasePublish.name).toBe("publish release");
-    expect(releasePublish.needs).toEqual(["build", "compiled-linux-live-smoke"]);
+    expect(releasePublish.needs).toEqual([
+      "build",
+      "compiled-linux-live-smoke",
+      "compiled-linux-discovery-smoke",
+    ]);
     expect(releasePublish.permissions).toEqual({ contents: "write" });
     expect(workflowStep(releasePublish, "download release binary artifacts").with).toMatchObject({
       pattern: "lebop-*",
@@ -249,7 +288,7 @@ describe("runtime version metadata", () => {
     expect(mcpReadSmoke).not.toContain('workspace: "sandbox"');
     expect(mcpReadSmoke).not.toContain('team: "sandbox"');
     expect(workflowStep(smoke, "validate full live harness report").run).toContain(
-      'bun scripts/live-nox-surface-smoke.mjs --validate-report "$report"',
+      'bun scripts/live-surface-smoke.mjs --validate-report "$report"',
     );
     expect(workflowStep(smoke, "validate full live harness report").env).toMatchObject({
       LEBOP_LIVE_EXPECT_WORKSPACE: "lebop-playground",

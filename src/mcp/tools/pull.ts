@@ -1,4 +1,5 @@
 import { envelope } from "../../lib/envelope.ts";
+import { mcpPullNext } from "../../lib/nextStubs.ts";
 import {
   buildPullIssuesInputFromMcp,
   buildPullIssuesMcpInputSchema,
@@ -30,7 +31,12 @@ export function buildPullToolSpecs(deps: PullToolDeps): McpToolSpec[] {
       ),
       handler: async (args: PullIssuesMcpInput) => {
         if (args.refresh === true) deps.requireConfirm(args, "pull_issues refresh");
-        return text(envelope({ ...(await executePullIssues(buildPullIssuesInputFromMcp(args))) }));
+        return text(
+          envelope({
+            ...(await executePullIssues(buildPullIssuesInputFromMcp(args))),
+            next: mcpPullNext(),
+          }),
+        );
       },
     },
     {
@@ -42,7 +48,10 @@ export function buildPullToolSpecs(deps: PullToolDeps): McpToolSpec[] {
       handler: async (args: PullProjectMcpInput) => {
         if (args.refresh === true) deps.requireConfirm(args, "pull_project refresh");
         return text(
-          envelope({ ...(await executePullProject(buildPullProjectInputFromMcp(args))) }),
+          envelope({
+            ...(await executePullProject(buildPullProjectInputFromMcp(args))),
+            next: mcpPullNext(),
+          }),
         );
       },
     },

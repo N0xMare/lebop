@@ -10,10 +10,10 @@ describe("workspace paths", () => {
     expect(normalizeWorkspacePath("")).toBe("/");
     expect(normalizeWorkspacePath("projects/abc/")).toBe("/projects/abc");
     expect(normalizeWorkspacePath("linear://workspace/current/projects/abc")).toBe("/projects/abc");
-    expect(normalizeWorkspacePath("nox-123")).toBe("/issues/NOX-123");
+    expect(normalizeWorkspacePath("team-123")).toBe("/issues/TEAM-123");
     expect(normalizeWorkspacePath("a1-42")).toBe("/issues/A1-42");
-    expect(normalizeWorkspacePath("/nox-123")).toBe("/issues/NOX-123");
-    expect(normalizeWorkspacePath("linear:nox-123")).toBe("/issues/NOX-123");
+    expect(normalizeWorkspacePath("/team-123")).toBe("/issues/TEAM-123");
+    expect(normalizeWorkspacePath("linear:team-123")).toBe("/issues/TEAM-123");
   });
 
   it("parses project, initiative, and issue child paths", () => {
@@ -27,9 +27,9 @@ describe("workspace paths", () => {
       id: "init-1",
       child: "updates",
     });
-    expect(parseWorkspacePath("/issues/nox-1/comments")).toMatchObject({
+    expect(parseWorkspacePath("/issues/team-1/comments")).toMatchObject({
       kind: "issue_child",
-      id: "NOX-1",
+      id: "TEAM-1",
       child: "comments",
     });
     expect(parseWorkspacePath("/cycles/cycle-1/issues")).toMatchObject({
@@ -46,14 +46,14 @@ describe("workspace paths", () => {
       kind: "agent_session",
       id: "session-1",
     });
-    expect(parseWorkspacePath("/issues/nox-1/agent-sessions")).toMatchObject({
+    expect(parseWorkspacePath("/issues/team-1/agent-sessions")).toMatchObject({
       kind: "issue_child",
-      id: "NOX-1",
+      id: "TEAM-1",
       child: "agent-sessions",
     });
-    expect(parseWorkspacePath("/issues/nox-1/documents")).toMatchObject({
+    expect(parseWorkspacePath("/issues/team-1/documents")).toMatchObject({
       kind: "issue_child",
-      id: "NOX-1",
+      id: "TEAM-1",
       child: "documents",
     });
   });
@@ -69,10 +69,10 @@ describe("workspace paths", () => {
     expect(childPaths(parseWorkspacePath("/milestones/milestone-1"))).toEqual([
       "/milestones/milestone-1/issues",
     ]);
-    expect(childPaths(parseWorkspacePath("/issues/NOX-1"))).toContain(
-      "/issues/NOX-1/agent-sessions",
+    expect(childPaths(parseWorkspacePath("/issues/TEAM-1"))).toContain(
+      "/issues/TEAM-1/agent-sessions",
     );
-    expect(childPaths(parseWorkspacePath("/issues/NOX-1"))).toContain("/issues/NOX-1/documents");
+    expect(childPaths(parseWorkspacePath("/issues/TEAM-1"))).toContain("/issues/TEAM-1/documents");
   });
 
   it("rejects invalid percent escapes with a structured validation message", () => {

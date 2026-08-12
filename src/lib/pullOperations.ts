@@ -95,7 +95,7 @@ export async function executePullIssues(input: PullIssueInput): Promise<PullOper
   if (ids.length === 0) {
     throw new ValidationError(
       "pull_issues requires at least one identifier",
-      "pass identifiers like NOX-1 or ranges like NOX-1..NOX-3",
+      "pass identifiers like TEAM-1 or ranges like TEAM-1..TEAM-3",
     );
   }
 

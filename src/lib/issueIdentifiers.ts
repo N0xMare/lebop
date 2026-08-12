@@ -20,7 +20,7 @@ export function parseIssueIdentifier(value: string, label = "identifier"): Parse
   if (!ISSUE_IDENTIFIER_PATTERN.test(normalized)) {
     throw new ValidationError(
       `invalid ${label}: ${value}`,
-      "expected TEAM-NN form with an alphanumeric team key, e.g. NOX-34 or A1-42",
+      "expected TEAM-NN form with an alphanumeric team key, e.g. TEAM-34 or A1-42",
     );
   }
   const separator = normalized.lastIndexOf("-");

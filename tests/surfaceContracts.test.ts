@@ -35,7 +35,7 @@ describe("surface operation contracts", () => {
 
     for (const operation of SURFACE_OPS) {
       expect(operation.domain, `${operation.id} domain`).toMatch(
-        /^(workspace|issues|projects|milestones|pull|publish|plan|cache|attachments|comments|labels|cycles|agent_sessions|teams|lookups|documents|initiatives|relations|link|auth|raw|lint|other)$/,
+        /^(workspace|issues|projects|milestones|pull|publish|plan|cache|attachments|comments|labels|cycles|agent_sessions|teams|lookups|documents|initiatives|relations|link|auth|raw|lint|search|history|views|custom_fields|notifications|other)$/,
       );
       expect(operation.resource, `${operation.id} resource`).toBeTruthy();
       expect(operation.action, `${operation.id} action`).toBeTruthy();
@@ -98,17 +98,21 @@ describe("surface operation contracts", () => {
 
   it("keeps migrated destructive confirm policy aligned with the MCP manifest", () => {
     expect(deriveSurfaceRequiredMcpConfirmTools(SURFACE_OPS)).toEqual([
+      "archive_cycle",
       "archive_initiative",
       "archive_issue",
       "delete_attachment",
       "delete_comment",
-      "delete_document",
-      "delete_initiative",
       "delete_label",
       "delete_milestone",
-      "delete_project",
       "delete_relation",
+      "delete_view",
       "initiative_remove_project",
+      "soft_delete_document",
+      "soft_delete_initiative",
+      "soft_delete_initiative_update",
+      "soft_delete_project",
+      "soft_delete_project_update",
     ]);
 
     const requiredConfirmTools = new Set(REQUIRED_MCP_CONFIRM_TOOLS);
@@ -171,7 +175,6 @@ describe("surface operation contracts", () => {
       "issues.get",
       "issues.create",
       "issues.update",
-      "issues.relations_update",
       "issues.archive",
       "issues.unarchive",
       "issues.bulk_update",
@@ -180,7 +183,7 @@ describe("surface operation contracts", () => {
       "projects.get",
       "projects.create",
       "projects.update",
-      "projects.delete",
+      "projects.soft_delete",
       "milestones.list",
       "milestones.get",
       "milestones.create",
@@ -198,16 +201,21 @@ describe("surface operation contracts", () => {
       "attachments.list",
       "attachments.update",
       "attachments.delete",
+      "attachments.upload",
       "comments.list",
       "comments.add",
       "comments.update",
       "comments.delete",
       "labels.list",
       "labels.create",
+      "labels.update",
       "labels.delete",
       "labels.lookup_by_name",
       "cycles.list",
       "cycles.get",
+      "cycles.create",
+      "cycles.update",
+      "cycles.archive",
       "agent_sessions.list",
       "agent_sessions.get",
       "teams.list",
@@ -220,20 +228,24 @@ describe("surface operation contracts", () => {
       "documents.get",
       "documents.create",
       "documents.update",
-      "documents.delete",
+      "documents.soft_delete",
       "project_updates.list",
       "project_updates.create",
+      "project_updates.update",
+      "project_updates.soft_delete",
       "initiatives.list",
       "initiatives.get",
       "initiatives.create",
       "initiatives.update",
       "initiatives.archive",
       "initiatives.unarchive",
-      "initiatives.delete",
+      "initiatives.soft_delete",
       "initiatives.add_project",
       "initiatives.remove_project",
       "initiative_updates.list",
       "initiative_updates.create",
+      "initiative_updates.update",
+      "initiative_updates.soft_delete",
       "relations.add",
       "relations.update",
       "relations.list",
@@ -257,9 +269,23 @@ describe("surface operation contracts", () => {
       "raw.graphql",
       "lint.files",
       "lint.text",
+      "search.linear",
+      "history.list",
+      "views.list",
+      "views.get",
+      "views.create",
+      "views.update",
+      "views.delete",
+      "views.materialize",
+      "custom_fields.list",
+      "custom_fields.get_issue",
+      "custom_fields.set_issue",
+      "notifications.list",
       "mcp.start",
       "schema.dump",
       "completions.shell",
+      "meta.update",
+      "meta.help",
     ]);
     expect(SURFACE_OPS.map((operation) => operation.mcp?.tool)).toEqual([
       "explore_linear_workspace",
@@ -269,7 +295,6 @@ describe("surface operation contracts", () => {
       "get_issue",
       "create_issue",
       "update_issue",
-      "update_relations",
       "archive_issue",
       "unarchive_issue",
       "bulk_update_issues",
@@ -278,7 +303,7 @@ describe("surface operation contracts", () => {
       "get_project",
       "create_project",
       "update_project",
-      "delete_project",
+      "soft_delete_project",
       "list_milestones",
       "get_milestone",
       "create_milestone",
@@ -296,16 +321,21 @@ describe("surface operation contracts", () => {
       "list_attachments",
       "update_attachment",
       "delete_attachment",
+      undefined,
       "list_comments",
       "add_comment",
       "update_comment",
       "delete_comment",
       "list_labels",
       "create_label",
+      "update_label",
       "delete_label",
       "lookup_label_by_name",
       "list_cycles",
       "get_cycle",
+      "create_cycle",
+      "update_cycle",
+      "archive_cycle",
       "list_agent_sessions",
       "get_agent_session",
       "list_teams",
@@ -318,20 +348,24 @@ describe("surface operation contracts", () => {
       "get_document",
       "create_document",
       "update_document",
-      "delete_document",
+      "soft_delete_document",
       "list_project_updates",
       "create_project_update",
+      "update_project_update",
+      "soft_delete_project_update",
       "list_initiatives",
       "get_initiative",
       "create_initiative",
       "update_initiative",
       "archive_initiative",
       "unarchive_initiative",
-      "delete_initiative",
+      "soft_delete_initiative",
       "initiative_add_project",
       "initiative_remove_project",
       "list_initiative_updates",
       "create_initiative_update",
+      "update_initiative_update",
+      "soft_delete_initiative_update",
       "add_relation",
       "update_relations",
       "list_relations",
@@ -355,21 +389,39 @@ describe("surface operation contracts", () => {
       "raw_graphql",
       "lint_files",
       "lint_text",
+      "search_linear",
+      "list_issue_history",
+      "list_views",
+      "get_view",
+      "create_view",
+      "update_view",
+      "delete_view",
+      "materialize_view",
+      "list_custom_fields",
+      "get_issue_custom_fields",
+      "set_issue_custom_field",
+      undefined,
+      undefined,
+      undefined,
       undefined,
       undefined,
       undefined,
     ]);
   });
 
-  it("declares auth login/logout/token and mcp/schema/completions as cli_only exception ops", () => {
+  it("declares auth login/logout/token, notifications, and mcp/schema/completions as cli_only exception ops", () => {
     const cliOnly = SURFACE_OPS.filter((operation) => operation.exception?.kind === "cli_only");
     expect(cliOnly.map((operation) => operation.id)).toEqual([
+      "attachments.upload",
       "auth.login",
       "auth.logout",
       "auth.token",
+      "notifications.list",
       "mcp.start",
       "schema.dump",
       "completions.shell",
+      "meta.update",
+      "meta.help",
     ]);
     for (const operation of cliOnly) {
       expect(operation.cli?.command, `${operation.id} cli.command`).toBeTruthy();
@@ -377,7 +429,7 @@ describe("surface operation contracts", () => {
     }
   });
 
-  it("makes SURFACE_OPERATIONS the inventory authority (L2 derived manifests)", () => {
+  it("makes SURFACE_OPERATIONS the inventory authority (L2 derived manifests)", async () => {
     // Live coverage is fully derived (no handwritten list).
     expect(CLI_LIVE_COVERAGE_MANIFEST).toEqual(deriveCliLiveCoverageManifest(SURFACE_OPS));
 
@@ -410,10 +462,27 @@ describe("surface operation contracts", () => {
     expect(setRow?.issue_fields?.length).toBeGreaterThan(0);
     expect(updateIssue?.issue_fields?.length).toBeGreaterThan(0);
 
-    const registeredMcp = collectMcpToolDefinitions()
+    const registeredMcp = collectMcpToolDefinitions("full")
       .map((definition) => definition.name)
       .toSorted();
-    expect(MCP_SURFACE_MANIFEST.map((entry) => entry.tool).toSorted()).toEqual(registeredMcp);
+    // Surface-derived tools must all be registered; inventory is L2-complete.
+    const fromSurface = MCP_SURFACE_MANIFEST.map((entry) => entry.tool).toSorted();
+    for (const tool of fromSurface) {
+      expect(registeredMcp.includes(tool), `surface tool ${tool} not registered`).toBe(true);
+    }
+    expect(registeredMcp).toEqual(fromSurface);
+
+    // H-2b: registration order lock is a permutation of surface MCP tools.
+    const {
+      deriveMcpRegistrationOrder,
+      surfaceMcpToolNames,
+    } = await import("../src/mcp/tools/index.ts");
+    const order = deriveMcpRegistrationOrder();
+    expect([...order].toSorted()).toEqual(surfaceMcpToolNames().toSorted());
+    expect([...order].toSorted()).toEqual(fromSurface);
+    // Registered full profile order matches the lock (not just set equality).
+    const registeredInOrder = collectMcpToolDefinitions("full").map((d) => d.name);
+    expect(registeredInOrder).toEqual([...order]);
 
     for (const operation of SURFACE_OPS) {
       if (!operation.mcp) continue;

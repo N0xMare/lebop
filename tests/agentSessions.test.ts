@@ -113,7 +113,7 @@ function sessionNode(id: string, status: string, issueId = "issue-1") {
     createdAt: "2026-06-06T00:00:00.000Z",
     updatedAt: "2026-06-06T00:00:00.000Z",
     endedAt: null,
-    issue: { id: issueId, identifier: "NOX-1", title: "Issue 1" },
+    issue: { id: issueId, identifier: "TEAM-1", title: "Issue 1" },
     creator: { id: "user-1", name: "Agent User", email: "agent@example.com" },
   };
 }

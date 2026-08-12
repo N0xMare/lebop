@@ -63,12 +63,12 @@ describe("listAttachments", () => {
         },
       },
     });
-    const result = await listAttachments("NOX-1");
+    const result = await listAttachments("TEAM-1");
     expect(result).toHaveLength(1);
     expect(result[0]?.id).toBe("att-1");
     expect(result[0]?.source_type).toBe("github");
     expect(result[0]?.creator?.email).toBe("a@x.io");
-    expect(calls[0]?.variables).toMatchObject({ id: "NOX-1" });
+    expect(calls[0]?.variables).toMatchObject({ id: "TEAM-1" });
   });
 
   it("throws NotFoundError when issue is missing", async () => {
@@ -98,12 +98,12 @@ describe("listAttachments", () => {
       },
     });
 
-    const page = await listAttachmentsPage("NOX-1", { first: 1, after: "prior-cursor" });
+    const page = await listAttachmentsPage("TEAM-1", { first: 1, after: "prior-cursor" });
 
     expect(page.attachments).toHaveLength(1);
     expect(page.pageInfo).toEqual({ hasNextPage: true, endCursor: "attachment-cursor-1" });
     expect(calls[0]?.variables).toMatchObject({
-      id: "NOX-1",
+      id: "TEAM-1",
       first: 1,
       after: "prior-cursor",
     });
@@ -125,14 +125,14 @@ describe("linkUrlAttachment", () => {
       },
     });
 
-    const err = await linkUrlAttachment("NOX-1", "https://example.test/spec", "Spec").catch(
+    const err = await linkUrlAttachment("TEAM-1", "https://example.test/spec", "Spec").catch(
       (e) => e,
     );
 
     expect(err).toBeInstanceOf(ValidationError);
     expect(err.message).toBe("attachmentLinkURL failed");
     expect(calls[0]?.variables).toMatchObject({
-      issueId: "uuid-of-NOX-1",
+      issueId: "uuid-of-TEAM-1",
       url: "https://example.test/spec",
       title: "Spec",
     });

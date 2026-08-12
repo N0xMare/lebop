@@ -1,6 +1,7 @@
 import { invalidateTeamMetadata } from "../../lib/cache.ts";
 import { resolveConfig } from "../../lib/config.ts";
 import { envelope } from "../../lib/envelope.ts";
+import { mcpGetNext } from "../../lib/nextStubs.ts";
 import {
   buildLabelCreateInputFromMcp,
   buildLabelCreateMcpInputSchema,
@@ -10,19 +11,24 @@ import {
   buildLabelListMcpInputSchema,
   buildLabelLookupInputFromMcp,
   buildLabelLookupMcpInputSchema,
+  buildLabelUpdateInputFromMcp,
+  buildLabelUpdateMcpInputSchema,
   executeLabelCreate,
   executeLabelDelete,
   executeLabelList,
   executeLabelLookup,
+  executeLabelUpdate,
   type LabelCreateMcpInput,
   type LabelDeleteMcpInput,
   type LabelListMcpInput,
   type LabelLookupMcpInput,
+  type LabelUpdateMcpInput,
   labelCreateOperation,
   labelDeleteOperation,
   labelListOperation,
   labelListPayload,
   labelLookupByNameOperation,
+  labelUpdateOperation,
 } from "../../surface/labels.ts";
 import { resolveMcpRepoCacheContext, resolveTeamSelectorToId } from "../common.ts";
 import { text } from "../response.ts";
@@ -44,7 +50,12 @@ export function buildLabelToolSpecs(deps: LabelToolDeps): McpToolSpec[] {
       ),
       handler: async (args: LabelListMcpInput) => {
         const result = await executeLabelList(buildLabelListInputFromMcp(args));
-        return text(envelope(labelListPayload(result)));
+        return text(
+          envelope({
+            ...labelListPayload(result),
+            next: mcpGetNext("list_issues", "create_label", "lookup_label_by_name"),
+          }),
+        );
       },
     },
     {
@@ -74,8 +85,24 @@ export function buildLabelToolSpecs(deps: LabelToolDeps): McpToolSpec[] {
             scope: result.scope,
             team: result.team,
             team_id: result.team_id,
+            next: mcpGetNext("list_labels", "list_issues"),
           }),
         );
+      },
+    },
+    {
+      name: "update_label",
+      config: mcpToolConfig(
+        labelUpdateOperation,
+        buildLabelUpdateMcpInputSchema(deps.workspaceParamDescription),
+      ),
+      handler: async (args: LabelUpdateMcpInput) => {
+        const label = await executeLabelUpdate(buildLabelUpdateInputFromMcp(args));
+        await invalidateTeamMetadata(
+          resolveMcpRepoCacheContext(undefined).repoHash,
+          label.team?.key ?? undefined,
+        );
+        return text(envelope({ label, next: mcpGetNext("list_labels", "list_issues") }));
       },
     },
     {
@@ -101,6 +128,7 @@ export function buildLabelToolSpecs(deps: LabelToolDeps): McpToolSpec[] {
             team: result.team,
             status: result.status,
             success: result.success,
+            next: mcpGetNext("list_labels"),
           }),
         );
       },
@@ -118,6 +146,7 @@ export function buildLabelToolSpecs(deps: LabelToolDeps): McpToolSpec[] {
             label: result.label,
             scope: result.scope,
             team: result.team,
+            next: mcpGetNext("list_labels", "list_issues", "update_issue"),
           }),
         );
       },

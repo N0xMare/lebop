@@ -1,3 +1,4 @@
+import { resolveWorkspaceSlugForState, UNSET_WORKSPACE_SLUG } from "../lib/paths.ts";
 import { runWithRequestContext } from "../lib/requestContext.ts";
 import { formatToolError } from "./response.ts";
 import type {
@@ -12,7 +13,16 @@ export function safe<A extends ToolHandlerArgs>(
   fn: (args: A) => Promise<ToolHandlerResult>,
 ): (args: A) => Promise<ToolHandlerResult> {
   return async (args) => {
-    return runWithRequestContext({ workspace: args.workspace as string | undefined }, async () => {
+    let workspace = args.workspace as string | undefined;
+    if (!workspace) {
+      try {
+        const resolved = resolveWorkspaceSlugForState(undefined);
+        if (resolved !== UNSET_WORKSPACE_SLUG) workspace = resolved;
+      } catch {
+        // leave undefined; path resolve later may fail-closed with available slugs
+      }
+    }
+    return runWithRequestContext({ workspace }, async () => {
       try {
         return await fn(args);
       } catch (err) {

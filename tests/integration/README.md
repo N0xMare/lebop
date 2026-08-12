@@ -65,7 +65,7 @@ expect(r.stderr).toContain("error[auth_error]:");
 CLI/MCP parity and high-risk behavior rules live in
 `src/lib/toolSurfaceManifest.ts` and `src/lib/toolBehaviorContracts.ts`.
 When adding a command or MCP tool, update the manifest and add focused local
-coverage for the contract it touches. The live Noxor harness then adds
+coverage for the contract it touches. The live surface harness then adds
 semantic assertions for release-critical operations instead of only proving
 that a command was invoked.
 

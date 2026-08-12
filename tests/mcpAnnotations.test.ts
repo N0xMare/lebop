@@ -53,12 +53,12 @@ function inputDescription(toolName: string, field: string): string {
 describe("MCP tool annotations", () => {
   const allTools = listToolNames();
 
-  it("registers exactly 85 tools", () => {
-    expect(allTools.length).toBe(85);
+  it("registers exactly 104 tools", () => {
+    expect(allTools.length).toBe(104);
   });
 
   it("docs/spec.md shipped-tool inventory exactly matches server registrations", () => {
-    const section = /#### Shipped tools \(85\)([\s\S]*?)#### MCP tool inventory/.exec(spec)?.[1];
+    const section = /#### Shipped tools \(104\)([\s\S]*?)#### MCP tool inventory/.exec(spec)?.[1];
     expect(section).toBeDefined();
     const documented = Array.from(
       new Set([...(section ?? "").matchAll(/`([a-z_]+)`/g)].map((m) => m[1])),
@@ -88,7 +88,6 @@ describe("MCP tool annotations", () => {
   it("read tools advertise read-only + idempotent", () => {
     for (const name of [
       "list_issues",
-      "get_issue",
       "list_labels",
       "cache_status",
       "diff_issue",
@@ -101,6 +100,17 @@ describe("MCP tool annotations", () => {
       const ann = annotationFor(name);
       expect(ann?.hints).toMatchObject({
         readOnlyHint: true,
+        idempotentHint: true,
+        openWorldHint: true,
+      });
+    }
+  });
+
+  it("entity getters with content_file are not pure read-only (host FS write capability)", () => {
+    for (const name of ["get_issue", "get_project", "get_document", "get_initiative"]) {
+      const ann = annotationFor(name);
+      expect(ann?.hints).toMatchObject({
+        readOnlyHint: false,
         idempotentHint: true,
         openWorldHint: true,
       });
@@ -161,7 +171,7 @@ describe("MCP tool annotations", () => {
   it("destructive tools advertise destructive: true", () => {
     for (const name of [
       "delete_issue".replace("issue", "label"), // delete_label
-      "delete_project",
+      "soft_delete_project",
       "archive_initiative",
       "cache_gc",
       "initiative_remove_project",

@@ -107,10 +107,10 @@ export function validateJsonErrorEnvelopeContract(payload: unknown): BehaviorCon
   if (!isRecord(payload) || payload.ok !== false) return [];
   const errors: BehaviorContractError[] = [];
   const error = isRecord(payload.error) ? payload.error : null;
-  if (payload.schema_version !== 1 || !error || typeof error.code !== "string") {
+  if (payload.schema_version !== 2 || !error || typeof error.code !== "string") {
     errors.push({
       contract: "cli_json_errors.use_envelope",
-      message: "--json failures must emit {ok:false,schema_version:1,error:{code,message}}",
+      message: "--json failures must emit {ok:false,schema_version:2,error:{code,message}}",
     });
   }
   return errors;

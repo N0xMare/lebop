@@ -1,15 +1,16 @@
 ---
-description: Pull Linear issues/projects into ~/.lebop cache for editing
-argument-hint: [issue-ids…] [--team KEY] [--project NAME] [--project-id UUID] [--refresh] [--yes|--confirm] [--no-comments] [--to DIR]
+description: Pull Linear issues/projects into ~/.lebop cache for editing (CLI)
+argument-hint: [ids or --project …]
 ---
 
-Run `lebop pull $ARGUMENTS` from the current working directory.
+**CLI only.** If `lebop` is missing, stop and report.
 
-After it completes:
-1. If exit code is non-zero AND the failure was per-id (some pulled, some `not found`), summarise which succeeded and which didn't — don't just stop.
-2. If the user appears to be starting an edit session, run `lebop status` so they (and you) see baseline cleanliness before any edits.
-3. If `--to` was passed, remind that those files are export-only — edits there don't round-trip through `push`.
-4. If `--refresh` is needed, ask before overwriting local cache edits and pass `--yes` or `--confirm` only after that approval.
-5. If no arguments were provided, ask the user which issues / project to pull rather than guessing.
+```sh
+lebop pull $ARGUMENTS
+```
 
-If `lebop` isn't on PATH, stop and report — don't fall back to other tools without asking.
+Prefer ids, ranges (`TEAM-1..TEAM-5`), or `--project` / `--project-id`.  
+Overwrite dirty cache only with `--refresh --yes`.  
+Export without cache: `--to DIR`.
+
+Print the cache path from output. Edit `description.md` / `metadata.yaml` (not `_server:`). Then `/lebop-push` or `publish review --cache` → `publish apply`.

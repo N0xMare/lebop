@@ -89,6 +89,31 @@ const ATTACH_URL_MUTATION = /* GraphQL */ `
   }
 `;
 
+const FILE_UPLOAD_REQUEST = /* GraphQL */ `
+  mutation LebopFileUpload($filename: String!, $contentType: String!, $size: Int!) {
+    fileUpload(filename: $filename, contentType: $contentType, size: $size) {
+      success
+      uploadFile {
+        uploadUrl
+        assetUrl
+        headers {
+          key
+          value
+        }
+      }
+    }
+  }
+`;
+
+const ATTACH_ASSET = /* GraphQL */ `
+  mutation LebopAttachAsset($issueId: String!, $url: String!, $title: String!) {
+    attachmentLinkURL(issueId: $issueId, url: $url, title: $title) {
+      success
+      attachment { id title url }
+    }
+  }
+`;
+
 function shape(a: AttachmentNode): ListedAttachment {
   return {
     id: a.id,
@@ -297,4 +322,120 @@ export async function deleteAttachment(id: string): Promise<boolean> {
   };
   requireMutationSuccess("attachmentDelete", response.data.attachmentDelete);
   return true;
+}
+
+export interface FileAttachmentResult {
+  issue: string;
+  attachment: LinkedUrlAttachment;
+  asset_url: string;
+  status: "uploaded";
+}
+
+/**
+ * Upload a local file via Linear fileUpload + attach asset URL to the issue.
+ * Requires Linear `fileUpload` mutation support for the token.
+ */
+export async function createFileAttachment(input: {
+  identifier: string;
+  filePath: string;
+  title?: string;
+  contentType?: string;
+}): Promise<FileAttachmentResult> {
+  const { readFile, stat } = await import("node:fs/promises");
+  const { basename } = await import("node:path");
+  const upperId = input.identifier.toUpperCase();
+  const fetched = await withClient((c) => c.issue(upperId));
+  if (!fetched) {
+    throw new NotFoundError(
+      `issue not found: ${upperId}`,
+      `verify ${upperId} exists and is visible to your token`,
+    );
+  }
+  const st = await stat(input.filePath);
+  if (!st.isFile()) {
+    throw new ValidationError(`not a file: ${input.filePath}`, "pass a path to a regular file");
+  }
+  const filename = basename(input.filePath);
+  const contentType = input.contentType ?? guessContentType(filename);
+  const body = await readFile(input.filePath);
+
+  const uploadResponse = (await withClient((c) =>
+    c.client.rawRequest(FILE_UPLOAD_REQUEST, {
+      filename,
+      contentType,
+      size: body.byteLength,
+    }),
+  )) as {
+    data: {
+      fileUpload: {
+        success: boolean;
+        uploadFile: {
+          uploadUrl: string;
+          assetUrl: string;
+          headers: { key: string; value: string }[];
+        } | null;
+      };
+    };
+  };
+  const uploadFile = requireMutationEntity(
+    "fileUpload",
+    uploadResponse.data.fileUpload as unknown as { success?: boolean } & Record<string, unknown>,
+    "uploadFile",
+  ) as {
+    uploadUrl: string;
+    assetUrl: string;
+    headers: { key: string; value: string }[];
+  };
+
+  const headers: Record<string, string> = { "Content-Type": contentType };
+  for (const h of uploadFile.headers ?? []) {
+    headers[h.key] = h.value;
+  }
+  const put = await fetch(uploadFile.uploadUrl, {
+    method: "PUT",
+    headers,
+    body,
+  });
+  if (!put.ok) {
+    throw new ValidationError(
+      `file upload PUT failed: HTTP ${put.status}`,
+      "retry or check Linear upload URL / content type",
+    );
+  }
+
+  const title = input.title ?? filename;
+  const client = await linear();
+  const attach = (await client.client.rawRequest(ATTACH_ASSET, {
+    issueId: fetched.id,
+    url: uploadFile.assetUrl,
+    title,
+  })) as {
+    data: {
+      attachmentLinkURL: { success: boolean; attachment: LinkedUrlAttachment };
+    };
+  };
+  const attachment = requireMutationEntity<LinkedUrlAttachment>(
+    "attachmentLinkURL",
+    attach.data.attachmentLinkURL,
+    "attachment",
+  );
+  return {
+    issue: upperId,
+    attachment,
+    asset_url: uploadFile.assetUrl,
+    status: "uploaded",
+  };
+}
+
+function guessContentType(filename: string): string {
+  const lower = filename.toLowerCase();
+  if (lower.endsWith(".png")) return "image/png";
+  if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return "image/jpeg";
+  if (lower.endsWith(".gif")) return "image/gif";
+  if (lower.endsWith(".webp")) return "image/webp";
+  if (lower.endsWith(".pdf")) return "application/pdf";
+  if (lower.endsWith(".md")) return "text/markdown";
+  if (lower.endsWith(".txt")) return "text/plain";
+  if (lower.endsWith(".json")) return "application/json";
+  return "application/octet-stream";
 }

@@ -1,10 +1,11 @@
 /**
  * Tests for `gcCache` — the cache garbage-collection lib.
  *
- * `CACHE_ROOT` is computed at module-load time from `LEBOP_HOME`, so each
- * test sets a fresh `LEBOP_HOME` BEFORE importing `cache.ts` via
- * `vi.resetModules()` + dynamic import. This guarantees we never touch the
- * real `~/.lebop/cache/` on the developer's machine.
+ * Cache paths resolve live via `getCacheRoot()` from `LEBOP_HOME`, so each
+ * test sets a fresh `LEBOP_HOME` before exercising cache ops. Dynamic
+ * `vi.resetModules()` + import is still used when LEBOP_HOME changes mid-suite
+ * (e.g. symlink safety cases). This guarantees we never touch the real
+ * `~/.lebop/cache/` on the developer's machine.
  */
 
 import {
@@ -121,11 +122,11 @@ describe("gcCache — dry run", () => {
 
 describe("listCachedIssues", () => {
   it("ignores non-canonical issue cache directories", async () => {
-    mkdirSync(join(cacheRoot, "_global", "issues", "NOX-1"), { recursive: true });
+    mkdirSync(join(cacheRoot, "_global", "issues", "TEAM-1"), { recursive: true });
     mkdirSync(join(cacheRoot, "_global", "issues", "not-an-issue"), { recursive: true });
-    mkdirSync(join(cacheRoot, "_global", "issues", "NOX-one"), { recursive: true });
+    mkdirSync(join(cacheRoot, "_global", "issues", "TEAM-one"), { recursive: true });
 
-    await expect(cache.listCachedIssues("_global")).resolves.toEqual(["NOX-1"]);
+    await expect(cache.listCachedIssues("_global")).resolves.toEqual(["TEAM-1"]);
   });
 });
 

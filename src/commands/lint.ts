@@ -1,7 +1,8 @@
 import chalk from "chalk";
 import type { Command } from "commander";
-import { envelope } from "../lib/envelope.ts";
+import { wantsMachineOutput } from "../lib/encode.ts";
 import type { LintFileResult } from "../lib/lintFiles.ts";
+import { writeMachineEnvelope } from "../lib/output.ts";
 import {
   buildLintFilesInputFromCli,
   executeLintFiles,
@@ -13,6 +14,8 @@ interface LintOpts {
   fix?: boolean;
   strict?: boolean;
   json?: boolean;
+  format?: string;
+  pretty?: boolean;
 }
 
 export function registerLint(program: Command): void {
@@ -22,7 +25,10 @@ export function registerLint(program: Command): void {
     .option("--team <key>", "override the resolved team")
     .option("--fix", "auto-apply safe rewrites")
     .option("--strict", "exit non-zero on any warning")
-    .option("--json", "emit structured JSON output")
+    .option("--json", "machine output (default; TOON)")
+    .option("--format <fmt>", "toon | json | pretty")
+    .option("--pretty", "pretty-printed JSON")
+    .option("--human", "maintainer/dev chalk tables (opt-in; not agent path; bodies uncapped)")
     .action(async (paths: string[], opts: LintOpts) => {
       const result = await executeLintFiles(
         buildLintFilesInputFromCli({
@@ -41,8 +47,12 @@ export function registerLint(program: Command): void {
       for (const file of result.missing_paths)
         process.stderr.write(`${chalk.red("missing:")} ${file}\n`);
 
-      if (opts.json) {
-        process.stdout.write(`${JSON.stringify(envelope(lintFilesCliPayload(result)), null, 2)}\n`);
+      if (wantsMachineOutput(opts)) {
+        writeMachineEnvelope(lintFilesCliPayload(result) as Record<string, unknown>, {
+          json: true,
+          format: opts.format,
+          pretty: opts.pretty,
+        });
       } else {
         printHuman(result.files, Boolean(opts.fix));
       }

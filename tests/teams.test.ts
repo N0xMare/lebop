@@ -31,9 +31,9 @@ describe("getTeam", () => {
         teams: {
           nodes: [
             {
-              id: "team-uuid-nox",
-              key: "NOX",
-              name: "Noxor",
+              id: "team-uuid-team",
+              key: "TEAM",
+              name: "Example",
               description: "the team",
               defaultIssueState: { id: "state-bl", name: "Backlog" },
             },
@@ -41,27 +41,27 @@ describe("getTeam", () => {
         },
       },
     });
-    const team = await getTeam("NOX");
-    expect(team?.id).toBe("team-uuid-nox");
+    const team = await getTeam("TEAM");
+    expect(team?.id).toBe("team-uuid-team");
     expect(team?.default_state_id).toBe("state-bl");
     expect(team?.default_state_name).toBe("Backlog");
-    expect((calls[0]?.variables as { key: string }).key).toBe("NOX");
+    expect((calls[0]?.variables as { key: string }).key).toBe("TEAM");
   });
 
   it("resolves by UUID via team(id: $id)", async () => {
     mockRawResponses.push({
       data: {
         team: {
-          id: "team-uuid-nox",
-          key: "NOX",
-          name: "Noxor",
+          id: "team-uuid-team",
+          key: "TEAM",
+          name: "Example",
           description: null,
           defaultIssueState: null,
         },
       },
     });
     const team = await getTeam("11111111-2222-3333-4444-555555555555");
-    expect(team?.key).toBe("NOX");
+    expect(team?.key).toBe("TEAM");
     expect(team?.default_state_id).toBeNull();
   });
 

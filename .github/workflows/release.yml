@@ -243,7 +243,7 @@ jobs:
           export LEBOP_LIVE_STAMP="compiled-${{ github.run_id }}-${{ github.run_attempt }}"
           export LEBOP_LIVE_WORKSPACE=lebop-playground
           export LEBOP_LIVE_TEAM=LEB
-          bun scripts/live-nox-surface-smoke.mjs
+          bun scripts/live-surface-smoke.mjs
 
       - name: validate compiled full live harness report
         env:
@@ -256,15 +256,75 @@ jobs:
           set -euo pipefail
           lebop_live_expect_bin_sha256="$(shasum -a 256 compiled-live/lebop-linux-x64 | awk '{print $1}')"
           export LEBOP_LIVE_EXPECT_BIN_SHA256="$lebop_live_expect_bin_sha256"
-          report="docs/local/live-nox-surface-report-${LEBOP_LIVE_STAMP}.json"
-          bun scripts/live-nox-surface-smoke.mjs --validate-report "$report"
+          report="docs/local/live-surface-report-${LEBOP_LIVE_STAMP}.json"
+          bun scripts/live-surface-smoke.mjs --validate-report "$report"
 
       - name: upload compiled live harness report
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: release-compiled-live-sandbox-report
-          path: docs/local/live-nox-surface-report-*.json
+          path: docs/local/live-surface-report-*.json
+          if-no-files-found: error
+
+      - name: cleanup
+        if: always()
+        run: rm -rf "$LEBOP_HOME"
+
+  # Secondary discovery smoke (search/history/views/CF/related) — not version-tied.
+  compiled-linux-discovery-smoke:
+    name: compiled Linux x64 discovery live smoke
+    runs-on: ubuntu-latest
+    needs: build
+    timeout-minutes: 30
+    concurrency:
+      group: sandbox-live-write
+      cancel-in-progress: false
+    env:
+      LEBOP_HOME: /tmp/lebop-release-discovery-sandbox
+      LEBOP_SANDBOX_TOKEN: ${{ secrets.LEBOP_SANDBOX_TOKEN }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with:
+          bun-version: 1.3.13
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: lebop-linux-x64
+          path: compiled-live
+
+      - name: gate on token presence
+        run: |
+          if [ -z "$LEBOP_SANDBOX_TOKEN" ]; then
+            echo "::error::LEBOP_SANDBOX_TOKEN secret is required for discovery live smoke."
+            exit 1
+          fi
+
+      - name: compiled discovery live harness
+        run: |
+          set -euo pipefail
+          chmod +x compiled-live/lebop-linux-x64
+          export LEBOP_LIVE_BIN="$PWD/compiled-live/lebop-linux-x64"
+          export LEBOP_LIVE_WORKSPACE=lebop-playground
+          export LEBOP_LIVE_TEAM=LEB
+          bun scripts/live-discovery-smoke.mjs
+
+      - name: validate discovery live report
+        env:
+          LEBOP_LIVE_EXPECT_WORKSPACE: lebop-playground
+          LEBOP_LIVE_EXPECT_TEAM: LEB
+        run: |
+          report="$(ls -1t docs/local/live-discovery-report-*.json | head -n1)"
+          bun scripts/live-discovery-smoke.mjs --validate-report "$report"
+
+      - name: upload discovery live report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: release-compiled-discovery-live-report
+          path: docs/local/live-discovery-report-*.json
           if-no-files-found: error
 
       - name: cleanup
@@ -274,7 +334,7 @@ jobs:
   release:
     name: publish release
     runs-on: ubuntu-latest
-    needs: [build, compiled-linux-live-smoke]
+    needs: [build, compiled-linux-live-smoke, compiled-linux-discovery-smoke]
     timeout-minutes: 10
     permissions:
       contents: write

@@ -98,7 +98,7 @@ vi.mock("../src/lib/resolve.ts", async () => {
       if (/^[0-9a-f-]{36}$/i.test(nameOrId)) return nameOrId;
       if (nameOrId === "Ambiguous Project") {
         throw new MockResolveError(
-          'ambiguous project name "Ambiguous Project" matches: Ambiguous Project (NOX), Ambiguous Project (ENG)',
+          'ambiguous project name "Ambiguous Project" matches: Ambiguous Project (TEAM), Ambiguous Project (ENG)',
           "pass an explicit team scope or the project UUID",
         );
       }
@@ -168,8 +168,8 @@ describe("createIssue", () => {
           success: true,
           issue: {
             id: "issue-uuid",
-            identifier: "NOX-1",
-            url: "https://linear.app/x/nox-1",
+            identifier: "TEAM-1",
+            url: "https://linear.app/x/team-1",
             title: "T",
             state: { name: "Backlog" },
             project: null,
@@ -179,7 +179,7 @@ describe("createIssue", () => {
     });
 
     const issue = await createIssue({
-      team: "NOX",
+      team: "TEAM",
       title: "T",
       description: "d",
       state: "Backlog",
@@ -188,7 +188,7 @@ describe("createIssue", () => {
       assignee: "@me",
     });
 
-    expect(issue.identifier).toBe("NOX-1");
+    expect(issue.identifier).toBe("TEAM-1");
     expect(calls[0]?.query).toContain("issueCreate");
     expect(calls[0]?.variables).toMatchObject({
       input: {
@@ -211,7 +211,7 @@ describe("createIssue", () => {
           success: true,
           issue: {
             id: "i",
-            identifier: "NOX-2",
+            identifier: "TEAM-2",
             url: "u",
             title: "T",
             state: { name: "B" },
@@ -221,7 +221,7 @@ describe("createIssue", () => {
       },
     });
 
-    await createIssue({ team: "NOX", title: "T" });
+    await createIssue({ team: "TEAM", title: "T" });
     const input = (calls[0]?.variables as { input: Record<string, unknown> }).input;
     expect(input).toEqual({ teamId: "team-uuid", title: "T" });
   });
@@ -247,7 +247,7 @@ describe("createIssue", () => {
 
     try {
       const err = await createIssue({
-        team: "NOX",
+        team: "TEAM",
         title: "T",
         project: "Duplicate Project",
       }).catch((e) => e);
@@ -267,7 +267,7 @@ describe("updateIssue", () => {
   it("requires at least one field — throws ValidationError with code=validation_error", async () => {
     reset();
     // Wave 2 / A2: assert the structured taxonomy, not just the message string.
-    const err = await updateIssue({ identifier: "NOX-1" }).catch((e) => e);
+    const err = await updateIssue({ identifier: "TEAM-1" }).catch((e) => e);
     expect(err).toBeInstanceOf(ValidationError);
     expect(err.code).toBe("validation_error");
     expect(err.message).toMatch(/nothing to update/);
@@ -280,10 +280,10 @@ describe("updateIssue", () => {
     // NotFoundError with code=not_found, not a raw Error.
     reset();
     issueLookupOverride = () => null;
-    const err = await updateIssue({ identifier: "NOX-DOES-NOT-EXIST", title: "x" }).catch((e) => e);
+    const err = await updateIssue({ identifier: "TEAM-DOES-NOT-EXIST", title: "x" }).catch((e) => e);
     expect(err).toBeInstanceOf(NotFoundError);
     expect(err.code).toBe("not_found");
-    expect(err.message).toMatch(/issue not found: NOX-DOES-NOT-EXIST/);
+    expect(err.message).toMatch(/issue not found: TEAM-DOES-NOT-EXIST/);
     expect(err.hint).toMatch(/verify the identifier/);
   });
 
@@ -294,8 +294,8 @@ describe("updateIssue", () => {
         issueUpdate: {
           success: true,
           issue: {
-            id: "uuid-of-NOX-1",
-            identifier: "NOX-1",
+            id: "uuid-of-TEAM-1",
+            identifier: "TEAM-1",
             url: "u",
             title: "new title",
             state: { name: "B" },
@@ -303,12 +303,12 @@ describe("updateIssue", () => {
         },
       },
     });
-    await updateIssue({ identifier: "NOX-1", title: "new title" });
-    expect(issueLookups[0]).toBe("NOX-1");
+    await updateIssue({ identifier: "TEAM-1", title: "new title" });
+    expect(issueLookups[0]).toBe("TEAM-1");
     // calls[0] is now the wave-3 identifier-lookup (ResolveIssueId); the
     // mutation is the last call. We assert against the last one.
     expect(calls.at(-1)?.variables).toMatchObject({
-      id: "uuid-of-NOX-1",
+      id: "uuid-of-TEAM-1",
       input: { title: "new title" },
     });
   });
@@ -319,11 +319,11 @@ describe("updateIssue", () => {
       data: {
         issueUpdate: {
           success: true,
-          issue: { id: "u", identifier: "NOX-1", url: "u", title: "T", state: { name: "B" } },
+          issue: { id: "u", identifier: "TEAM-1", url: "u", title: "T", state: { name: "B" } },
         },
       },
     });
-    await updateIssue({ identifier: "NOX-1", team: "NOX", parent: null });
+    await updateIssue({ identifier: "TEAM-1", team: "TEAM", parent: null });
     const input = (calls.at(-1)?.variables as { input: Record<string, unknown> }).input;
     expect(input.parentId).toBeNull();
   });
@@ -345,13 +345,13 @@ describe("updateIssue — round-6 / C3 team auto-derivation from identifier", ()
       data: {
         issueUpdate: {
           success: true,
-          issue: { id: "u", identifier: "NOX-1", url: "u", title: "T", state: { name: "Done" } },
+          issue: { id: "u", identifier: "TEAM-1", url: "u", title: "T", state: { name: "Done" } },
         },
       },
     });
-    // No `team` arg — derivation should pick "NOX" from "NOX-1" and let the
+    // No `team` arg — derivation should pick "TEAM" from "TEAM-1" and let the
     // state name resolve via the mocked team metadata.
-    await updateIssue({ identifier: "NOX-1", state: "Done" });
+    await updateIssue({ identifier: "TEAM-1", state: "Done" });
     const input = (calls.at(-1)?.variables as { input: Record<string, unknown> }).input;
     expect(input.stateId).toBe("state-uuid");
   });
@@ -362,11 +362,11 @@ describe("updateIssue — round-6 / C3 team auto-derivation from identifier", ()
       data: {
         issueUpdate: {
           success: true,
-          issue: { id: "u", identifier: "NOX-1", url: "u", title: "T", state: { name: "B" } },
+          issue: { id: "u", identifier: "TEAM-1", url: "u", title: "T", state: { name: "B" } },
         },
       },
     });
-    await updateIssue({ identifier: "NOX-1", labels: ["bug"] });
+    await updateIssue({ identifier: "TEAM-1", labels: ["bug"] });
     const input = (calls.at(-1)?.variables as { input: Record<string, unknown> }).input;
     expect(input.labelIds).toEqual(["label-uuid"]);
   });
@@ -377,7 +377,7 @@ describe("updateIssue — round-6 / C3 team auto-derivation from identifier", ()
       data: {
         issueUpdate: {
           success: true,
-          issue: { id: "u", identifier: "NOX-1", url: "u", title: "T", state: { name: "B" } },
+          issue: { id: "u", identifier: "TEAM-1", url: "u", title: "T", state: { name: "B" } },
         },
       },
     });
@@ -385,7 +385,7 @@ describe("updateIssue — round-6 / C3 team auto-derivation from identifier", ()
     // (resolves email/name against team members). Round-7 / HIGH-1 carved
     // out `@me`/`me` to the workspace-wide viewer query — see the next
     // test for that path.
-    await updateIssue({ identifier: "NOX-1", assignee: "alice@example.com" });
+    await updateIssue({ identifier: "TEAM-1", assignee: "alice@example.com" });
     const input = (calls.at(-1)?.variables as { input: Record<string, unknown> }).input;
     expect(input.assigneeId).toBe("assignee-uuid");
   });
@@ -396,7 +396,7 @@ describe("updateIssue — round-6 / C3 team auto-derivation from identifier", ()
       data: {
         issueUpdate: {
           success: true,
-          issue: { id: "u", identifier: "NOX-1", url: "u", title: "T", state: { name: "B" } },
+          issue: { id: "u", identifier: "TEAM-1", url: "u", title: "T", state: { name: "B" } },
         },
       },
     });
@@ -415,11 +415,11 @@ describe("updateIssue — round-6 / C3 team auto-derivation from identifier", ()
       data: {
         issueUpdate: {
           success: true,
-          issue: { id: "u", identifier: "NOX-1", url: "u", title: "T", state: { name: "B" } },
+          issue: { id: "u", identifier: "TEAM-1", url: "u", title: "T", state: { name: "B" } },
         },
       },
     });
-    await updateIssue({ identifier: "NOX-1", assignee: "me" });
+    await updateIssue({ identifier: "TEAM-1", assignee: "me" });
     const input = (calls.at(-1)?.variables as { input: Record<string, unknown> }).input;
     expect(input.assigneeId).toBe("viewer-uuid");
   });
@@ -438,11 +438,11 @@ describe("updateIssue — round-6 / C3 team auto-derivation from identifier", ()
       data: {
         issueUpdate: {
           success: true,
-          issue: { id: "u", identifier: "NOX-1", url: "u", title: "T", state: { name: "Done" } },
+          issue: { id: "u", identifier: "TEAM-1", url: "u", title: "T", state: { name: "Done" } },
         },
       },
     });
-    await updateIssue({ identifier: "NOX-1", assignee: "@me", state: "Done" });
+    await updateIssue({ identifier: "TEAM-1", assignee: "@me", state: "Done" });
     const input = (calls.at(-1)?.variables as { input: Record<string, unknown> }).input;
     // viewerAssigneeId (from the hoist) wins; not the closure's
     // resolveAssigneeId stub which would also return "viewer-uuid".
@@ -456,14 +456,14 @@ describe("updateIssue — round-6 / C3 team auto-derivation from identifier", ()
       data: {
         issueUpdate: {
           success: true,
-          issue: { id: "u", identifier: "NOX-1", url: "u", title: "T", state: { name: "B" } },
+          issue: { id: "u", identifier: "TEAM-1", url: "u", title: "T", state: { name: "B" } },
         },
       },
     });
-    // Identifier prefix is "NOX" but caller explicitly passes "OPS" — the
+    // Identifier prefix is "TEAM" but caller explicitly passes "OPS" — the
     // explicit arg wins. The lib doesn't sanity-check the relationship
     // (Linear's resolver does that via the underlying issue UUID lookup).
-    await updateIssue({ identifier: "NOX-1", team: "OPS", state: "Done" });
+    await updateIssue({ identifier: "TEAM-1", team: "OPS", state: "Done" });
     const input = (calls.at(-1)?.variables as { input: Record<string, unknown> }).input;
     expect(input.stateId).toBe("state-uuid");
   });
@@ -474,12 +474,12 @@ describe("updateIssue — round-6 / C3 team auto-derivation from identifier", ()
       data: {
         issueUpdate: {
           success: true,
-          issue: { id: "u", identifier: "NOX-1", url: "u", title: "T", state: { name: "B" } },
+          issue: { id: "u", identifier: "TEAM-1", url: "u", title: "T", state: { name: "B" } },
         },
       },
     });
     await updateIssue({
-      identifier: "NOX-1",
+      identifier: "TEAM-1",
       priority: 2,
       description: "updated",
       estimate: 3,
@@ -504,13 +504,13 @@ describe("updateIssue — round-6 / C3 team auto-derivation from identifier", ()
       data: {
         issueUpdate: {
           success: true,
-          issue: { id: "u", identifier: "NOX-1", url: "u", title: "T", state: { name: "B" } },
+          issue: { id: "u", identifier: "TEAM-1", url: "u", title: "T", state: { name: "B" } },
         },
       },
     });
-    await updateIssue({ identifier: "NOX-1", parent: "NOX-2" });
+    await updateIssue({ identifier: "TEAM-1", parent: "TEAM-2" });
     const input = (calls.at(-1)?.variables as { input: Record<string, unknown> }).input;
-    expect(input.parentId).toBe("uuid-of-NOX-2");
+    expect(input.parentId).toBe("uuid-of-TEAM-2");
   });
 
   it("fails before mutation when a non-null parent identifier cannot be resolved", async () => {
@@ -518,15 +518,15 @@ describe("updateIssue — round-6 / C3 team auto-derivation from identifier", ()
     rawRequestOverride = async (query, variables) => {
       if (query.includes("ResolveIssueId")) {
         const id = (variables as { id: string }).id;
-        return { data: { issue: id === "NOX-404" ? null : stubIssue(id) } };
+        return { data: { issue: id === "TEAM-404" ? null : stubIssue(id) } };
       }
       throw new Error("unexpected mutation");
     };
 
-    const err = await updateIssue({ identifier: "NOX-1", parent: "NOX-404" }).catch((e) => e);
+    const err = await updateIssue({ identifier: "TEAM-1", parent: "TEAM-404" }).catch((e) => e);
 
     expect(err).toBeInstanceOf(NotFoundError);
-    expect(err.message).toBe("parent issue not found: NOX-404");
+    expect(err.message).toBe("parent issue not found: TEAM-404");
     expect(
       calls.map((call) => call.query).filter((query) => query.includes("issueUpdate")),
     ).toEqual([]);
@@ -538,11 +538,11 @@ describe("updateIssue — round-6 / C3 team auto-derivation from identifier", ()
       data: {
         issueUpdate: {
           success: true,
-          issue: { id: "u", identifier: "NOX-1", url: "u", title: "T", state: { name: "B" } },
+          issue: { id: "u", identifier: "TEAM-1", url: "u", title: "T", state: { name: "B" } },
         },
       },
     });
-    await updateIssue({ identifier: "NOX-1", assignee: null });
+    await updateIssue({ identifier: "TEAM-1", assignee: null });
     const input = (calls.at(-1)?.variables as { input: Record<string, unknown> }).input;
     expect(input.assigneeId).toBeNull();
   });
@@ -594,8 +594,8 @@ describe("updateIssue with project/milestone/cycle (wave-3 single-call path)", (
         issueUpdate: {
           success: true,
           issue: {
-            id: "uuid-of-NOX-1",
-            identifier: "NOX-1",
+            id: "uuid-of-TEAM-1",
+            identifier: "TEAM-1",
             url: "u",
             title: "T",
             state: { name: "Done" },
@@ -610,8 +610,8 @@ describe("updateIssue with project/milestone/cycle (wave-3 single-call path)", (
     const milestoneUuid = "11111111-2222-3333-4444-555555555555";
     const cycleUuid = "ffffffff-eeee-dddd-cccc-bbbbbbbbbbbb";
     await updateIssue({
-      identifier: "NOX-1",
-      team: "NOX",
+      identifier: "TEAM-1",
+      team: "TEAM",
       project: projectUuid,
       milestone: milestoneUuid,
       cycle: cycleUuid,
@@ -638,8 +638,8 @@ describe("updateIssue with project/milestone/cycle (wave-3 single-call path)", (
         issueUpdate: {
           success: true,
           issue: {
-            id: "uuid-of-NOX-1",
-            identifier: "NOX-1",
+            id: "uuid-of-TEAM-1",
+            identifier: "TEAM-1",
             url: "u",
             title: "T",
             state: { name: "Done" },
@@ -648,8 +648,8 @@ describe("updateIssue with project/milestone/cycle (wave-3 single-call path)", (
       },
     });
     await updateIssue({
-      identifier: "NOX-1",
-      team: "NOX",
+      identifier: "TEAM-1",
+      team: "TEAM",
       project: null,
       milestone: null,
       cycle: null,
@@ -689,8 +689,8 @@ describe("updateIssue with project/milestone/cycle (wave-3 single-call path)", (
           issueUpdate: {
             success: true,
             issue: {
-              id: "uuid-of-NOX-1",
-              identifier: "NOX-1",
+              id: "uuid-of-TEAM-1",
+              identifier: "TEAM-1",
               url: "u",
               title: "T",
               state: { name: "Done" },
@@ -699,8 +699,8 @@ describe("updateIssue with project/milestone/cycle (wave-3 single-call path)", (
         },
       });
       await updateIssue({
-        identifier: "NOX-1",
-        team: "NOX",
+        identifier: "TEAM-1",
+        team: "TEAM",
         project: "Some Project",
       });
       const input = (calls.at(-1)?.variables as { input: Record<string, unknown> }).input;
@@ -733,8 +733,8 @@ describe("updateIssue with project/milestone/cycle (wave-3 single-call path)", (
 
     try {
       const err = await updateIssue({
-        identifier: "NOX-1",
-        team: "NOX",
+        identifier: "TEAM-1",
+        team: "TEAM",
         project: "Duplicate Project",
       }).catch((e) => e);
 
@@ -753,7 +753,7 @@ describe("updateIssue with project/milestone/cycle (wave-3 single-call path)", (
     reset();
 
     const err = await updateIssue({
-      identifier: "NOX-1",
+      identifier: "TEAM-1",
       project: "Ambiguous Project",
     }).catch((e) => e);
 
@@ -771,15 +771,15 @@ describe("updateIssue with project/milestone/cycle (wave-3 single-call path)", (
     reset();
 
     const err = await updateIssue({
-      identifier: "NOX-1",
-      team: "NOX",
+      identifier: "TEAM-1",
+      team: "TEAM",
       project: "Missing In Team",
     }).catch((e) => e);
 
     expect(err).toMatchObject({ code: "validation_error" });
-    expect(err.message).toBe("project not found: Missing In Team (team NOX)");
+    expect(err.message).toBe("project not found: Missing In Team (team TEAM)");
     expect(projectResolveCalls).toEqual([
-      { nameOrId: "Missing In Team", opts: { teamKey: "NOX" } },
+      { nameOrId: "Missing In Team", opts: { teamKey: "TEAM" } },
     ]);
     expect(
       calls.map((call) => call.query).filter((query) => query.includes("issueUpdate")),
@@ -798,8 +798,8 @@ describe("updateIssue with project/milestone/cycle (wave-3 single-call path)", (
         issueUpdate: {
           success: true,
           issue: {
-            id: "uuid-of-NOX-1",
-            identifier: "NOX-1",
+            id: "uuid-of-TEAM-1",
+            identifier: "TEAM-1",
             url: "u",
             title: "T",
             state: { name: "Done" },
@@ -809,7 +809,7 @@ describe("updateIssue with project/milestone/cycle (wave-3 single-call path)", (
     });
 
     await updateIssue({
-      identifier: "NOX-1",
+      identifier: "TEAM-1",
       milestone: "Beta",
     });
 
@@ -824,7 +824,7 @@ describe("updateIssue with project/milestone/cycle (wave-3 single-call path)", (
     reset();
 
     const err = await updateIssue({
-      identifier: "NOX-1",
+      identifier: "TEAM-1",
       milestone: "Beta",
     }).catch((e) => e);
 
@@ -843,9 +843,9 @@ describe("updateIssue with project/milestone/cycle (wave-3 single-call path)", (
         issueUpdate: {
           success: true,
           issue: {
-            id: "uuid-of-NOX-1",
-            identifier: "NOX-1",
-            url: "https://linear.app/test/issue/NOX-1",
+            id: "uuid-of-TEAM-1",
+            identifier: "TEAM-1",
+            url: "https://linear.app/test/issue/TEAM-1",
             updatedAt: "2026-06-07T12:00:00.000Z",
             title: "New title",
             description: "New body",
@@ -854,21 +854,21 @@ describe("updateIssue with project/milestone/cycle (wave-3 single-call path)", (
             estimate: 5,
             labels: { nodes: [{ id: "label-1", name: "bug" }] },
             assignee: { id: "user-1", name: "Alice", email: "alice@example.com" },
-            parent: { id: "parent-1", identifier: "NOX-0" },
+            parent: { id: "parent-1", identifier: "TEAM-0" },
             project: { id: "project-1", name: "Project" },
             projectMilestone: { id: "milestone-1", name: "Beta" },
             cycle: { id: "cycle-1", name: "Cycle 1" },
-            team: { id: "team-1", key: "NOX" },
+            team: { id: "team-1", key: "TEAM" },
           },
         },
       },
     });
 
-    const issue = await updateIssue({ identifier: "NOX-1", title: "New title" });
+    const issue = await updateIssue({ identifier: "TEAM-1", title: "New title" });
     const proof = issueWriteProof(issue);
 
     expect(proof).toMatchObject({
-      identifier: "NOX-1",
+      identifier: "TEAM-1",
       updated_at: "2026-06-07T12:00:00.000Z",
       title: "New title",
       description: "New body",
@@ -877,7 +877,7 @@ describe("updateIssue with project/milestone/cycle (wave-3 single-call path)", (
       estimate: 5,
       labels: [{ id: "label-1", name: "bug" }],
       assignee: { id: "user-1", name: "Alice", email: "alice@example.com" },
-      parent: { id: "parent-1", identifier: "NOX-0" },
+      parent: { id: "parent-1", identifier: "TEAM-0" },
       project: { id: "project-1", name: "Project" },
       milestone: { id: "milestone-1", name: "Beta" },
       cycle: { id: "cycle-1", name: "Cycle 1" },
@@ -895,8 +895,8 @@ describe("updateIssue with project/milestone/cycle (wave-3 single-call path)", (
         issueUpdate: {
           success: true,
           issue: {
-            id: "uuid-of-NOX-1",
-            identifier: "NOX-1",
+            id: "uuid-of-TEAM-1",
+            identifier: "TEAM-1",
             url: "u",
             title: "T",
             state: { name: "Done" },
@@ -906,7 +906,7 @@ describe("updateIssue with project/milestone/cycle (wave-3 single-call path)", (
     });
 
     await updateIssue({
-      identifier: "NOX-1",
+      identifier: "TEAM-1",
       cycle: "Cycle 12",
     });
 
@@ -953,26 +953,26 @@ describe("archiveIssues + unarchiveIssues", () => {
     reset();
     mockResponses.push({ data: { issueArchive: { success: true } } });
     mockResponses.push({ data: { issueArchive: { success: true } } });
-    const results = await archiveIssues(["NOX-1", "NOX-2"]);
+    const results = await archiveIssues(["TEAM-1", "TEAM-2"]);
     expect(results).toEqual([
-      { identifier: "NOX-1", status: "ok" },
-      { identifier: "NOX-2", status: "ok" },
+      { identifier: "TEAM-1", status: "ok" },
+      { identifier: "TEAM-2", status: "ok" },
     ]);
   });
 
   it("unarchive: same shape", async () => {
     reset();
     mockResponses.push({ data: { issueUnarchive: { success: true } } });
-    const results = await unarchiveIssues(["NOX-1"]);
-    expect(results).toEqual([{ identifier: "NOX-1", status: "ok" }]);
+    const results = await unarchiveIssues(["TEAM-1"]);
+    expect(results).toEqual([{ identifier: "TEAM-1", status: "ok" }]);
   });
 
   it("archive: reports success:false mutation payloads as errors", async () => {
     reset();
     mockResponses.push({ data: { issueArchive: { success: false } } });
-    const results = await archiveIssues(["NOX-1"]);
+    const results = await archiveIssues(["TEAM-1"]);
     expect(results[0]).toMatchObject({
-      identifier: "NOX-1",
+      identifier: "TEAM-1",
       status: "error",
       error: "issueArchive failed",
     });
@@ -981,9 +981,9 @@ describe("archiveIssues + unarchiveIssues", () => {
   it("unarchive: reports success:false mutation payloads as errors", async () => {
     reset();
     mockResponses.push({ data: { issueUnarchive: { success: false } } });
-    const results = await unarchiveIssues(["NOX-1"]);
+    const results = await unarchiveIssues(["TEAM-1"]);
     expect(results[0]).toMatchObject({
-      identifier: "NOX-1",
+      identifier: "TEAM-1",
       status: "error",
       error: "issueUnarchive failed",
     });
@@ -999,8 +999,8 @@ describe("archiveIssues + unarchiveIssues", () => {
     rawRequestOverride = async () => {
       throw new NotFoundError("Entity not found: Issue", "no issue with the given id");
     };
-    const results = await archiveIssues(["NOX-MISSING"]);
-    expect(results).toEqual([{ identifier: "NOX-MISSING", status: "not-found" }]);
+    const results = await archiveIssues(["TEAM-MISSING"]);
+    expect(results).toEqual([{ identifier: "TEAM-MISSING", status: "not-found" }]);
   });
 
   it("archive: lifecycleOne propagates a non-not-found error into status=error", async () => {
@@ -1010,7 +1010,7 @@ describe("archiveIssues + unarchiveIssues", () => {
     rawRequestOverride = async () => {
       throw new Error("ECONNRESET");
     };
-    const results = await archiveIssues(["NOX-1"]);
+    const results = await archiveIssues(["TEAM-1"]);
     expect(results[0]?.status).toBe("error");
     expect(results[0]?.error).toMatch(/ECONNRESET/);
   });
@@ -1019,8 +1019,8 @@ describe("archiveIssues + unarchiveIssues", () => {
     // A3 path #2: the `if (!issue) return { status: "not-found" }` branch.
     reset();
     issueLookupOverride = () => null;
-    const results = await archiveIssues(["NOX-GHOST"]);
-    expect(results).toEqual([{ identifier: "NOX-GHOST", status: "not-found" }]);
+    const results = await archiveIssues(["TEAM-GHOST"]);
+    expect(results).toEqual([{ identifier: "TEAM-GHOST", status: "not-found" }]);
   });
 
   it("archive: lifecycleOne resolves the identifier via raw ResolveIssueId (not the SDK c.issue path)", async () => {
@@ -1030,12 +1030,12 @@ describe("archiveIssues + unarchiveIssues", () => {
     // call shape: a ResolveIssueId raw request before the mutation.
     reset();
     mockResponses.push({ data: { issueArchive: { success: true } } });
-    const results = await archiveIssues(["NOX-42"]);
-    expect(results).toEqual([{ identifier: "NOX-42", status: "ok" }]);
+    const results = await archiveIssues(["TEAM-42"]);
+    expect(results).toEqual([{ identifier: "TEAM-42", status: "ok" }]);
     // Two raw calls: ResolveIssueId lookup + issueArchive mutation.
     expect(calls[0]?.query).toContain("ResolveIssueId");
-    expect(calls[0]?.variables).toEqual({ id: "NOX-42" });
+    expect(calls[0]?.variables).toEqual({ id: "TEAM-42" });
     expect(calls[1]?.query).toContain("issueArchive");
-    expect(calls[1]?.variables).toEqual({ id: "uuid-of-NOX-42" });
+    expect(calls[1]?.variables).toEqual({ id: "uuid-of-TEAM-42" });
   });
 });

@@ -57,14 +57,15 @@ describe("comment add --json envelope (wave-4 round-B item #7)", () => {
   it("emits `identifier` (not legacy `issue`) in the --json envelope", async () => {
     const program = new Command();
     registerComment(program);
-    await program.parseAsync(["comment", "add", "NOX-1", "--body", "hi there", "--json"], {
-      from: "user",
-    });
+    await program.parseAsync(
+      ["comment", "add", "TEAM-1", "--body", "hi there", "--json", "--format", "json"],
+      { from: "user" },
+    );
 
     const out = writes.join("");
     const parsed = JSON.parse(out);
-    expect(parsed.schema_version).toBe(1);
-    expect(parsed.identifier).toBe("NOX-1");
+    expect(parsed.schema_version).toBe(2);
+    expect(parsed.identifier).toBe("TEAM-1");
     // Legacy field is gone — agents shouldn't see it any more.
     expect(parsed).not.toHaveProperty("issue");
     expect(parsed.comment.id).toBe("comment-uuid-aa");
@@ -77,9 +78,10 @@ describe("comment add --json envelope (wave-4 round-B item #7)", () => {
     // mock to assert they actually land in the envelope.
     const program = new Command();
     registerComment(program);
-    await program.parseAsync(["comment", "add", "NOX-1", "--body", "hi there", "--json"], {
-      from: "user",
-    });
+    await program.parseAsync(
+      ["comment", "add", "TEAM-1", "--body", "hi there", "--json", "--format", "json"],
+      { from: "user" },
+    );
 
     const out = writes.join("");
     const parsed = JSON.parse(out);

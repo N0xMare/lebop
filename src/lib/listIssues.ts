@@ -52,6 +52,16 @@ export interface ListIssuesOpts {
   updatedSince?: string;
   /** Created after: same shape as `updatedSince`. */
   createdAfter?: string;
+  /**
+   * Due date on or before (YYYY-MM-DD / ISO / relative Nd|Nh|Nm from now,
+   * same parse rules as `updatedSince`).
+   */
+  dueBefore?: string;
+  /**
+   * Due date on or after (YYYY-MM-DD / ISO / relative Nd|Nh|Nm from now,
+   * same parse rules as `updatedSince`).
+   */
+  dueAfter?: string;
   /** Full-text search across title + body (uses `searchableContent`). */
   search?: string;
   /** Toggle: include archived issues in the result. */
@@ -66,6 +76,10 @@ export interface ListIssuesOpts {
   after?: string;
 }
 
+/**
+ * Full list row from Linear shaping. CLI/MCP project to slim defaults via
+ * projectListedIssue — the wire schema is slim; this type is internal.
+ */
 export interface ListedIssue {
   identifier: string;
   title: string;
@@ -76,6 +90,152 @@ export interface ListedIssue {
   labels: string[];
   updated_at: string;
   url: string;
+  due_date?: string | null;
+}
+
+/** Slim projected row for dense agent output. */
+export type SlimListedIssue = {
+  identifier: string;
+  title: string;
+  state: string | null;
+  state_type?: string | null;
+  priority?: number;
+  /** Dense string (name||email) by default; full object when fields=full. */
+  assignee?: string | { name: string; email: string } | null;
+  labels?: string[];
+  updated_at?: string;
+  url?: string;
+  due_date?: string | null;
+};
+
+export type ListedIssueField =
+  | "identifier"
+  | "title"
+  | "state"
+  | "state_type"
+  | "priority"
+  | "assignee"
+  | "labels"
+  | "updated_at"
+  | "url"
+  | "due_date";
+
+/** AXI default: 4 fields. */
+export const DEFAULT_LIST_FIELDS: readonly ListedIssueField[] = [
+  "identifier",
+  "title",
+  "state",
+  "assignee",
+] as const;
+
+export const FULL_LIST_FIELDS: readonly ListedIssueField[] = [
+  "identifier",
+  "title",
+  "state",
+  "state_type",
+  "priority",
+  "assignee",
+  "labels",
+  "updated_at",
+  "url",
+  "due_date",
+] as const;
+
+export function parseListFields(raw: string | undefined): ListedIssueField[] {
+  if (!raw || raw === "default") return [...DEFAULT_LIST_FIELDS];
+  if (raw === "full" || raw === "all") return [...FULL_LIST_FIELDS];
+  const parts = raw
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean) as ListedIssueField[];
+  return parts.length > 0 ? parts : [...DEFAULT_LIST_FIELDS];
+}
+
+function denseAssigneeString(
+  assignee: { name: string; email: string } | null | undefined,
+): string | null {
+  if (!assignee) return null;
+  const name = assignee.name?.trim();
+  if (name) return name;
+  const email = assignee.email?.trim();
+  return email || null;
+}
+
+export function projectListedIssue(
+  full: ListedIssue,
+  fields: readonly ListedIssueField[] = DEFAULT_LIST_FIELDS,
+): SlimListedIssue {
+  const out: SlimListedIssue = {
+    identifier: full.identifier,
+    title: full.title,
+    state: full.state,
+  };
+  // Full projection keeps structured assignee; default/slim uses a dense string.
+  const useStructuredAssignee =
+    fields.length >= FULL_LIST_FIELDS.length ||
+    (fields.includes("assignee") && fields.includes("labels") && fields.includes("url"));
+  for (const f of fields) {
+    if (f === "identifier" || f === "title" || f === "state") continue;
+    if (f === "state_type") out.state_type = full.state_type;
+    else if (f === "priority") out.priority = full.priority;
+    else if (f === "assignee") {
+      out.assignee = useStructuredAssignee
+        ? (full.assignee ?? null)
+        : denseAssigneeString(full.assignee);
+    } else if (f === "labels") out.labels = full.labels;
+    else if (f === "updated_at") out.updated_at = full.updated_at;
+    else if (f === "url") out.url = full.url;
+    else if (f === "due_date") out.due_date = full.due_date ?? null;
+  }
+  return out;
+}
+
+/** Normalize a full list row then project to slim/full/custom fields. */
+export function projectListedIssueRow(
+  row: {
+    identifier: string;
+    title: string;
+    state: string;
+    state_type?: string | null;
+    priority?: number;
+    assignee?: { name: string; email: string } | null;
+    labels?: string[];
+    updated_at?: string;
+    url?: string;
+    due_date?: string | null;
+  },
+  fields: readonly ListedIssueField[] = DEFAULT_LIST_FIELDS,
+): SlimListedIssue {
+  return projectListedIssue(
+    {
+      identifier: row.identifier,
+      title: row.title,
+      state: row.state,
+      state_type: row.state_type ?? null,
+      priority: row.priority ?? 0,
+      assignee: row.assignee ?? null,
+      labels: row.labels ?? [],
+      updated_at: row.updated_at ?? "",
+      url: row.url ?? "",
+      due_date: row.due_date ?? null,
+    },
+    fields,
+  );
+}
+
+/**
+ * Project a list/mine result for dense agent output.
+ * Returns slim issues + the field list used (for envelope transparency).
+ */
+export function projectListedIssuesResult<T extends { issues: readonly unknown[] }>(
+  result: T,
+  fieldsRaw?: string | null,
+): { issues: SlimListedIssue[]; fields: ListedIssueField[] } {
+  const fields = parseListFields(fieldsRaw ?? undefined);
+  const issues = (result.issues as Parameters<typeof projectListedIssueRow>[0][]).map((row) =>
+    projectListedIssueRow(row, fields),
+  );
+  return { issues, fields };
 }
 
 export interface ListedIssuesResult {
@@ -145,6 +305,12 @@ export async function buildIssueFilter(
   }
   if (opts.createdAfter) {
     filter.createdAt = { gte: parseRelative(opts.createdAfter) };
+  }
+  if (opts.dueBefore || opts.dueAfter) {
+    const dueDate: { lte?: Date; gte?: Date } = {};
+    if (opts.dueBefore) dueDate.lte = parseRelative(opts.dueBefore);
+    if (opts.dueAfter) dueDate.gte = parseRelative(opts.dueAfter);
+    filter.dueDate = dueDate;
   }
   if (opts.search) {
     filter.searchableContent = { contains: opts.search };
@@ -292,6 +458,16 @@ async function shapeIssue(i: ListedIssueNode): Promise<ListedIssue> {
   // i.state and i.assignee are lazy SDK getters (Promise<T> | undefined);
   // fine bare since list is read-only and easy to retry.
   const [state, assignee, labels] = await Promise.all([i.state, i.assignee, i.labels()]);
+  const dueRaw = (i as { dueDate?: string | Date | null }).dueDate;
+  const due_date =
+    dueRaw == null
+      ? null
+      : typeof dueRaw === "string"
+        ? dueRaw
+        : dueRaw instanceof Date
+          ? dueRaw.toISOString().slice(0, 10)
+          : null;
+  // Full row; callers project via projectListedIssue for slim defaults.
   return {
     identifier: i.identifier,
     title: i.title,
@@ -302,6 +478,7 @@ async function shapeIssue(i: ListedIssueNode): Promise<ListedIssue> {
     labels: labels.nodes.map((l) => l.name).sort(),
     updated_at: i.updatedAt.toISOString(),
     url: i.url,
+    due_date,
   };
 }
 

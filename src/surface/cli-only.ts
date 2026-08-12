@@ -95,8 +95,67 @@ export const completionsShellOperation = {
     "Local-only shell integration; requires Commander program tree at registration time. Inventory-only surface op.",
 } satisfies SurfaceOperationContract<unknown, unknown>;
 
+/** Agent-first self-update (GitHub releases); no MCP dual. */
+export const selfUpdateOperation = {
+  id: "meta.update",
+  domain: "other",
+  resource: "self_update",
+  action: "other",
+  title: "Self-update lebop binary",
+  description: "Check or install a newer lebop release binary from GitHub.",
+  cli: {
+    command: "update",
+    nonLiveReason: "Touches the installed binary and network releases; not Linear surface live.",
+  },
+  mcp: undefined,
+  safety: {
+    readOnly: false,
+    destructive: false,
+    idempotent: true,
+    openWorld: true,
+  },
+  exception: {
+    kind: "cli_only",
+    reason: "CLI-only binary self-update against GitHub releases",
+  },
+  notes: "Inventory-only; implementation in commands/update.ts + lib/selfUpdate.ts.",
+} satisfies SurfaceOperationContract<unknown, unknown>;
+
+/** Dense agent help catalog (Commander help override). */
+export const agentHelpOperation = {
+  id: "meta.help",
+  domain: "other",
+  resource: "help",
+  action: "other",
+  title: "Agent help catalog",
+  description: "Dense machine help catalog for lebop commands (agent-first).",
+  cli: {
+    command: "help",
+    nonLiveReason: "Local Commander help; no Linear I/O.",
+  },
+  mcp: undefined,
+  safety: {
+    readOnly: true,
+    destructive: false,
+    idempotent: true,
+    openWorld: false,
+  },
+  exception: {
+    kind: "cli_only",
+    reason: "CLI-only agent help / discovery catalog",
+  },
+  notes: "Inventory-only; lib/agentHelp.ts + commands/help.ts.",
+} satisfies SurfaceOperationContract<unknown, unknown>;
+
+/**
+ * Bare `lebop` home (`commands/home.ts`) is intentionally **not** a Commander
+ * leaf and is **not** listed here: default-action control plane, not a dual-surface
+ * op. Documented L2 exception — not undeclared inventory.
+ */
 export const CLI_ONLY_SURFACE_OPERATIONS = [
   mcpStartOperation,
   schemaDumpOperation,
   completionsShellOperation,
+  selfUpdateOperation,
+  agentHelpOperation,
 ] as const;

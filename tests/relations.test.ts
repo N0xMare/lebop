@@ -105,12 +105,12 @@ describe("parseLinkToken", () => {
 
   it("accepts genuine `-KIND:TARGET` removals (negative-prefix is NOT a flag)", () => {
     // Regression: round-6 had a dead second clause that would have
-    // matched `-blocks:NOX-1`. Round-7 dropped it. Verify `-blocks:NOX-1`
+    // matched `-blocks:TEAM-1`. Round-7 dropped it. Verify `-blocks:TEAM-1`
     // still parses as a removal delta.
-    expect(parseLinkToken("-blocks:NOX-1")).toEqual({
+    expect(parseLinkToken("-blocks:TEAM-1")).toEqual({
       op: "-",
       kind: "blocks",
-      target: "NOX-1",
+      target: "TEAM-1",
     });
   });
 
@@ -218,7 +218,7 @@ describe("findLink — round-6 / H4 case-folding regression coverage", () => {
               {
                 id: "rel-fwd-1",
                 type: "blocks",
-                relatedIssue: { id: "uuid-target", identifier: "NOX-101" },
+                relatedIssue: { id: "uuid-target", identifier: "TEAM-101" },
               },
             ],
           },
@@ -227,8 +227,8 @@ describe("findLink — round-6 / H4 case-folding regression coverage", () => {
       },
     };
     // Target is lowercase — pre-guard this would miss the match. Post-guard
-    // both sides normalize to NOX-101 and we get the relation id.
-    const id = await findLink("NOX-1", "nox-101", "blocks");
+    // both sides normalize to TEAM-101 and we get the relation id.
+    const id = await findLink("TEAM-1", "team-101", "blocks");
     expect(id).toBe("rel-fwd-1");
   });
 
@@ -243,7 +243,7 @@ describe("findLink — round-6 / H4 case-folding regression coverage", () => {
               {
                 id: "rel-fwd-2",
                 type: "blocks",
-                relatedIssue: { id: "uuid-target", identifier: "nox-101" },
+                relatedIssue: { id: "uuid-target", identifier: "team-101" },
               },
             ],
           },
@@ -251,7 +251,7 @@ describe("findLink — round-6 / H4 case-folding regression coverage", () => {
         },
       },
     };
-    const id = await findLink("NOX-1", "NOX-101", "blocks");
+    const id = await findLink("TEAM-1", "TEAM-101", "blocks");
     expect(id).toBe("rel-fwd-2");
   });
 
@@ -267,14 +267,14 @@ describe("findLink — round-6 / H4 case-folding regression coverage", () => {
               {
                 id: "rel-inv-1",
                 type: "blocks",
-                issue: { id: "uuid-target", identifier: "NOX-202" },
+                issue: { id: "uuid-target", identifier: "TEAM-202" },
               },
             ],
           },
         },
       },
     };
-    const id = await findLink("NOX-1", "nox-202", "blocked-by");
+    const id = await findLink("TEAM-1", "team-202", "blocked-by");
     expect(id).toBe("rel-inv-1");
   });
 
@@ -288,7 +288,7 @@ describe("findLink — round-6 / H4 case-folding regression coverage", () => {
               {
                 id: "rel-related-inbound",
                 type: "related",
-                issue: { id: "uuid-target", identifier: "NOX-303" },
+                issue: { id: "uuid-target", identifier: "TEAM-303" },
               },
             ],
           },
@@ -296,7 +296,7 @@ describe("findLink — round-6 / H4 case-folding regression coverage", () => {
       },
     };
 
-    await expect(findLink("NOX-1", "nox-303", "related")).resolves.toBe("rel-related-inbound");
+    await expect(findLink("TEAM-1", "team-303", "related")).resolves.toBe("rel-related-inbound");
   });
 
   it("returns null when no relation matches (regardless of case)", async () => {
@@ -308,12 +308,12 @@ describe("findLink — round-6 / H4 case-folding regression coverage", () => {
         },
       },
     };
-    expect(await findLink("NOX-1", "nox-999", "blocks")).toBeNull();
+    expect(await findLink("TEAM-1", "team-999", "blocks")).toBeNull();
   });
 
   it("returns null when issue itself is null (resolver miss)", async () => {
     mockResponse = { data: { issue: null } };
-    expect(await findLink("NOX-1", "NOX-101", "blocks")).toBeNull();
+    expect(await findLink("TEAM-1", "TEAM-101", "blocks")).toBeNull();
   });
 
   it("preserves the FIND_QUERY shape (passes selfIdentifier as `id`)", async () => {
@@ -321,8 +321,8 @@ describe("findLink — round-6 / H4 case-folding regression coverage", () => {
       data: { issue: { relations: { nodes: [] }, inverseRelations: { nodes: [] } } },
     };
     lastCall = null;
-    await findLink("NOX-1", "NOX-101", "blocks");
-    expect((lastCall as { variables: { id: string } } | null)?.variables.id).toBe("NOX-1");
+    await findLink("TEAM-1", "TEAM-101", "blocks");
+    expect((lastCall as { variables: { id: string } } | null)?.variables.id).toBe("TEAM-1");
   });
 
   it("walks relation pages before declaring a link absent", async () => {
@@ -331,7 +331,7 @@ describe("findLink — round-6 / H4 case-folding regression coverage", () => {
         data: {
           issue: {
             relations: {
-              nodes: [{ id: "rel-other", type: "blocks", relatedIssue: { identifier: "NOX-100" } }],
+              nodes: [{ id: "rel-other", type: "blocks", relatedIssue: { identifier: "TEAM-100" } }],
               pageInfo: { hasNextPage: true, endCursor: "outbound-cursor-1" },
             },
             inverseRelations: {
@@ -346,7 +346,7 @@ describe("findLink — round-6 / H4 case-folding regression coverage", () => {
           issue: {
             relations: {
               nodes: [
-                { id: "rel-target", type: "blocks", relatedIssue: { identifier: "NOX-101" } },
+                { id: "rel-target", type: "blocks", relatedIssue: { identifier: "TEAM-101" } },
               ],
               pageInfo: { hasNextPage: false, endCursor: null },
             },
@@ -359,7 +359,7 @@ describe("findLink — round-6 / H4 case-folding regression coverage", () => {
       },
     ];
 
-    await expect(findLink("NOX-1", "NOX-101", "blocks")).resolves.toBe("rel-target");
+    await expect(findLink("TEAM-1", "TEAM-101", "blocks")).resolves.toBe("rel-target");
     expect(lastCall).toMatchObject({
       variables: expect.objectContaining({ outboundAfter: "outbound-cursor-1" }),
     });
@@ -373,7 +373,7 @@ describe("relation create preflight", () => {
       data: {
         issue: {
           relations: {
-            nodes: [{ id: "rel-existing", type: "blocks", relatedIssue: { identifier: "NOX-2" } }],
+            nodes: [{ id: "rel-existing", type: "blocks", relatedIssue: { identifier: "TEAM-2" } }],
             pageInfo: { hasNextPage: false, endCursor: null },
           },
           inverseRelations: {
@@ -384,7 +384,7 @@ describe("relation create preflight", () => {
       },
     };
 
-    const preflight = await preflightCreateLink("NOX-1", "NOX-2", "blocks");
+    const preflight = await preflightCreateLink("TEAM-1", "TEAM-2", "blocks");
 
     expect(preflight.exact?.id).toBe("rel-existing");
     expect(preflight.needsConfirmation).toBe(false);
@@ -396,7 +396,7 @@ describe("relation create preflight", () => {
       data: {
         issue: {
           relations: {
-            nodes: [{ id: "rel-related", type: "related", relatedIssue: { identifier: "NOX-2" } }],
+            nodes: [{ id: "rel-related", type: "related", relatedIssue: { identifier: "TEAM-2" } }],
             pageInfo: { hasNextPage: false, endCursor: null },
           },
           inverseRelations: {
@@ -407,7 +407,7 @@ describe("relation create preflight", () => {
       },
     };
 
-    const preflight = await preflightCreateLink("NOX-1", "NOX-2", "blocks");
+    const preflight = await preflightCreateLink("TEAM-1", "TEAM-2", "blocks");
 
     expect(preflight.wouldReplace).toBe(true);
     expect(preflight.needsConfirmation).toBe(true);
@@ -431,7 +431,7 @@ describe("relation create preflight", () => {
       },
     };
 
-    const preflight = await preflightCreateLink("NOX-1", "NOX-2", "duplicates");
+    const preflight = await preflightCreateLink("TEAM-1", "TEAM-2", "duplicates");
 
     expect(preflight.duplicateSideEffect).toBe(true);
     expect(preflight.needsConfirmation).toBe(true);
@@ -446,7 +446,7 @@ describe("listRelations", () => {
         data: {
           issue: {
             relations: {
-              nodes: [{ id: "rel-1", type: "blocks", relatedIssue: { identifier: "NOX-2" } }],
+              nodes: [{ id: "rel-1", type: "blocks", relatedIssue: { identifier: "TEAM-2" } }],
               pageInfo: { hasNextPage: true, endCursor: "outbound-cursor-1" },
             },
             inverseRelations: {
@@ -460,7 +460,7 @@ describe("listRelations", () => {
         data: {
           issue: {
             relations: {
-              nodes: [{ id: "rel-2", type: "blocks", relatedIssue: { identifier: "NOX-3" } }],
+              nodes: [{ id: "rel-2", type: "blocks", relatedIssue: { identifier: "TEAM-3" } }],
               pageInfo: { hasNextPage: true, endCursor: "outbound-cursor-1" },
             },
           },
@@ -468,7 +468,7 @@ describe("listRelations", () => {
       },
     ];
 
-    await expect(listRelations("NOX-1")).rejects.toThrow(/outbound cursor did not advance/);
+    await expect(listRelations("TEAM-1")).rejects.toThrow(/outbound cursor did not advance/);
     expect(lastCall?.variables).toMatchObject({
       outboundAfter: "outbound-cursor-1",
       includeOutbound: true,
@@ -495,32 +495,32 @@ describe("listRelationsPage", () => {
       data: {
         issue: {
           relations: {
-            nodes: [{ id: "rel-out", type: "blocks", relatedIssue: { identifier: "NOX-2" } }],
+            nodes: [{ id: "rel-out", type: "blocks", relatedIssue: { identifier: "TEAM-2" } }],
             pageInfo: { hasNextPage: true, endCursor: "outbound-cursor-1" },
           },
           inverseRelations: {
-            nodes: [{ id: "rel-in", type: "related", issue: { identifier: "NOX-3" } }],
+            nodes: [{ id: "rel-in", type: "related", issue: { identifier: "TEAM-3" } }],
             pageInfo: { hasNextPage: false, endCursor: null },
           },
         },
       },
     };
 
-    const page = await listRelationsPage("NOX-1", {
+    const page = await listRelationsPage("TEAM-1", {
       first: 1,
       outboundAfter: "outbound-prior",
       inboundAfter: "inbound-prior",
     });
 
-    expect(page.outbound).toEqual([{ id: "rel-out", type: "blocks", otherIdentifier: "NOX-2" }]);
-    expect(page.inbound).toEqual([{ id: "rel-in", type: "related", otherIdentifier: "NOX-3" }]);
+    expect(page.outbound).toEqual([{ id: "rel-out", type: "blocks", otherIdentifier: "TEAM-2" }]);
+    expect(page.inbound).toEqual([{ id: "rel-in", type: "related", otherIdentifier: "TEAM-3" }]);
     expect(page.complete).toBe(false);
     expect(page.pageInfo.outbound).toEqual({
       hasNextPage: true,
       endCursor: "outbound-cursor-1",
     });
     expect(lastCall?.variables).toMatchObject({
-      id: "NOX-1",
+      id: "TEAM-1",
       first: 1,
       outboundAfter: "outbound-prior",
       inboundAfter: "inbound-prior",

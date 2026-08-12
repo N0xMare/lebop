@@ -2,15 +2,18 @@ import chalk from "chalk";
 import type { Command } from "commander";
 import { invalidateTeamMetadata } from "../lib/cache.ts";
 import { findGitRoot, hashRepoRoot, resolveConfig } from "../lib/config.ts";
-import { envelope } from "../lib/envelope.ts";
+import { wantsMachineOutput } from "../lib/encode.ts";
+import { writeMachineEnvelope } from "../lib/output.ts";
 import { getTeamMetadata } from "../lib/resolve.ts";
 import {
   buildLabelCreateInputFromCli,
   buildLabelDeleteInputFromCli,
   buildLabelListInputFromCli,
+  buildLabelUpdateInputFromCli,
   executeLabelCreate,
   executeLabelDelete,
   executeLabelList,
+  executeLabelUpdate,
   labelListPayload,
 } from "../surface/labels.ts";
 
@@ -26,13 +29,33 @@ export function registerLabel(program: Command): void {
     .option("--team <key>", "override the resolved team")
     .option("--workspace-only", "only labels with no team scope")
     .option("--all", "every label the token can see (no scope filter)")
-    .option("--json", "emit structured records")
+    .option("--json", "machine output (default; TOON)")
+    .option("--format <fmt>", "toon | json | pretty")
+    .option("--pretty", "pretty-printed JSON")
+    .option("--human", "maintainer/dev chalk tables (opt-in; not agent path; bodies uncapped)")
     .action(
-      async (opts: { team?: string; workspaceOnly?: boolean; all?: boolean; json?: boolean }) => {
+      async (opts: {
+        team?: string;
+        workspaceOnly?: boolean;
+        all?: boolean;
+        json?: boolean;
+        format?: string;
+        pretty?: boolean;
+      }) => {
         const result = await executeLabelList(buildLabelListInputFromCli({ opts }));
 
-        if (opts.json) {
-          process.stdout.write(`${JSON.stringify(envelope(labelListPayload(result)), null, 2)}\n`);
+        if (wantsMachineOutput(opts)) {
+          writeMachineEnvelope(
+            {
+              ...labelListPayload(result),
+              next: ["list --label <name>", "label create", "set labels <id> …"],
+            } as Record<string, unknown>,
+            {
+              json: true,
+              format: opts.format,
+              pretty: opts.pretty,
+            },
+          );
           return;
         }
 
@@ -59,7 +82,10 @@ export function registerLabel(program: Command): void {
     )
     .option("--color <hex>", "hex color (e.g. #ff0000)")
     .option("--description <text>")
-    .option("--json", "emit structured result")
+    .option("--json", "machine output (default; TOON)")
+    .option("--format <fmt>", "toon | json | pretty")
+    .option("--pretty", "pretty-printed JSON")
+    .option("--human", "maintainer/dev chalk tables (opt-in; not agent path; bodies uncapped)")
     .action(
       async (
         name: string,
@@ -69,18 +95,62 @@ export function registerLabel(program: Command): void {
           color?: string;
           description?: string;
           json?: boolean;
+          format?: string;
+          pretty?: boolean;
         },
       ) => {
         const created = await executeLabelCreate(buildLabelCreateInputFromCli({ name, opts }), {
           resolveTeamKey: resolveLabelCreateTeamKey,
         });
         await invalidateTeamMetadata(created.repoHash ?? currentRepoHash(), created.invalidateTeam);
-        if (opts.json) {
-          process.stdout.write(`${JSON.stringify(envelope({ label: created.label }), null, 2)}\n`);
+        if (wantsMachineOutput(opts)) {
+          writeMachineEnvelope({ label: created.label } as Record<string, unknown>, {
+            json: true,
+            format: opts.format,
+            pretty: opts.pretty,
+          });
           return;
         }
         process.stdout.write(
           `${chalk.green("✓")} created ${chalk.bold(created.label.name)} ${chalk.gray(`(${created.label.id})`)}\n`,
+        );
+      },
+    );
+
+  cmd
+    .command("update <id>")
+    .description("update a label by UUID (name, color, description)")
+    .option("--name <text>", "new label name")
+    .option("--color <hex>", "hex color (e.g. #ff0000)")
+    .option("--description <text>", "description (pass empty string to clear)")
+    .option("--json", "machine output (default; TOON)")
+    .option("--format <fmt>", "toon | json | pretty")
+    .option("--pretty", "pretty-printed JSON")
+    .option("--human", "maintainer/dev chalk tables (opt-in; not agent path; bodies uncapped)")
+    .action(
+      async (
+        id: string,
+        opts: {
+          name?: string;
+          color?: string;
+          description?: string;
+          json?: boolean;
+          format?: string;
+          pretty?: boolean;
+        },
+      ) => {
+        const label = await executeLabelUpdate(buildLabelUpdateInputFromCli({ id, opts }));
+        await invalidateTeamMetadata(currentRepoHash(), label.team?.key ?? undefined);
+        if (wantsMachineOutput(opts)) {
+          writeMachineEnvelope({ label } as Record<string, unknown>, {
+            json: true,
+            format: opts.format,
+            pretty: opts.pretty,
+          });
+          return;
+        }
+        process.stdout.write(
+          `${chalk.green("✓")} updated ${chalk.bold(label.name)} ${chalk.gray(`(${label.id})`)}\n`,
         );
       },
     );
@@ -93,31 +163,38 @@ export function registerLabel(program: Command): void {
     .option("--team <key>", "team scope for name lookup")
     .option("--scope <scope>", "name lookup scope: team|workspace", "team")
     .option("--yes", "confirm destructive operation (required)")
-    .option("--json", "emit structured result")
+    .option("--json", "machine output (default; TOON)")
+    .option("--format <fmt>", "toon | json | pretty")
+    .option("--pretty", "pretty-printed JSON")
+    .option("--human", "maintainer/dev chalk tables (opt-in; not agent path; bodies uncapped)")
     .action(
       async (
         nameOrId: string,
-        opts: { team?: string; scope?: string; yes?: boolean; json?: boolean },
+        opts: {
+          team?: string;
+          scope?: string;
+          yes?: boolean;
+          json?: boolean;
+          format?: string;
+          pretty?: boolean;
+        },
       ) => {
         const r = await executeLabelDelete(buildLabelDeleteInputFromCli({ nameOrId, opts }));
         if (r.mutated) {
           await invalidateTeamMetadata(currentRepoHash(), r.team ?? undefined);
         }
         if (r.status === "deleted" && !r.success) process.exitCode = 1;
-        if (opts.json) {
-          process.stdout.write(
-            `${JSON.stringify(
-              envelope({
-                id: r.id,
-                selector: r.selector,
-                scope: r.scope,
-                team: r.team,
-                status: r.status,
-                success: r.success,
-              }),
-              null,
-              2,
-            )}\n`,
+        if (wantsMachineOutput(opts)) {
+          writeMachineEnvelope(
+            {
+              id: r.id,
+              selector: r.selector,
+              scope: r.scope,
+              team: r.team,
+              status: r.status,
+              success: r.success,
+            } as Record<string, unknown>,
+            { json: true, format: opts.format, pretty: opts.pretty },
           );
           return;
         }

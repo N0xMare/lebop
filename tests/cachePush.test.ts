@@ -54,24 +54,24 @@ describe("cache push remote safety", () => {
     const snapshot = await collectCacheRemoteSnapshot([
       {
         kind: "issue",
-        identifier: "NOX-404",
-        metadata: issueMetadata("NOX-404"),
+        identifier: "TEAM-404",
+        metadata: issueMetadata("TEAM-404"),
         description: "changed body",
         changes: [{ field: "description", from: "old", to: "changed body" }],
-        cache_path: "/tmp/cache/NOX-404",
+        cache_path: "/tmp/cache/TEAM-404",
       },
     ]);
 
     expect(snapshot).toMatchObject({
       issues: [],
       projects: [],
-      missing: [{ kind: "issue", target: "NOX-404" }],
+      missing: [{ kind: "issue", target: "TEAM-404" }],
     });
   });
 
   it("fails implicit plan collection when cache rows have integrity problems", async () => {
     const { repoCacheDir } = await import("../src/lib/cache.ts");
-    const issuePath = join(repoCacheDir("_global"), "issues", "NOX-999");
+    const issuePath = join(repoCacheDir("_global"), "issues", "TEAM-999");
     mkdirSync(issuePath, { recursive: true });
     writeFileSync(join(issuePath, "metadata.yaml"), "{}");
     const { collectCachePushPlans } = await import("../src/lib/cachePush.ts");
@@ -82,7 +82,7 @@ describe("cache push remote safety", () => {
       code: "validation_error",
       message: expect.stringContaining("cache has 1 integrity problem"),
     });
-    expect(err.hint).toContain("lebop pull NOX-999 --refresh --yes");
+    expect(err.hint).toContain("lebop pull TEAM-999 --refresh --yes");
   });
 
   it("blocks missing remotes during cache push preview", async () => {
@@ -91,16 +91,16 @@ describe("cache push remote safety", () => {
 
     const preview = await applyCachePushPlans({
       repoHash: "_global",
-      team: "NOX",
+      team: "TEAM",
       dryRun: true,
       plans: [
         {
           kind: "issue",
-          identifier: "NOX-404",
-          metadata: issueMetadata("NOX-404"),
+          identifier: "TEAM-404",
+          metadata: issueMetadata("TEAM-404"),
           description: "changed body",
           changes: [{ field: "description", from: "old", to: "changed body" }],
-          cache_path: "/tmp/cache/NOX-404",
+          cache_path: "/tmp/cache/TEAM-404",
         },
       ],
       lintCtx: {},
@@ -108,7 +108,7 @@ describe("cache push remote safety", () => {
 
     expect(preview.summary).toMatchObject({ total: 1, applied: 0, failed: 1 });
     expect(preview.results[0]).toMatchObject({
-      target: "NOX-404",
+      target: "TEAM-404",
       kind: "issue",
       status: "remote-missing",
     });
@@ -123,11 +123,11 @@ describe("cache push remote safety", () => {
     const verification = await verifyCachePushPlansClean("_global", [
       {
         kind: "issue",
-        identifier: "NOX-404",
-        metadata: issueMetadata("NOX-404"),
+        identifier: "TEAM-404",
+        metadata: issueMetadata("TEAM-404"),
         description: "changed body",
         changes: [{ field: "description", from: "old", to: "changed body" }],
-        cache_path: "/tmp/cache/NOX-404",
+        cache_path: "/tmp/cache/TEAM-404",
       },
     ]);
 
@@ -145,15 +145,15 @@ describe("cache push remote safety", () => {
     const verification = await verifyCachePushPlansClean("_global", [
       {
         kind: "issue",
-        identifier: "NOX-404",
-        metadata: issueMetadata("NOX-404"),
+        identifier: "TEAM-404",
+        metadata: issueMetadata("TEAM-404"),
         description: "changed body",
         changes: [{ field: "title", from: "old", to: "Cached issue" }],
-        cache_path: "/tmp/cache/NOX-404",
+        cache_path: "/tmp/cache/TEAM-404",
       },
     ]);
 
-    expect(verification).toEqual({ clean: false, dirty: ["NOX-404"] });
+    expect(verification).toEqual({ clean: false, dirty: ["TEAM-404"] });
   });
 
   it("accepts Linear trailing-newline normalization for reviewed issue content", async () => {
@@ -165,11 +165,11 @@ describe("cache push remote safety", () => {
     const verification = await verifyCachePushPlansClean("_global", [
       {
         kind: "issue",
-        identifier: "NOX-404",
-        metadata: issueMetadata("NOX-404"),
+        identifier: "TEAM-404",
+        metadata: issueMetadata("TEAM-404"),
         description: "changed body\n",
         changes: [{ field: "description", from: "old", to: "changed body\n" }],
-        cache_path: "/tmp/cache/NOX-404",
+        cache_path: "/tmp/cache/TEAM-404",
       },
     ]);
 
@@ -256,20 +256,20 @@ describe("cache push remote safety", () => {
     });
     const { writeIssue } = await import("../src/lib/cache.ts");
     const { verifyCachePushPlansClean } = await import("../src/lib/cachePush.ts");
-    await writeIssue("_global", issueMetadata("NOX-404"), "server normalized body");
+    await writeIssue("_global", issueMetadata("TEAM-404"), "server normalized body");
 
     const verification = await verifyCachePushPlansClean("_global", [
       {
         kind: "issue",
-        identifier: "NOX-404",
-        metadata: issueMetadata("NOX-404"),
+        identifier: "TEAM-404",
+        metadata: issueMetadata("TEAM-404"),
         description: "pre-apply body",
         changes: [{ field: "description", from: "old", to: "pre-apply body" }],
-        cache_path: "/tmp/cache/NOX-404",
+        cache_path: "/tmp/cache/TEAM-404",
       },
     ]);
 
-    expect(verification).toEqual({ clean: false, dirty: ["NOX-404"] });
+    expect(verification).toEqual({ clean: false, dirty: ["TEAM-404"] });
   });
 
   it("verifies project publish against the reviewed plan, not post-apply cache content", async () => {
@@ -304,8 +304,8 @@ describe("cache push remote safety", () => {
   it("reports cache writeback failure separately after a successful remote issue update", async () => {
     vi.doMock("../src/lib/resolve.ts", () => ({
       getTeamMetadata: async () => ({
-        team_id: "team-nox",
-        team_key: "NOX",
+        team_id: "team-team",
+        team_key: "TEAM",
         fetched_at: "2026-06-05T00:00:00.000Z",
         states: [],
         labels: [],
@@ -320,12 +320,12 @@ describe("cache push remote safety", () => {
     rawRequest
       .mockResolvedValueOnce({
         data: {
-          a0: { id: "issue-uuid", identifier: "NOX-404", updatedAt: "2026-06-04T00:00:00.000Z" },
+          a0: { id: "issue-uuid", identifier: "TEAM-404", updatedAt: "2026-06-04T00:00:00.000Z" },
         },
       })
       .mockResolvedValueOnce({
         data: {
-          a0: { id: "issue-uuid", identifier: "NOX-404", updatedAt: "2026-06-04T00:00:00.000Z" },
+          a0: { id: "issue-uuid", identifier: "TEAM-404", updatedAt: "2026-06-04T00:00:00.000Z" },
         },
       })
       .mockResolvedValueOnce({
@@ -350,15 +350,15 @@ describe("cache push remote safety", () => {
 
     const result = await applyCachePushPlans({
       repoHash: "_global",
-      team: "NOX",
+      team: "TEAM",
       plans: [
         {
           kind: "issue",
-          identifier: "NOX-404",
-          metadata: issueMetadata("NOX-404", { title: "Updated cached issue" }),
+          identifier: "TEAM-404",
+          metadata: issueMetadata("TEAM-404", { title: "Updated cached issue" }),
           description: "changed body",
           changes: [{ field: "title", from: "Cached issue", to: "Updated cached issue" }],
-          cache_path: "/tmp/cache/NOX-404",
+          cache_path: "/tmp/cache/TEAM-404",
         },
       ],
       lintCtx: {},
@@ -372,7 +372,7 @@ describe("cache push remote safety", () => {
       writeback_failed: 1,
     });
     expect(result.results[0]).toMatchObject({
-      target: "NOX-404",
+      target: "TEAM-404",
       kind: "issue",
       status: "pushed-writeback-failed",
       fields: ["title"],
@@ -383,8 +383,8 @@ describe("cache push remote safety", () => {
   it("stops remaining cache push mutations after an issue writeback failure", async () => {
     vi.doMock("../src/lib/resolve.ts", () => ({
       getTeamMetadata: async () => ({
-        team_id: "team-nox",
-        team_key: "NOX",
+        team_id: "team-team",
+        team_key: "TEAM",
         fetched_at: "2026-06-05T00:00:00.000Z",
         states: [],
         labels: [],
@@ -401,12 +401,12 @@ describe("cache push remote safety", () => {
         data: {
           a0: {
             id: "issue-uuid-404",
-            identifier: "NOX-404",
+            identifier: "TEAM-404",
             updatedAt: "2026-06-04T00:00:00.000Z",
           },
           a1: {
             id: "issue-uuid-405",
-            identifier: "NOX-405",
+            identifier: "TEAM-405",
             updatedAt: "2026-06-04T00:00:00.000Z",
           },
         },
@@ -415,7 +415,7 @@ describe("cache push remote safety", () => {
         data: {
           a0: {
             id: "issue-uuid-404",
-            identifier: "NOX-404",
+            identifier: "TEAM-404",
             updatedAt: "2026-06-04T00:00:00.000Z",
           },
         },
@@ -442,23 +442,23 @@ describe("cache push remote safety", () => {
 
     const result = await applyCachePushPlans({
       repoHash: "_global",
-      team: "NOX",
+      team: "TEAM",
       plans: [
         {
           kind: "issue",
-          identifier: "NOX-404",
-          metadata: issueMetadata("NOX-404", { title: "Updated cached issue" }),
+          identifier: "TEAM-404",
+          metadata: issueMetadata("TEAM-404", { title: "Updated cached issue" }),
           description: "changed body",
           changes: [{ field: "title", from: "Cached issue", to: "Updated cached issue" }],
-          cache_path: "/tmp/cache/NOX-404",
+          cache_path: "/tmp/cache/TEAM-404",
         },
         {
           kind: "issue",
-          identifier: "NOX-405",
-          metadata: issueMetadata("NOX-405", { title: "Second cached issue" }),
+          identifier: "TEAM-405",
+          metadata: issueMetadata("TEAM-405", { title: "Second cached issue" }),
           description: "second body",
           changes: [{ field: "title", from: "Cached issue", to: "Second cached issue" }],
-          cache_path: "/tmp/cache/NOX-405",
+          cache_path: "/tmp/cache/TEAM-405",
         },
       ],
       lintCtx: {},
@@ -473,7 +473,7 @@ describe("cache push remote safety", () => {
     });
     expect(result.results[0]).toMatchObject({ status: "pushed-writeback-failed" });
     expect(result.results[1]).toMatchObject({
-      target: "NOX-405",
+      target: "TEAM-405",
       status: "error",
       error: expect.stringContaining("skipped because cache writeback failed"),
     });
@@ -521,7 +521,7 @@ describe("cache push remote safety", () => {
 
     const result = await applyCachePushPlans({
       repoHash: "_global",
-      team: "NOX",
+      team: "TEAM",
       plans: [
         {
           kind: "project",
@@ -570,7 +570,7 @@ describe("cache push remote safety", () => {
 
     const result = await applyCachePushPlans({
       repoHash: "_global",
-      team: "NOX",
+      team: "TEAM",
       dryRun: true,
       plans: [
         {
@@ -627,7 +627,7 @@ describe("cache push remote safety", () => {
 
     const result = await applyCachePushPlans({
       repoHash: "_global",
-      team: "NOX",
+      team: "TEAM",
       plans: [
         {
           kind: "project",
@@ -664,8 +664,8 @@ describe("cache push remote safety", () => {
   it("blocks issue cache push when Linear changes after preflight but before mutation", async () => {
     vi.doMock("../src/lib/resolve.ts", () => ({
       getTeamMetadata: async () => ({
-        team_id: "team-nox",
-        team_key: "NOX",
+        team_id: "team-team",
+        team_key: "TEAM",
         fetched_at: "2026-06-05T00:00:00.000Z",
         states: [],
         labels: [],
@@ -680,27 +680,27 @@ describe("cache push remote safety", () => {
     rawRequest
       .mockResolvedValueOnce({
         data: {
-          a0: { id: "issue-uuid", identifier: "NOX-404", updatedAt: "2026-06-04T00:00:00.000Z" },
+          a0: { id: "issue-uuid", identifier: "TEAM-404", updatedAt: "2026-06-04T00:00:00.000Z" },
         },
       })
       .mockResolvedValueOnce({
         data: {
-          a0: { id: "issue-uuid", identifier: "NOX-404", updatedAt: "2026-06-05T00:00:00.000Z" },
+          a0: { id: "issue-uuid", identifier: "TEAM-404", updatedAt: "2026-06-05T00:00:00.000Z" },
         },
       });
     const { applyCachePushPlans } = await import("../src/lib/cachePush.ts");
 
     const result = await applyCachePushPlans({
       repoHash: "_global",
-      team: "NOX",
+      team: "TEAM",
       plans: [
         {
           kind: "issue",
-          identifier: "NOX-404",
-          metadata: issueMetadata("NOX-404", { title: "Updated cached issue" }),
+          identifier: "TEAM-404",
+          metadata: issueMetadata("TEAM-404", { title: "Updated cached issue" }),
           description: "changed body",
           changes: [{ field: "title", from: "Cached issue", to: "Updated cached issue" }],
-          cache_path: "/tmp/cache/NOX-404",
+          cache_path: "/tmp/cache/TEAM-404",
         },
       ],
       lintCtx: {},
@@ -708,7 +708,7 @@ describe("cache push remote safety", () => {
 
     expect(result.summary).toMatchObject({ total: 1, applied: 0, failed: 1 });
     expect(result.results[0]).toMatchObject({
-      target: "NOX-404",
+      target: "TEAM-404",
       status: "stale",
       fields: ["title"],
       error: expect.stringContaining("remote updated since pull"),
@@ -720,28 +720,28 @@ describe("cache push remote safety", () => {
   });
 
   it("treats any issue _server.updated_at mismatch as stale", async () => {
-    const baseMetadata = issueMetadata("NOX-404");
+    const baseMetadata = issueMetadata("TEAM-404");
     rawRequest.mockResolvedValueOnce({
       data: {
-        a0: { id: "issue-uuid", identifier: "NOX-404", updatedAt: "2026-06-04T00:00:00.000Z" },
+        a0: { id: "issue-uuid", identifier: "TEAM-404", updatedAt: "2026-06-04T00:00:00.000Z" },
       },
     });
     const { applyCachePushPlans } = await import("../src/lib/cachePush.ts");
 
     const result = await applyCachePushPlans({
       repoHash: "_global",
-      team: "NOX",
+      team: "TEAM",
       plans: [
         {
           kind: "issue",
-          identifier: "NOX-404",
+          identifier: "TEAM-404",
           metadata: {
             ...baseMetadata,
             _server: { ...baseMetadata._server, updated_at: "2026-06-05T00:00:00.000Z" },
           },
           description: "changed body",
           changes: [{ field: "description", from: "old", to: "changed body" }],
-          cache_path: "/tmp/cache/NOX-404",
+          cache_path: "/tmp/cache/TEAM-404",
         },
       ],
       lintCtx: {},
@@ -753,28 +753,28 @@ describe("cache push remote safety", () => {
   });
 
   it("fails closed when local issue _server.updated_at is invalid", async () => {
-    const baseMetadata = issueMetadata("NOX-404");
+    const baseMetadata = issueMetadata("TEAM-404");
     rawRequest.mockResolvedValueOnce({
       data: {
-        a0: { id: "issue-uuid", identifier: "NOX-404", updatedAt: "2026-06-04T00:00:00.000Z" },
+        a0: { id: "issue-uuid", identifier: "TEAM-404", updatedAt: "2026-06-04T00:00:00.000Z" },
       },
     });
     const { applyCachePushPlans } = await import("../src/lib/cachePush.ts");
 
     const result = await applyCachePushPlans({
       repoHash: "_global",
-      team: "NOX",
+      team: "TEAM",
       plans: [
         {
           kind: "issue",
-          identifier: "NOX-404",
+          identifier: "TEAM-404",
           metadata: {
             ...baseMetadata,
             _server: { ...baseMetadata._server, updated_at: "not-a-date" },
           } as never,
           description: "changed body",
           changes: [{ field: "description", from: "old", to: "changed body" }],
-          cache_path: "/tmp/cache/NOX-404",
+          cache_path: "/tmp/cache/TEAM-404",
         },
       ],
       lintCtx: {},
@@ -791,8 +791,8 @@ describe("cache push remote safety", () => {
   it("treats issueUpdate success:false as an error before local cache writeback", async () => {
     vi.doMock("../src/lib/resolve.ts", () => ({
       getTeamMetadata: async () => ({
-        team_id: "team-nox",
-        team_key: "NOX",
+        team_id: "team-team",
+        team_key: "TEAM",
         fetched_at: "2026-06-05T00:00:00.000Z",
         states: [],
         labels: [],
@@ -807,12 +807,12 @@ describe("cache push remote safety", () => {
     rawRequest
       .mockResolvedValueOnce({
         data: {
-          a0: { id: "issue-uuid", identifier: "NOX-404", updatedAt: "2026-06-04T00:00:00.000Z" },
+          a0: { id: "issue-uuid", identifier: "TEAM-404", updatedAt: "2026-06-04T00:00:00.000Z" },
         },
       })
       .mockResolvedValueOnce({
         data: {
-          a0: { id: "issue-uuid", identifier: "NOX-404", updatedAt: "2026-06-04T00:00:00.000Z" },
+          a0: { id: "issue-uuid", identifier: "TEAM-404", updatedAt: "2026-06-04T00:00:00.000Z" },
         },
       })
       .mockResolvedValueOnce({
@@ -827,15 +827,15 @@ describe("cache push remote safety", () => {
 
     const result = await applyCachePushPlans({
       repoHash: "_global",
-      team: "NOX",
+      team: "TEAM",
       plans: [
         {
           kind: "issue",
-          identifier: "NOX-404",
-          metadata: issueMetadata("NOX-404", { title: "Updated cached issue" }),
+          identifier: "TEAM-404",
+          metadata: issueMetadata("TEAM-404", { title: "Updated cached issue" }),
           description: "changed body",
           changes: [{ field: "title", from: "Cached issue", to: "Updated cached issue" }],
-          cache_path: "/tmp/cache/NOX-404",
+          cache_path: "/tmp/cache/TEAM-404",
         },
       ],
       lintCtx: {},
@@ -865,7 +865,7 @@ function issueMetadata(identifier: string, overrides: Partial<IssueMetadata> = {
     _server: {
       id: "issue-uuid",
       identifier,
-      url: "https://linear.app/nox/issue/NOX-404/cached-issue",
+      url: "https://linear.app/example/issue/TEAM-404/cached-issue",
       state_id: "state-todo",
       state_name: "Todo",
       state_type: "unstarted",
@@ -894,17 +894,17 @@ function issueMetadata(identifier: string, overrides: Partial<IssueMetadata> = {
 function fetchedIssue(input: { title: string; description: string }) {
   return {
     id: "issue-uuid",
-    identifier: "NOX-404",
+    identifier: "TEAM-404",
     title: input.title,
     description: input.description,
     priority: 0,
     estimate: null,
-    url: "https://linear.app/nox/issue/NOX-404/cached-issue",
+    url: "https://linear.app/example/issue/TEAM-404/cached-issue",
     updatedAt: "2026-06-05T00:00:00.000Z",
     state: { id: "state-todo", name: "Todo", type: "unstarted" },
     assignee: null,
     project: null,
-    team: { id: "team-nox", key: "NOX" },
+    team: { id: "team-team", key: "TEAM" },
     parent: null,
     labels: { nodes: [] },
   };
@@ -920,7 +920,7 @@ function projectMetadata(id: string, overrides: Partial<ProjectMetadata> = {}): 
     state: "planned",
     _server: {
       id,
-      url: `https://linear.app/nox/project/${id}`,
+      url: `https://linear.app/example/project/${id}`,
       state: "planned",
       name: "Cached project",
       description: "",
@@ -950,7 +950,7 @@ function fetchedProject(input: {
     startDate: input.startDate ?? null,
     targetDate: input.targetDate ?? null,
     state: "planned",
-    url: `https://linear.app/nox/project/${input.id}`,
+    url: `https://linear.app/example/project/${input.id}`,
     updatedAt: "2026-06-05T00:00:00.000Z",
   };
 }

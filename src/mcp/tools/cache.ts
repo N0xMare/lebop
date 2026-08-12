@@ -1,4 +1,5 @@
 import { envelope } from "../../lib/envelope.ts";
+import { mcpCacheStatusNext, mcpDiffNext, mcpPushNext } from "../../lib/nextStubs.ts";
 import {
   buildCacheDiffIssueInputFromMcp,
   buildCacheDiffIssueMcpInputSchema,
@@ -50,6 +51,7 @@ export function buildCacheToolSpecs(deps: CacheToolDeps): McpToolSpec[] {
         return text(
           envelope({
             ...cacheStatusPayload(await executeCacheStatus(buildCacheStatusInputFromMcp(args))),
+            next: mcpCacheStatusNext(),
           }),
         );
       },
@@ -61,7 +63,12 @@ export function buildCacheToolSpecs(deps: CacheToolDeps): McpToolSpec[] {
         buildCacheDiffIssueMcpInputSchema(deps.workspaceParamDescription),
       ),
       handler: async (args: CacheDiffIssueMcpInput) => {
-        return text(envelope(await executeCacheDiffIssue(buildCacheDiffIssueInputFromMcp(args))));
+        return text(
+          envelope({
+            ...(await executeCacheDiffIssue(buildCacheDiffIssueInputFromMcp(args))),
+            next: mcpDiffNext(),
+          }),
+        );
       },
     },
     {
@@ -72,7 +79,10 @@ export function buildCacheToolSpecs(deps: CacheToolDeps): McpToolSpec[] {
       ),
       handler: async (args: CacheDiffProjectMcpInput) => {
         return text(
-          envelope(await executeCacheDiffProject(buildCacheDiffProjectInputFromMcp(args))),
+          envelope({
+            ...(await executeCacheDiffProject(buildCacheDiffProjectInputFromMcp(args))),
+            next: mcpDiffNext(),
+          }),
         );
       },
     },
@@ -87,7 +97,10 @@ export function buildCacheToolSpecs(deps: CacheToolDeps): McpToolSpec[] {
         const force = args.force === true;
         if (force && !dryRun) deps.requireConfirm(args, "push_changes force");
         return text(
-          envelope(cachePushPayload(await executeCachePush(buildCachePushInputFromMcp(args)))),
+          envelope({
+            ...cachePushPayload(await executeCachePush(buildCachePushInputFromMcp(args))),
+            next: mcpPushNext(),
+          }),
         );
       },
     },

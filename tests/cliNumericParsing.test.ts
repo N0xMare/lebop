@@ -73,7 +73,7 @@ describe("strict numeric CLI parsing", () => {
     registerBulk(program);
 
     await expect(
-      program.parseAsync(["bulk", "update", "NOX-1", "--estimate", "1abc"], { from: "user" }),
+      program.parseAsync(["bulk", "update", "TEAM-1", "--estimate", "1abc"], { from: "user" }),
     ).rejects.toThrow(/invalid --estimate value "1abc"/);
 
     expect(mocks.bulkUpdateIssues).not.toHaveBeenCalled();
@@ -83,7 +83,7 @@ describe("strict numeric CLI parsing", () => {
     mocks.bulkUpdateIssues.mockResolvedValueOnce({
       results: [
         {
-          identifier: "NOX-1",
+          identifier: "TEAM-1",
           status: "failed",
           error: { code: "not_found", message: "not found" },
         },
@@ -108,7 +108,7 @@ describe("strict numeric CLI parsing", () => {
       registerBulk(program);
 
       await program.parseAsync(
-        ["bulk", "update", "NOX-1", "--priority", "high", "--yes", "--json"],
+        ["bulk", "update", "TEAM-1", "--priority", "high", "--yes", "--json", "--format", "json"],
         {
           from: "user",
         },
@@ -126,7 +126,7 @@ describe("strict numeric CLI parsing", () => {
     registerBulk(program);
 
     await expect(
-      program.parseAsync(["bulk", "update", "NOX-1", "--priority", "high", "--json"], {
+      program.parseAsync(["bulk", "update", "TEAM-1", "--priority", "high", "--json"], {
         from: "user",
       }),
     ).rejects.toThrow(/without --yes/);
@@ -136,7 +136,7 @@ describe("strict numeric CLI parsing", () => {
 
   it("bulk update --json sets a failing exit code for cache refresh failures", async () => {
     mocks.bulkUpdateIssues.mockResolvedValueOnce({
-      results: [{ identifier: "NOX-1", status: "updated", fields: ["priority"] }],
+      results: [{ identifier: "TEAM-1", status: "updated", fields: ["priority"] }],
       summary: { updated: 1, would_update: 0, failed: 0, total: 1, dry_run: false },
       cache: {
         checked: true,
@@ -146,7 +146,7 @@ describe("strict numeric CLI parsing", () => {
         not_cached: 0,
         rows: [
           {
-            identifier: "NOX-1",
+            identifier: "TEAM-1",
             present: true,
             refreshed: false,
             error: "writeback failed",
@@ -164,7 +164,7 @@ describe("strict numeric CLI parsing", () => {
       registerBulk(program);
 
       await program.parseAsync(
-        ["bulk", "update", "NOX-1", "--priority", "high", "--yes", "--json"],
+        ["bulk", "update", "TEAM-1", "--priority", "high", "--yes", "--json", "--format", "json"],
         {
           from: "user",
         },
@@ -265,7 +265,17 @@ describe("strict numeric CLI parsing", () => {
 
     try {
       await program.parseAsync(
-        ["cache", "gc", "--hash", "repo-hash", "--no-dry-run", "--yes", "--json"],
+        [
+          "cache",
+          "gc",
+          "--hash",
+          "repo-hash",
+          "--no-dry-run",
+          "--yes",
+          "--json",
+          "--format",
+          "json",
+        ],
         { from: "user" },
       );
     } finally {
@@ -276,7 +286,7 @@ describe("strict numeric CLI parsing", () => {
       expect.objectContaining({ hash: "repo-hash", dryRun: false }),
     );
     expect(JSON.parse(stdoutText)).toMatchObject({
-      schema_version: 1,
+      schema_version: 2,
       dry_run: false,
       totalSizeBeforeMb: 1,
       totalSizeAfterMb: 0,

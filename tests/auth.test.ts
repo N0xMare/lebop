@@ -248,12 +248,12 @@ describe("loadAuth v2 validation", () => {
   it("rejects malformed workspace records", async () => {
     writeAuthJson({
       schema_version: 2,
-      default: "noxor",
+      default: "acme",
       workspaces: {
-        noxor: {
-          slug: "noxor",
-          name: "Noxor",
-          url_key: "noxor",
+        acme: {
+          slug: "acme",
+          name: "Example",
+          url_key: "acme",
           token: "lin_api_test",
           viewer: { id: "u1", email: "viewer@example.com" },
           created_at: "2026-06-05T00:00:00.000Z",
@@ -265,15 +265,21 @@ describe("loadAuth v2 validation", () => {
     expect(err.message).toContain("unexpected shape");
   });
 
+  it("Mode A rejects non-PAK tokens at login (assertPersonalApiKey)", async () => {
+    const { assertPersonalApiKey } = await import("../src/lib/auth.ts");
+    expect(() => assertPersonalApiKey("lin_api_ok")).not.toThrow();
+    expect(() => assertPersonalApiKey("oauth-bearer-token")).toThrow(/lin_api_/);
+  });
+
   it("rejects a default workspace that does not exist", async () => {
     writeAuthJson({
       schema_version: 2,
       default: "missing",
       workspaces: {
-        noxor: {
-          slug: "noxor",
-          name: "Noxor",
-          url_key: "noxor",
+        acme: {
+          slug: "acme",
+          name: "Example",
+          url_key: "acme",
           token: "lin_api_test",
           viewer: { id: "u1", email: "viewer@example.com", name: "Viewer" },
           created_at: "2026-06-05T00:00:00.000Z",

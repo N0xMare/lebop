@@ -1,6 +1,8 @@
 import chalk from "chalk";
 import type { Command } from "commander";
-import { envelope } from "../lib/envelope.ts";
+import { wantsMachineOutput } from "../lib/encode.ts";
+import { diffNext } from "../lib/nextStubs.ts";
+import { writeMachineEnvelope } from "../lib/output.ts";
 import {
   buildCacheDiffIssueInputFromCli,
   buildCacheDiffProjectInputFromCli,
@@ -13,6 +15,8 @@ interface DiffOpts {
   team?: string;
   projectId?: string;
   json?: boolean;
+  format?: string;
+  pretty?: boolean;
 }
 
 export function registerDiff(program: Command): void {
@@ -23,7 +27,10 @@ export function registerDiff(program: Command): void {
     )
     .option("--team <key>", "override the resolved team")
     .option("--project-id <uuid>", "diff a cached project by UUID")
-    .option("--json", "emit structured diff instead of human output")
+    .option("--json", "machine output (default; TOON)")
+    .option("--format <fmt>", "toon | json | pretty")
+    .option("--pretty", "pretty-printed JSON")
+    .option("--human", "maintainer/dev chalk tables (opt-in; not agent path; bodies uncapped)")
     .action(async (id: string | undefined, opts: DiffOpts) => {
       if (opts.projectId) {
         const result = await executeCacheDiffProject(
@@ -31,8 +38,15 @@ export function registerDiff(program: Command): void {
         );
         const hasDrift = result.fields.length > 0;
         process.exitCode = hasDrift ? 1 : 0;
-        if (opts.json) {
-          process.stdout.write(`${JSON.stringify(envelope(result), null, 2)}\n`);
+        if (wantsMachineOutput(opts)) {
+          writeMachineEnvelope(
+            { ...result, next: diffNext() } as Record<string, unknown>,
+            {
+              json: true,
+              format: opts.format,
+              pretty: opts.pretty,
+            },
+          );
           return;
         }
         printHumanProject(
@@ -52,8 +66,12 @@ export function registerDiff(program: Command): void {
       const hasDrift = result.fields.length > 0 || result.description_changed;
       process.exitCode = hasDrift ? 1 : 0;
 
-      if (opts.json) {
-        process.stdout.write(`${JSON.stringify(envelope(result), null, 2)}\n`);
+      if (wantsMachineOutput(opts)) {
+        writeMachineEnvelope({ ...result, next: diffNext() } as Record<string, unknown>, {
+          json: true,
+          format: opts.format,
+          pretty: opts.pretty,
+        });
         return;
       }
 

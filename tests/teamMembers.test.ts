@@ -37,7 +37,7 @@ import { listTeamMembers, listTeamMembersPage } from "../src/lib/teamMembers.ts"
 describe("listTeamMembers (structured errors)", () => {
   beforeEach(() => {
     for (const mock of Object.values(mocks)) mock.mockReset();
-    mocks.teams.mockResolvedValue({ nodes: [{ id: "team-1", key: "NOX", name: "Noxor" }] });
+    mocks.teams.mockResolvedValue({ nodes: [{ id: "team-1", key: "TEAM", name: "Example" }] });
     mocks.rawRequest.mockResolvedValue({
       data: {
         team: {
@@ -68,7 +68,7 @@ describe("listTeamMembers (structured errors)", () => {
         membershipPage([member("active-1", true), member("active-2", true)], true, "cursor-3", 2),
       );
 
-    const page = await listTeamMembersPage({ teamKey: "NOX", limit: 2 });
+    const page = await listTeamMembersPage({ teamKey: "TEAM", limit: 2 });
 
     expect(page.nodes.map((m) => m.id)).toEqual(["active-1", "active-2"]);
     expect(page.pageInfo).toEqual({ hasNextPage: true, endCursor: "cursor-3" });
@@ -86,7 +86,7 @@ describe("listTeamMembers (structured errors)", () => {
       .mockRejectedValueOnce(transient)
       .mockResolvedValueOnce(membershipPage([member("active-1", true)], false, null));
 
-    const page = await listTeamMembersPage({ teamKey: "NOX", limit: 1 });
+    const page = await listTeamMembersPage({ teamKey: "TEAM", limit: 1 });
 
     expect(page.nodes.map((m) => m.id)).toEqual(["active-1"]);
     expect(mocks.rawRequest).toHaveBeenCalledTimes(2);
@@ -101,7 +101,7 @@ describe("listTeamMembers (structured errors)", () => {
       ),
     );
 
-    const page = await listTeamMembersPage({ teamKey: "NOX", limit: 1 });
+    const page = await listTeamMembersPage({ teamKey: "TEAM", limit: 1 });
 
     expect(page.nodes.map((m) => m.id)).toEqual(["active-1"]);
     expect(page.pageInfo).toEqual({ hasNextPage: true, endCursor: "cursor-2" });

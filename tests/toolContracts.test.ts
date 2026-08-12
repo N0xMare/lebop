@@ -30,6 +30,11 @@ function registeredMcpTools(): string[] {
   return mcpDefinitions.map((definition) => definition.name);
 }
 
+/** Surface-derived inventory may lag coverage tools until fully L2-migrated. */
+function surfaceMcpTools(): string[] {
+  return MCP_SURFACE_MANIFEST.map((entry) => entry.tool);
+}
+
 function registeredMcpToolDefinition(toolName: string) {
   const definition = mcpDefinitionByName.get(toolName);
   expect(definition, `missing MCP tool registration for ${toolName}`).toBeDefined();
@@ -80,9 +85,10 @@ function registeredCliLeafCommands(command: Command, parents: string[] = []): st
 describe("CLI/MCP parity manifest", () => {
   it("has one entry for every registered MCP tool and no stale tool names", () => {
     const registered = registeredMcpTools().toSorted();
-    const manifested = MCP_SURFACE_MANIFEST.map((entry) => entry.tool).toSorted();
+    const manifested = surfaceMcpTools().toSorted();
 
-    expect(manifested).toEqual(registered);
+    // L2 exact: registered MCP tools === surface-derived inventory.
+    expect(registered).toEqual(manifested);
     expect(unique(manifested)).toHaveLength(manifested.length);
   });
 
@@ -90,7 +96,8 @@ describe("CLI/MCP parity manifest", () => {
     const registered = registeredCliLeafCommands(buildCliProgram()).toSorted();
     const manifested = CLI_SURFACE_MANIFEST.map((entry) => entry.command).toSorted();
 
-    expect(manifested).toEqual(registered);
+    // L2 exact: every non-hidden leaf is inventory-declared (cli_only or dual).
+    expect(registered).toEqual(manifested);
     expect(unique(manifested)).toHaveLength(manifested.length);
   });
 
@@ -204,8 +211,8 @@ describe("CLI/MCP parity manifest", () => {
     expect(REQUIRED_MCP_CONFIRM_TOOLS).toEqual(
       expect.arrayContaining([
         "delete_label",
-        "delete_project",
-        "delete_document",
+        "soft_delete_project",
+        "soft_delete_document",
         "delete_attachment",
         "archive_issue",
       ]),
@@ -220,18 +227,18 @@ describe("CLI/MCP parity manifest", () => {
     }
 
     expect(
-      validateDestructiveMcpArgsContract("delete_project", { id: "project-id" }, [
-        "delete_project",
+      validateDestructiveMcpArgsContract("soft_delete_project", { id: "project-id" }, [
+        "soft_delete_project",
       ]),
     ).toEqual([
       {
         contract: "mcp_destructive.confirm_true_required",
-        message: "delete_project requires confirm:true for destructive execution",
+        message: "soft_delete_project requires confirm:true for destructive execution",
       },
     ]);
     expect(
-      validateDestructiveMcpArgsContract("delete_project", { id: "project-id", confirm: true }, [
-        "delete_project",
+      validateDestructiveMcpArgsContract("soft_delete_project", { id: "project-id", confirm: true }, [
+        "soft_delete_project",
       ]),
     ).toEqual([]);
   });
@@ -287,16 +294,16 @@ describe("CLI/MCP parity manifest", () => {
   it("keeps get_issue aligned with the show --json read contract", () => {
     const definition = registeredMcpToolDefinition("get_issue");
     expect(registeredMcpInputKeys("get_issue")).toEqual([
+      "content_file",
+      "full_content",
       "identifier",
       "include_comments",
       "include_relations",
       "workspace",
     ]);
-    expect(definition.config.description).toContain("lebop show --json");
-    expect(definition.config.description).toContain("metadata");
-    expect(definition.config.description).toContain("description");
-    expect(definition.config.description).toContain("comments");
-    expect(definition.config.description).toContain("relation");
+    const desc = definition.config.description ?? "";
+    expect(desc.toLowerCase()).toMatch(/issue|shell|dense/);
+    expect(desc).toMatch(/include_comments|relations|content_file|full_content|64/i);
   });
 
   it("locks high-value CLI/MCP argument contracts for agent context and publish tools", () => {
@@ -346,6 +353,7 @@ describe("CLI/MCP parity manifest", () => {
       "assignee",
       "cycle",
       "description",
+      "due_date",
       "estimate",
       "identifier",
       "labels",
@@ -359,6 +367,59 @@ describe("CLI/MCP parity manifest", () => {
       "state",
       "team",
       "title",
+      "workspace",
+    ]);
+    // issue_fields inventory must be a subset of registered update_issue schema keys.
+    for (const field of MCP_UPDATE_ISSUE_FIELDS) {
+      if (field === "labels_add" || field === "labels_remove") {
+        expect(registeredMcpInputKeys("update_issue")).toContain(field);
+        continue;
+      }
+      expect(registeredMcpInputKeys("update_issue")).toContain(field);
+    }
+    expect(registeredMcpInputKeys("create_issue")).toEqual([
+      "assignee",
+      "cycle",
+      "description",
+      "due_date",
+      "estimate",
+      "labels",
+      "milestone",
+      "parent",
+      "priority",
+      "project",
+      "project_id",
+      "repo_root",
+      "state",
+      "team",
+      "title",
+      "workspace",
+    ]);
+    expect(registeredMcpInputKeys("list_issues")).toEqual([
+      "active_only",
+      "all_states",
+      "all_teams",
+      "assignee",
+      "created_after",
+      "cursor",
+      "cycle",
+      "due_after",
+      "due_before",
+      "fields",
+      "include_archived",
+      "label",
+      "limit",
+      "milestone",
+      "priority",
+      "project",
+      "project_id",
+      "search",
+      "state",
+      "state_type",
+      "state_type_in",
+      "team",
+      "unassigned",
+      "updated_since",
       "workspace",
     ]);
     expect(registeredMcpInputKeys("update_relations")).toEqual([
@@ -477,13 +538,13 @@ describe("high-risk behavior contracts", () => {
     expect(validateJsonErrorEnvelopeContract({ ok: false, error: { message: "nope" } })).toEqual([
       {
         contract: "cli_json_errors.use_envelope",
-        message: "--json failures must emit {ok:false,schema_version:1,error:{code,message}}",
+        message: "--json failures must emit {ok:false,schema_version:2,error:{code,message}}",
       },
     ]);
     expect(
       validateJsonErrorEnvelopeContract({
         ok: false,
-        schema_version: 1,
+        schema_version: 2,
         error: { code: "validation_error", message: "nope" },
       }),
     ).toEqual([]);

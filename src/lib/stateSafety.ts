@@ -1,7 +1,7 @@
 import { chmodSync, lstatSync, mkdirSync } from "node:fs";
 import { dirname, relative, resolve as resolvePath } from "node:path";
 import { AuthError, ValidationError } from "./errors.ts";
-import { LEBOP_HOME } from "./paths.ts";
+import { getLebopHome } from "./paths.ts";
 
 type ErrorFactory = (message: string, hint: string) => Error;
 
@@ -14,7 +14,7 @@ interface StateSafetyOptions {
 export const authStateSafetyError: ErrorFactory = (message, hint) => new AuthError(message, hint);
 
 export function ensureLebopHomeForWrite(options: Partial<StateSafetyOptions> = {}): void {
-  ensureStateDirectoryForWrite(LEBOP_HOME, {
+  ensureStateDirectoryForWrite(getLebopHome(), {
     label: options.label ?? "LEBOP_HOME",
     mode: options.mode ?? 0o700,
     errorFactory: options.errorFactory,
@@ -26,7 +26,7 @@ export function ensureStateDirectoryForWrite(
   options: Partial<StateSafetyOptions> = {},
 ): void {
   const label = options.label ?? "lebop state directory";
-  const root = resolvePath(LEBOP_HOME);
+  const root = resolvePath(getLebopHome());
   const absolute = resolvePath(dir);
   assertWithinStateRoot(root, absolute, label, options.errorFactory);
 

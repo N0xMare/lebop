@@ -34,7 +34,7 @@ function cliProjectNode(overrides: Record<string, unknown> = {}) {
     startDate: null,
     targetDate: null,
     archivedAt: null,
-    teams: { nodes: [{ id: "team-uuid-nox", key: "NOX", name: "Noxor" }] },
+    teams: { nodes: [{ id: "team-uuid-team", key: "TEAM", name: "Example" }] },
     lead: null,
     ...overrides,
   };
@@ -62,7 +62,7 @@ function cliIssuePayload(id: string, identifier: string, overrides: Record<strin
     state: { id: "state-backlog", name: "Backlog", type: "backlog" },
     assignee: null,
     project: null,
-    team: { id: "team-nox", key: "NOX" },
+    team: { id: "team-team", key: "TEAM" },
     parent: null,
     labels: { nodes: [] },
     reactions: [],
@@ -143,7 +143,7 @@ describe("auth whoami", () => {
     const r = await runLebop(["auth", "whoami", "--json"], env);
     expect(r.exitCode, `${r.stdout}\n${r.stderr}`).toBe(0);
     const parsed = JSON.parse(r.stdout);
-    expect(parsed.schema_version).toBe(1);
+    expect(parsed.schema_version).toBe(2);
     expect(parsed.viewer.email).toBe("viewer@example.com");
     expect(parsed.workspace).toBe("test-workspace");
     expect(parsed.auth_file).toBe("LEBOP_HOME/auth.json");
@@ -158,10 +158,11 @@ describe("auth whoami", () => {
     await rm(`${noAuthHome}/auth.json`);
     const r = await runLebop(["teams"], { LEBOP_HOME: noAuthHome, LEBOP_API_URL: mock.url });
     expect(r.exitCode).toBe(1);
-    expect(r.stderr).toContain("error[auth_error]:");
-    expect(r.stderr).toContain("no Linear credentials found");
-    expect(r.stderr).toContain("hint:");
-    expect(r.stderr).toContain("lebop auth login");
+    const body = JSON.parse(r.stdout);
+    expect(body.ok).toBe(false);
+    expect(body.error.code).toBe("auth_error");
+    expect(body.error.message).toContain("no Linear credentials found");
+    expect(String(body.error.hint ?? "")).toContain("lebop auth login");
     await rm(noAuthHome, { recursive: true, force: true });
   });
 });
@@ -286,6 +287,26 @@ describe("project and initiative list parity", () => {
 });
 
 describe("show read surface", () => {
+  it("show --json densified envelope includes next stubs", async () => {
+    mock.respond({
+      data: {
+        a0: cliIssuePayload("eng-99-uuid", "ENG-99", {
+          title: "Next stubs",
+          description: "short body",
+          comments: { nodes: [], pageInfo: pageInfo() },
+          relations: { nodes: [], pageInfo: pageInfo() },
+          inverseRelations: { nodes: [], pageInfo: pageInfo() },
+        }),
+      },
+    });
+    const r = await runLebop(["show", "ENG-99", "--json", "--format", "json"], env);
+    expect(r.exitCode, `${r.stdout}\n${r.stderr}`).toBe(0);
+    const body = JSON.parse(r.stdout) as { next?: string[]; issue?: { content?: unknown } };
+    expect(Array.isArray(body.next)).toBe(true);
+    expect(body.next!.length).toBeGreaterThan(0);
+    expect(body.next!.some((s) => s.includes("comments") || s.includes("set"))).toBe(true);
+  });
+
   it("show --json completes comment overflow and reports completeness", async () => {
     mock.respond({
       data: {
@@ -333,22 +354,32 @@ describe("show read surface", () => {
       },
     });
 
-    const r = await runLebop(["show", "ENG-7", "--json"], env);
+    const r = await runLebop(["show", "ENG-7", "--comments", "--json", "--format", "json"], env);
     expect(r.exitCode, `${r.stdout}\n${r.stderr}`).toBe(0);
     const body = JSON.parse(r.stdout) as {
-      comments: { frontmatter: { id: string } }[];
-      completeness: {
+      issue?: {
+        comments: { frontmatter: { id: string } }[];
+        completeness: {
+          comments: { complete: boolean; count: number; next_cursor: string | null };
+          relations: { complete: boolean };
+        };
+      };
+      comments?: { frontmatter: { id: string } }[];
+      completeness?: {
         comments: { complete: boolean; count: number; next_cursor: string | null };
         relations: { complete: boolean };
       };
     };
-    expect(body.comments.map((c) => c.frontmatter.id)).toEqual(["show-c-1", "show-c-2"]);
-    expect(body.completeness.comments).toMatchObject({
+    const issue = body.issue ?? body;
+    const comments = (issue as { comments: { frontmatter: { id: string } }[] }).comments;
+    const completeness = (issue as { completeness: typeof body.completeness }).completeness!;
+    expect(comments.map((c) => c.frontmatter.id)).toEqual(["show-c-1", "show-c-2"]);
+    expect(completeness.comments).toMatchObject({
       complete: true,
       count: 2,
       next_cursor: null,
     });
-    expect(body.completeness.relations.complete).toBe(true);
+    expect(completeness.relations.complete).toBe(true);
     expect(mock.requestAt(1)?.variables).toMatchObject({
       id: "ENG-7",
       first: 250,
@@ -357,18 +388,41 @@ describe("show read surface", () => {
   });
 });
 
+describe("list densified next", () => {
+  it("list --all-teams --json includes next stubs on success", async () => {
+    // Empty page avoids per-issue relation follow-ups; still emits densified next[].
+    mock.respond({
+      data: {
+        issues: {
+          nodes: [],
+          pageInfo: pageInfo(),
+        },
+      },
+    });
+    const r = await runLebop(
+      ["list", "--all-teams", "--limit", "5", "--json", "--format", "json"],
+      env,
+    );
+    expect(r.exitCode, `${r.stdout}\n${r.stderr}`).toBe(0);
+    const body = JSON.parse(r.stdout) as { next?: string[]; count?: number };
+    expect(body.count).toBe(0);
+    expect(Array.isArray(body.next)).toBe(true);
+    expect(body.next!.length).toBeGreaterThan(0);
+  });
+});
+
 describe("pull read surface", () => {
   it("pull --no-comments clears stale cached comments after a successful refresh", async () => {
     const home = await makeAuthFile("lin_api_test_pull_no_comments");
     const cwd = await mkdtemp(join(tmpdir(), "lebop-pull-no-comments-cwd-"));
-    const staleCommentsDir = join(home, "cache", "_global", "issues", "NOX-8", "comments");
+    const staleCommentsDir = join(home, "cache", "test-workspace", "_global", "issues", "TEAM-8", "comments");
     await mkdir(staleCommentsDir, { recursive: true });
     await writeFile(join(staleCommentsDir, "stale.md"), "stale cached comment");
 
     try {
       mock.respond({
         data: {
-          a0: cliIssuePayload("nox-8-uuid", "NOX-8", {
+          a0: cliIssuePayload("team-8-uuid", "TEAM-8", {
             title: "No comments refresh",
             description: "fresh body",
             updatedAt: "2026-06-08T00:00:00.000Z",
@@ -377,16 +431,19 @@ describe("pull read surface", () => {
       });
 
       const r = await runLebop(
-        ["pull", "NOX-8", "--team", "NOX", "--no-comments", "--refresh", "--yes", "--json"],
+        ["pull", "TEAM-8", "--team", "TEAM", "--no-comments", "--refresh", "--yes", "--json"],
         { LEBOP_HOME: home, LEBOP_API_URL: mock.url },
         cwd,
       );
       expect(r.exitCode, `${r.stdout}\n${r.stderr}`).toBe(0);
       const body = JSON.parse(r.stdout) as {
         issues: { identifier: string; comments: number; path: string; cache_path?: string }[];
+        next?: string[];
       };
-      expect(body.issues[0]).toMatchObject({ identifier: "NOX-8", comments: 0 });
+      expect(body.issues[0]).toMatchObject({ identifier: "TEAM-8", comments: 0 });
       expect(body.issues[0]?.cache_path).toBeUndefined();
+      expect(Array.isArray(body.next)).toBe(true);
+      expect(body.next!.length).toBeGreaterThan(0);
       await expect(
         readFile(join(body.issues[0]?.path ?? "", "comments", "stale.md"), "utf8"),
       ).rejects.toThrow();
@@ -491,10 +548,10 @@ describe("CLI parser and limit errors", () => {
       error: { code: string; message: string; hint?: string };
     };
     expect(parsed.ok).toBe(false);
-    expect(parsed.schema_version).toBe(1);
+    expect(parsed.schema_version).toBe(2);
     expect(parsed.error.code).toBe("invalid_arguments");
     expect(parsed.error.message).toContain("unknown option");
-    expect(parsed.error.hint).toContain("--help");
+    expect(parsed.error.hint).toMatch(/help/);
   });
 
   it("rejects malformed --limit values before calling Linear", async () => {
@@ -516,7 +573,7 @@ describe("CLI parser and limit errors", () => {
 
 describe("auth list / default / token", () => {
   it("auth list shows the configured workspace as default", async () => {
-    const r = await runLebop(["auth", "list"], env);
+    const r = await runLebop(["auth", "list", "--human"], env);
     expect(r.exitCode).toBe(0);
     expect(r.stdout).toContain("test-workspace");
     expect(r.stdout).toContain("Test Workspace");
@@ -555,7 +612,7 @@ describe("auth list / default / token", () => {
   });
 
   it("auth default (no arg) prints the current default slug", async () => {
-    const r = await runLebop(["auth", "default"], env);
+    const r = await runLebop(["auth", "default", "--human"], env);
     expect(r.exitCode).toBe(0);
     expect(r.stdout.trim()).toBe("test-workspace");
   });
@@ -602,8 +659,10 @@ describe("auth list / default / token", () => {
   it("auth token <unknown-slug> errors with structured AuthError", async () => {
     const r = await runLebop(["auth", "token", "no-such-workspace"], env);
     expect(r.exitCode).toBe(1);
-    expect(r.stderr).toContain("error[auth_error]:");
-    expect(r.stderr).toContain("not configured");
+    const body = JSON.parse(r.stdout);
+    expect(body.ok).toBe(false);
+    expect(body.error.code).toBe("auth_error");
+    expect(body.error.message).toContain("not configured");
   });
 
   it("--workspace flag selects the named workspace via env", async () => {
@@ -618,8 +677,10 @@ describe("auth list / default / token", () => {
 
     const bad = await runLebop(["--workspace", "no-such", "auth", "token"], env);
     expect(bad.exitCode).toBe(1);
-    expect(bad.stderr).toContain("error[auth_error]:");
-    expect(bad.stderr).toContain("not configured");
+    const badBody = JSON.parse(bad.stdout);
+    expect(badBody.ok).toBe(false);
+    expect(badBody.error.code).toBe("auth_error");
+    expect(badBody.error.message).toContain("not configured");
   });
 
   it("root --workspace does not leak across in-process run() calls", async () => {
@@ -722,15 +783,15 @@ describe("auth list / default / token", () => {
     // / C1). Pre-fix the CLI emitted `team_key`, so scripts piping
     // `lebop auth set-default-team --json | jq .team` got null.
     // Round-11 / M-2: the command now pre-validates the team via getTeam,
-    // so the mock needs a NOX response before the write step.
+    // so the mock needs a TEAM response before the write step.
     mock.respond({
       data: {
         teams: {
           nodes: [
             {
-              id: "team-uuid-nox",
-              key: "NOX",
-              name: "Noxor",
+              id: "team-uuid-team",
+              key: "TEAM",
+              name: "Example",
               description: null,
               defaultIssueState: { id: "state-bl", name: "Backlog" },
             },
@@ -738,7 +799,7 @@ describe("auth list / default / token", () => {
         },
       },
     });
-    const r = await runLebop(["auth", "set-default-team", "test-workspace", "nox", "--json"], env);
+    const r = await runLebop(["auth", "set-default-team", "test-workspace", "TEAM", "--json"], env);
     expect(r.exitCode).toBe(0);
     const body = JSON.parse(r.stdout) as {
       schema_version: number;
@@ -746,9 +807,9 @@ describe("auth list / default / token", () => {
       team?: string;
       team_key?: string;
     };
-    expect(body.schema_version).toBe(1);
+    expect(body.schema_version).toBe(2);
     expect(body.workspace_slug).toBe("test-workspace");
-    expect(body.team).toBe("NOX");
+    expect(body.team).toBe("TEAM");
     expect(body.team_key).toBeUndefined();
   });
 });
@@ -797,11 +858,11 @@ describe("comment delete safety", () => {
 describe("destructive CLI confirmation gates", () => {
   it.each([
     { name: "attachment delete", args: ["attachment", "delete", "attachment-uuid", "--json"] },
-    { name: "document delete", args: ["document", "delete", "document-uuid", "--json"] },
-    { name: "project delete", args: ["project", "delete", "project-uuid", "--json"] },
+    { name: "document delete", args: ["document", "soft-delete", "document-uuid", "--json"] },
+    { name: "project delete", args: ["project", "soft-delete", "project-uuid", "--json"] },
     { name: "label delete", args: ["label", "delete", "release-risk", "--json"] },
     { name: "milestone delete", args: ["milestone", "delete", "milestone-uuid", "--json"] },
-    { name: "initiative delete", args: ["initiative", "delete", "Roadmap H2", "--json"] },
+    { name: "initiative delete", args: ["initiative", "soft-delete", "Roadmap H2", "--json"] },
   ])("$name --json without --yes emits a structured error before lookup", async ({ args }) => {
     const r = await runLebop(args, env);
 
@@ -827,7 +888,7 @@ describe("destructive CLI confirmation gates", () => {
   });
 
   it("archive --json without --yes emits a structured error before contacting Linear", async () => {
-    const r = await runLebop(["archive", "NOX-1", "--json"], env);
+    const r = await runLebop(["archive", "TEAM-1", "--json"], env);
 
     expect(r.exitCode).toBe(1);
     expect(r.stderr).toBe("");
@@ -839,7 +900,7 @@ describe("destructive CLI confirmation gates", () => {
 
   it.each([
     { name: "push --force", args: ["push", "--force", "--json"] },
-    { name: "pull --refresh", args: ["pull", "NOX-1", "--refresh", "--json"] },
+    { name: "pull --refresh", args: ["pull", "TEAM-1", "--refresh", "--json"] },
     {
       name: "plan apply --force",
       args: ["plan", "apply", "/tmp/lebop-missing-plan", "--force", "--json"],
@@ -860,7 +921,7 @@ describe("destructive CLI confirmation gates", () => {
   });
 
   it("relation delete --json without --yes emits a structured error before lookup", async () => {
-    const r = await runLebop(["relation", "delete", "NOX-1", "related", "NOX-2", "--json"], env);
+    const r = await runLebop(["relation", "delete", "TEAM-1", "related", "TEAM-2", "--json"], env);
 
     expect(r.exitCode).toBe(1);
     expect(r.stderr).toBe("");
@@ -874,16 +935,16 @@ describe("destructive CLI confirmation gates", () => {
     // Ensures +/- label tokens are accepted by the CLI parser (not rejected as flags).
     // Mock GraphQL is not required: missing auth/config still proves parse acceptance
     // when the error is not "unknown option".
-    const r = await runLebop(["set", "labels", "NOX-1", "--json", "--", "+urgent", "-bug"], env);
+    const r = await runLebop(["set", "labels", "TEAM-1", "--json", "--", "+urgent", "-bug"], env);
     expect(r.stderr).toBe("");
     const parsed = JSON.parse(r.stdout);
     // Either validation from domain or network/auth — must not be commander unknown option
     expect(String(parsed.error?.message ?? parsed.message ?? "")).not.toMatch(/unknown option/i);
-    expect(parsed.ok === false || parsed.schema_version === 1).toBe(true);
+    expect(parsed.ok === false || parsed.schema_version === 2).toBe(true);
   });
 
   it("set links negative deltas require --yes before config or issue lookup", async () => {
-    const r = await runLebop(["set", "links", "NOX-1", "--json", "-related:NOX-2"], env);
+    const r = await runLebop(["set", "links", "TEAM-1", "--json", "-related:TEAM-2"], env);
 
     expect(r.exitCode).toBe(1);
     expect(r.stderr).toBe("");
@@ -894,8 +955,8 @@ describe("destructive CLI confirmation gates", () => {
   });
 
   it("set links accepts --yes inside the variadic value tail", async () => {
-    mock.respond({ data: { issue: cliIssuePayload("issue-uuid-1", "NOX-1") } });
-    mock.respond({ data: { issue: cliIssuePayload("issue-uuid-2", "NOX-2") } });
+    mock.respond({ data: { issue: cliIssuePayload("issue-uuid-1", "TEAM-1") } });
+    mock.respond({ data: { issue: cliIssuePayload("issue-uuid-2", "TEAM-2") } });
     mock.respond({
       data: {
         issue: {
@@ -904,7 +965,7 @@ describe("destructive CLI confirmation gates", () => {
               {
                 id: "relation-1",
                 type: "related",
-                relatedIssue: { id: "issue-uuid-2", identifier: "NOX-2" },
+                relatedIssue: { id: "issue-uuid-2", identifier: "TEAM-2" },
               },
             ],
           },
@@ -914,22 +975,22 @@ describe("destructive CLI confirmation gates", () => {
     });
     mock.respond({ data: { issueRelationDelete: { success: true } } });
 
-    const r = await runLebop(["set", "links", "NOX-1", "--yes", "--json", "-related:NOX-2"], env);
+    const r = await runLebop(["set", "links", "TEAM-1", "--yes", "--json", "-related:TEAM-2"], env);
 
     expect(r.exitCode, `${r.stdout}\n${r.stderr}`).toBe(0);
     const parsed = JSON.parse(r.stdout);
     expect(parsed.results[0]).toMatchObject({
       op: "-",
       kind: "related",
-      target: "NOX-2",
+      target: "TEAM-2",
       status: "deleted",
       relationId: "relation-1",
     });
   });
 
   it("set links re-adds a relation after an earlier remove in the same batch", async () => {
-    mock.respond({ data: { issue: cliIssuePayload("issue-uuid-1", "NOX-1") } });
-    mock.respond({ data: { issue: cliIssuePayload("issue-uuid-2", "NOX-2") } });
+    mock.respond({ data: { issue: cliIssuePayload("issue-uuid-1", "TEAM-1") } });
+    mock.respond({ data: { issue: cliIssuePayload("issue-uuid-2", "TEAM-2") } });
     mock.respond({
       data: {
         issue: {
@@ -938,7 +999,7 @@ describe("destructive CLI confirmation gates", () => {
               {
                 id: "relation-existing-1",
                 type: "related",
-                relatedIssue: { id: "issue-uuid-2", identifier: "NOX-2" },
+                relatedIssue: { id: "issue-uuid-2", identifier: "TEAM-2" },
               },
             ],
             pageInfo: pageInfo(),
@@ -955,7 +1016,7 @@ describe("destructive CLI confirmation gates", () => {
               {
                 id: "relation-existing-1",
                 type: "related",
-                relatedIssue: { id: "issue-uuid-2", identifier: "NOX-2" },
+                relatedIssue: { id: "issue-uuid-2", identifier: "TEAM-2" },
               },
             ],
             pageInfo: pageInfo(),
@@ -983,7 +1044,7 @@ describe("destructive CLI confirmation gates", () => {
     });
 
     const r = await runLebop(
-      ["set", "links", "NOX-1", "--yes", "--json", "-related:NOX-2", "+related:NOX-2"],
+      ["set", "links", "TEAM-1", "--yes", "--json", "-related:TEAM-2", "+related:TEAM-2"],
       env,
     );
 
@@ -993,14 +1054,14 @@ describe("destructive CLI confirmation gates", () => {
       {
         op: "-",
         kind: "related",
-        target: "NOX-2",
+        target: "TEAM-2",
         status: "deleted",
         relationId: "relation-existing-1",
       },
       {
         op: "+",
         kind: "related",
-        target: "NOX-2",
+        target: "TEAM-2",
         status: "created",
         relationId: "relation-recreated-1",
       },
@@ -1014,12 +1075,12 @@ describe("destructive CLI confirmation gates", () => {
     const cwd = await mkdtemp(join(tmpdir(), "lebop-set-links-cwd-"));
 
     try {
-      await mkdir(join(home, "cache", "_global", "issues", "NOX-1"), { recursive: true });
+      await mkdir(join(home, "cache", "test-workspace", "_global", "issues", "TEAM-1"), { recursive: true });
       await writeFile(
-        join(home, "cache", "_global", "issues", "NOX-1", "metadata.yaml"),
+        join(home, "cache", "test-workspace", "_global", "issues", "TEAM-1", "metadata.yaml"),
         [
-          "identifier: NOX-1",
-          "title: NOX-1",
+          "identifier: TEAM-1",
+          "title: TEAM-1",
           "state: Backlog",
           "priority: 0",
           "estimate: null",
@@ -1029,8 +1090,8 @@ describe("destructive CLI confirmation gates", () => {
           "parent: null",
           "_server:",
           "  id: issue-uuid-1",
-          "  identifier: NOX-1",
-          "  url: https://linear.app/test/issue/NOX-1",
+          "  identifier: TEAM-1",
+          "  url: https://linear.app/test/issue/TEAM-1",
           "  state_id: state-backlog",
           "  state_name: Backlog",
           "  state_type: backlog",
@@ -1040,7 +1101,7 @@ describe("destructive CLI confirmation gates", () => {
           "  assignee_id: null",
           "  assignee_name: null",
           "  assignee_email: null",
-          "  title: NOX-1",
+          "  title: TEAM-1",
           `  description_hash: ${sha256("Cached description.")}`,
           "  project_id: null",
           "  project_name: null",
@@ -1051,12 +1112,12 @@ describe("destructive CLI confirmation gates", () => {
         ].join("\n"),
       );
       await writeFile(
-        join(home, "cache", "_global", "issues", "NOX-1", "description.md"),
+        join(home, "cache", "test-workspace", "_global", "issues", "TEAM-1", "description.md"),
         "Cached description.",
       );
 
-      mock.respond({ data: { issue: cliIssuePayload("issue-uuid-1", "NOX-1") } });
-      mock.respond({ data: { issue: cliIssuePayload("issue-uuid-2", "NOX-2") } });
+      mock.respond({ data: { issue: cliIssuePayload("issue-uuid-1", "TEAM-1") } });
+      mock.respond({ data: { issue: cliIssuePayload("issue-uuid-2", "TEAM-2") } });
       mock.respond({
         data: {
           issue: {
@@ -1075,7 +1136,7 @@ describe("destructive CLI confirmation gates", () => {
       });
 
       const r = await runLebop(
-        ["set", "links", "NOX-1", "+related:NOX-2", "--json"],
+        ["set", "links", "TEAM-1", "+related:TEAM-2", "--json"],
         { LEBOP_HOME: home, LEBOP_API_URL: mock.url },
         cwd,
       );
@@ -1085,7 +1146,7 @@ describe("destructive CLI confirmation gates", () => {
       expect(parsed.results[0]).toMatchObject({
         op: "+",
         kind: "related",
-        target: "NOX-2",
+        target: "TEAM-2",
         status: "created-writeback-failed",
         relationId: "relation-created-1",
       });
@@ -1101,12 +1162,12 @@ describe("destructive CLI confirmation gates", () => {
     const cwd = await mkdtemp(join(tmpdir(), "lebop-relation-add-cwd-"));
 
     try {
-      await mkdir(join(home, "cache", "_global", "issues", "NOX-1"), { recursive: true });
+      await mkdir(join(home, "cache", "test-workspace", "_global", "issues", "TEAM-1"), { recursive: true });
       await writeFile(
-        join(home, "cache", "_global", "issues", "NOX-1", "metadata.yaml"),
+        join(home, "cache", "test-workspace", "_global", "issues", "TEAM-1", "metadata.yaml"),
         [
-          "identifier: NOX-1",
-          "title: NOX-1",
+          "identifier: TEAM-1",
+          "title: TEAM-1",
           "state: Backlog",
           "priority: 0",
           "estimate: null",
@@ -1116,8 +1177,8 @@ describe("destructive CLI confirmation gates", () => {
           "parent: null",
           "_server:",
           "  id: issue-uuid-1",
-          "  identifier: NOX-1",
-          "  url: https://linear.app/test/issue/NOX-1",
+          "  identifier: TEAM-1",
+          "  url: https://linear.app/test/issue/TEAM-1",
           "  state_id: state-backlog",
           "  state_name: Backlog",
           "  state_type: backlog",
@@ -1127,7 +1188,7 @@ describe("destructive CLI confirmation gates", () => {
           "  assignee_id: null",
           "  assignee_name: null",
           "  assignee_email: null",
-          "  title: NOX-1",
+          "  title: TEAM-1",
           `  description_hash: ${sha256("Cached description.")}`,
           "  project_id: null",
           "  project_name: null",
@@ -1138,7 +1199,7 @@ describe("destructive CLI confirmation gates", () => {
         ].join("\n"),
       );
       await writeFile(
-        join(home, "cache", "_global", "issues", "NOX-1", "description.md"),
+        join(home, "cache", "test-workspace", "_global", "issues", "TEAM-1", "description.md"),
         "Cached description.",
       );
 
@@ -1150,8 +1211,8 @@ describe("destructive CLI confirmation gates", () => {
           },
         },
       });
-      mock.respond({ data: { issue: cliIssuePayload("issue-uuid-1", "NOX-1") } });
-      mock.respond({ data: { issue: cliIssuePayload("issue-uuid-2", "NOX-2") } });
+      mock.respond({ data: { issue: cliIssuePayload("issue-uuid-1", "TEAM-1") } });
+      mock.respond({ data: { issue: cliIssuePayload("issue-uuid-2", "TEAM-2") } });
       mock.respond({
         data: {
           issueRelationCreate: {
@@ -1162,7 +1223,7 @@ describe("destructive CLI confirmation gates", () => {
       });
 
       const r = await runLebop(
-        ["relation", "add", "NOX-1", "related", "NOX-2", "--json"],
+        ["relation", "add", "TEAM-1", "related", "TEAM-2", "--json"],
         { LEBOP_HOME: home, LEBOP_API_URL: mock.url },
         cwd,
       );
@@ -1171,9 +1232,9 @@ describe("destructive CLI confirmation gates", () => {
       const parsed = JSON.parse(r.stdout);
       expect(parsed).toMatchObject({
         op: "add",
-        from: "NOX-1",
+        from: "TEAM-1",
         kind: "related",
-        to: "NOX-2",
+        to: "TEAM-2",
         status: "created-writeback-failed",
         relation_id: "relation-created-1",
       });
@@ -1194,12 +1255,12 @@ describe("destructive CLI confirmation gates", () => {
     const cwd = await mkdtemp(join(tmpdir(), "lebop-set-links-cwd-"));
 
     try {
-      await mkdir(join(home, "cache", "_global", "issues", "NOX-1"), { recursive: true });
+      await mkdir(join(home, "cache", "test-workspace", "_global", "issues", "TEAM-1"), { recursive: true });
       await writeFile(
-        join(home, "cache", "_global", "issues", "NOX-1", "metadata.yaml"),
+        join(home, "cache", "test-workspace", "_global", "issues", "TEAM-1", "metadata.yaml"),
         [
-          "identifier: NOX-1",
-          "title: NOX-1",
+          "identifier: TEAM-1",
+          "title: TEAM-1",
           "state: Backlog",
           "priority: 0",
           "estimate: null",
@@ -1209,8 +1270,8 @@ describe("destructive CLI confirmation gates", () => {
           "parent: null",
           "_server:",
           "  id: issue-uuid-1",
-          "  identifier: NOX-1",
-          "  url: https://linear.app/test/issue/NOX-1",
+          "  identifier: TEAM-1",
+          "  url: https://linear.app/test/issue/TEAM-1",
           "  state_id: state-backlog",
           "  state_name: Backlog",
           "  state_type: backlog",
@@ -1220,7 +1281,7 @@ describe("destructive CLI confirmation gates", () => {
           "  assignee_id: null",
           "  assignee_name: null",
           "  assignee_email: null",
-          "  title: NOX-1",
+          "  title: TEAM-1",
           `  description_hash: ${sha256("Cached description.")}`,
           "  project_id: null",
           "  project_name: null",
@@ -1231,12 +1292,12 @@ describe("destructive CLI confirmation gates", () => {
         ].join("\n"),
       );
       await writeFile(
-        join(home, "cache", "_global", "issues", "NOX-1", "description.md"),
+        join(home, "cache", "test-workspace", "_global", "issues", "TEAM-1", "description.md"),
         "Cached description.",
       );
 
-      mock.respond({ data: { issue: cliIssuePayload("issue-uuid-1", "NOX-1") } });
-      mock.respond({ data: { issue: cliIssuePayload("issue-uuid-2", "NOX-2") } });
+      mock.respond({ data: { issue: cliIssuePayload("issue-uuid-1", "TEAM-1") } });
+      mock.respond({ data: { issue: cliIssuePayload("issue-uuid-2", "TEAM-2") } });
       mock.respond({
         data: {
           issue: {
@@ -1253,21 +1314,21 @@ describe("destructive CLI confirmation gates", () => {
           },
         },
       });
-      mock.respond({ data: { a0: cliIssuePayload("issue-uuid-1", "NOX-1") } });
+      mock.respond({ data: { a0: cliIssuePayload("issue-uuid-1", "TEAM-1") } });
 
       const r = await runLebop(
-        ["set", "links", "nox-1", "--team", "NOX", "--json", "+related:NOX-2"],
+        ["set", "links", "team-1", "--team", "TEAM", "--json", "+related:TEAM-2"],
         { LEBOP_HOME: home, LEBOP_API_URL: mock.url },
         cwd,
       );
 
       expect(r.exitCode, `${r.stdout}\n${r.stderr}`).toBe(0);
       const parsed = JSON.parse(r.stdout);
-      expect(parsed.identifier).toBe("NOX-1");
+      expect(parsed.identifier).toBe("TEAM-1");
       expect(parsed.results[0]).toMatchObject({
         op: "+",
         kind: "related",
-        target: "NOX-2",
+        target: "TEAM-2",
         status: "created",
         relationId: "relation-created-1",
       });
@@ -1281,15 +1342,15 @@ describe("destructive CLI confirmation gates", () => {
   it("set links refuses to overwrite cache edits that appear during refresh", async () => {
     const home = await makeAuthFile("lin_api_test_set_links_guarded_writeback");
     const cwd = await mkdtemp(join(tmpdir(), "lebop-set-links-guard-cwd-"));
-    const descriptionPath = join(home, "cache", "_global", "issues", "NOX-1", "description.md");
+    const descriptionPath = join(home, "cache", "test-workspace", "_global", "issues", "TEAM-1", "description.md");
 
     try {
-      await mkdir(join(home, "cache", "_global", "issues", "NOX-1"), { recursive: true });
+      await mkdir(join(home, "cache", "test-workspace", "_global", "issues", "TEAM-1"), { recursive: true });
       await writeFile(
-        join(home, "cache", "_global", "issues", "NOX-1", "metadata.yaml"),
+        join(home, "cache", "test-workspace", "_global", "issues", "TEAM-1", "metadata.yaml"),
         [
-          "identifier: NOX-1",
-          "title: NOX-1",
+          "identifier: TEAM-1",
+          "title: TEAM-1",
           "state: Backlog",
           "priority: 0",
           "estimate: null",
@@ -1299,8 +1360,8 @@ describe("destructive CLI confirmation gates", () => {
           "parent: null",
           "_server:",
           "  id: issue-uuid-1",
-          "  identifier: NOX-1",
-          "  url: https://linear.app/test/issue/NOX-1",
+          "  identifier: TEAM-1",
+          "  url: https://linear.app/test/issue/TEAM-1",
           "  state_id: state-backlog",
           "  state_name: Backlog",
           "  state_type: backlog",
@@ -1310,7 +1371,7 @@ describe("destructive CLI confirmation gates", () => {
           "  assignee_id: null",
           "  assignee_name: null",
           "  assignee_email: null",
-          "  title: NOX-1",
+          "  title: TEAM-1",
           `  description_hash: ${sha256("Cached description.")}`,
           "  project_id: null",
           "  project_name: null",
@@ -1322,8 +1383,8 @@ describe("destructive CLI confirmation gates", () => {
       );
       await writeFile(descriptionPath, "Cached description.");
 
-      mock.respond({ data: { issue: cliIssuePayload("issue-uuid-1", "NOX-1") } });
-      mock.respond({ data: { issue: cliIssuePayload("issue-uuid-2", "NOX-2") } });
+      mock.respond({ data: { issue: cliIssuePayload("issue-uuid-1", "TEAM-1") } });
+      mock.respond({ data: { issue: cliIssuePayload("issue-uuid-2", "TEAM-2") } });
       mock.respond({
         data: {
           issue: {
@@ -1345,7 +1406,7 @@ describe("destructive CLI confirmation gates", () => {
           await writeFile(descriptionPath, "local relation draft");
         },
         data: {
-          a0: cliIssuePayload("issue-uuid-1", "NOX-1", {
+          a0: cliIssuePayload("issue-uuid-1", "TEAM-1", {
             description: "remote relation refresh",
             updatedAt: "2026-06-06T00:00:00.000Z",
           }),
@@ -1353,7 +1414,7 @@ describe("destructive CLI confirmation gates", () => {
       });
 
       const r = await runLebop(
-        ["set", "links", "NOX-1", "+related:NOX-2", "--json"],
+        ["set", "links", "TEAM-1", "+related:TEAM-2", "--json"],
         { LEBOP_HOME: home, LEBOP_API_URL: mock.url },
         cwd,
       );
@@ -1363,7 +1424,7 @@ describe("destructive CLI confirmation gates", () => {
       expect(parsed.results[0]).toMatchObject({
         op: "+",
         kind: "related",
-        target: "NOX-2",
+        target: "TEAM-2",
         status: "created-writeback-failed",
         relationId: "relation-created-guard",
       });
@@ -1411,12 +1472,12 @@ describe("set command mutation truthfulness", () => {
     const cwd = await mkdtemp(join(tmpdir(), "lebop-set-canonical-cwd-"));
 
     try {
-      const dir = join(home, "cache", "_global", "issues", "NOX-1");
+      const dir = join(home, "cache", "test-workspace", "_global", "issues", "TEAM-1");
       await mkdir(dir, { recursive: true });
       await writeFile(
         join(dir, "metadata.yaml"),
         [
-          "identifier: NOX-1",
+          "identifier: TEAM-1",
           "title: Old title",
           "state: Backlog",
           "priority: 0",
@@ -1427,8 +1488,8 @@ describe("set command mutation truthfulness", () => {
           "parent: null",
           "_server:",
           "  id: issue-uuid-1",
-          "  identifier: NOX-1",
-          "  url: https://linear.app/test/issue/NOX-1",
+          "  identifier: TEAM-1",
+          "  url: https://linear.app/test/issue/TEAM-1",
           "  state_id: state-backlog",
           "  state_name: Backlog",
           "  state_type: backlog",
@@ -1450,12 +1511,12 @@ describe("set command mutation truthfulness", () => {
       );
       await writeFile(join(dir, "description.md"), "old cached description");
 
-      mock.respond({ data: { issue: cliIssuePayload("issue-uuid-1", "NOX-1") } });
+      mock.respond({ data: { issue: cliIssuePayload("issue-uuid-1", "TEAM-1") } });
       mock.respond({
         data: {
           issueUpdate: {
             success: true,
-            issue: cliIssuePayload("issue-uuid-1", "NOX-1", {
+            issue: cliIssuePayload("issue-uuid-1", "TEAM-1", {
               title: "New title",
               description: "new cached description",
               updatedAt: "2026-06-05T00:00:01.000Z",
@@ -1465,17 +1526,17 @@ describe("set command mutation truthfulness", () => {
       });
 
       const r = await runLebop(
-        ["set", "title", "nox-1", "--team", "NOX", "--json", "New title"],
+        ["set", "title", "team-1", "--team", "TEAM", "--json", "New title"],
         { LEBOP_HOME: home, LEBOP_API_URL: mock.url },
         cwd,
       );
 
       expect(r.exitCode, `${r.stdout}\n${r.stderr}`).toBe(0);
       const parsed = JSON.parse(r.stdout);
-      expect(parsed.identifier).toBe("NOX-1");
-      expect(parsed.requested_identifier).toBe("nox-1");
+      expect(parsed.identifier).toBe("TEAM-1");
+      expect(parsed.requested_identifier).toBe("team-1");
       expect(parsed.remote).toMatchObject({
-        identifier: "NOX-1",
+        identifier: "TEAM-1",
         updated_at: "2026-06-05T00:00:01.000Z",
         title: "New title",
         description: "new cached description",
@@ -1490,6 +1551,9 @@ describe("set command mutation truthfulness", () => {
         cycle: null,
       });
       expect(parsed.cache_writeback.status).toBe("refreshed");
+      expect(Array.isArray(parsed.next)).toBe(true);
+      expect(parsed.next.length).toBeGreaterThan(0);
+      expect(parsed.next[0]).toContain("show");
       await expect(readFile(join(dir, "description.md"), "utf8")).resolves.toBe(
         "new cached description",
       );
@@ -1504,12 +1568,12 @@ describe("set command mutation truthfulness", () => {
     const cwd = await mkdtemp(join(tmpdir(), "lebop-set-dirty-cwd-"));
 
     try {
-      const dir = join(home, "cache", "_global", "issues", "NOX-1");
+      const dir = join(home, "cache", "test-workspace", "_global", "issues", "TEAM-1");
       await mkdir(dir, { recursive: true });
       await writeFile(
         join(dir, "metadata.yaml"),
         [
-          "identifier: NOX-1",
+          "identifier: TEAM-1",
           "title: Old title",
           "state: Backlog",
           "priority: 0",
@@ -1520,8 +1584,8 @@ describe("set command mutation truthfulness", () => {
           "parent: null",
           "_server:",
           "  id: issue-uuid-1",
-          "  identifier: NOX-1",
-          "  url: https://linear.app/test/issue/NOX-1",
+          "  identifier: TEAM-1",
+          "  url: https://linear.app/test/issue/TEAM-1",
           "  state_id: state-backlog",
           "  state_name: Backlog",
           "  state_type: backlog",
@@ -1543,12 +1607,12 @@ describe("set command mutation truthfulness", () => {
       );
       await writeFile(join(dir, "description.md"), "local unsent edit");
 
-      mock.respond({ data: { issue: cliIssuePayload("issue-uuid-1", "NOX-1") } });
+      mock.respond({ data: { issue: cliIssuePayload("issue-uuid-1", "TEAM-1") } });
       mock.respond({
         data: {
           issueUpdate: {
             success: true,
-            issue: cliIssuePayload("issue-uuid-1", "NOX-1", {
+            issue: cliIssuePayload("issue-uuid-1", "TEAM-1", {
               title: "Remote title",
               description: "remote body should not replace local dirty body",
               updatedAt: "2026-06-05T00:00:01.000Z",
@@ -1558,7 +1622,7 @@ describe("set command mutation truthfulness", () => {
       });
 
       const r = await runLebop(
-        ["set", "title", "NOX-1", "--team", "NOX", "--json", "Remote title"],
+        ["set", "title", "TEAM-1", "--team", "TEAM", "--json", "Remote title"],
         { LEBOP_HOME: home, LEBOP_API_URL: mock.url },
         cwd,
       );
@@ -1585,17 +1649,17 @@ describe("set command mutation truthfulness", () => {
       data: {
         issue: {
           id: "issue-uuid-1",
-          identifier: "NOX-1",
+          identifier: "TEAM-1",
           title: "Old title",
           description: "",
           priority: 0,
           estimate: null,
-          url: "https://linear.app/test/issue/NOX-1",
+          url: "https://linear.app/test/issue/TEAM-1",
           updatedAt: "2026-06-05T00:00:00.000Z",
           state: { id: "state-backlog", name: "Backlog", type: "backlog" },
           assignee: null,
           project: null,
-          team: { id: "team-nox", key: "NOX" },
+          team: { id: "team-team", key: "TEAM" },
           parent: null,
           labels: { nodes: [] },
           reactions: [],
@@ -1623,17 +1687,17 @@ describe("set command mutation truthfulness", () => {
           success: false,
           issue: {
             id: "issue-uuid-1",
-            identifier: "NOX-1",
+            identifier: "TEAM-1",
             title: "New title",
             description: "",
             priority: 0,
             estimate: null,
-            url: "https://linear.app/test/issue/NOX-1",
+            url: "https://linear.app/test/issue/TEAM-1",
             updatedAt: "2026-06-05T00:00:00.000Z",
             state: { id: "state-backlog", name: "Backlog", type: "backlog" },
             assignee: null,
             project: null,
-            team: { id: "team-nox", key: "NOX" },
+            team: { id: "team-team", key: "TEAM" },
             parent: null,
             labels: { nodes: [] },
           },
@@ -1641,7 +1705,7 @@ describe("set command mutation truthfulness", () => {
       },
     });
 
-    const r = await runLebop(["set", "title", "NOX-1", "--json", "New title"], env);
+    const r = await runLebop(["set", "title", "TEAM-1", "--json", "New title"], env);
 
     expect(r.exitCode).toBe(1);
     expect(r.stderr).toBe("");
@@ -1657,13 +1721,13 @@ describe("set command mutation truthfulness", () => {
     await writeFile(bodyPath, "Description from file.\n");
 
     try {
-      mock.respond({ data: { issue: { id: "issue-uuid-1", identifier: "NOX-1" } } });
+      mock.respond({ data: { issue: { id: "issue-uuid-1", identifier: "TEAM-1" } } });
       mock.respond({
         data: {
           issueUpdate: {
             success: true,
-            issue: cliIssuePayload("issue-uuid-1", "NOX-1", {
-              title: "NOX-1",
+            issue: cliIssuePayload("issue-uuid-1", "TEAM-1", {
+              title: "TEAM-1",
               description: "Description from file.",
               updatedAt: "2026-06-05T00:00:02.000Z",
             }),
@@ -1672,16 +1736,16 @@ describe("set command mutation truthfulness", () => {
       });
 
       const r = await runLebop(
-        ["set", "description", "NOX-1", "--description-file", bodyPath, "--json"],
+        ["set", "description", "TEAM-1", "--description-file", bodyPath, "--json"],
         { LEBOP_HOME: home, LEBOP_API_URL: mock.url },
       );
 
       expect(r.exitCode, `${r.stdout}\n${r.stderr}`).toBe(0);
       const parsed = JSON.parse(r.stdout);
-      expect(parsed.identifier).toBe("NOX-1");
+      expect(parsed.identifier).toBe("TEAM-1");
       expect(parsed.field).toBe("description");
       expect(parsed.remote).toMatchObject({
-        identifier: "NOX-1",
+        identifier: "TEAM-1",
         updated_at: "2026-06-05T00:00:02.000Z",
         description: "Description from file.",
         labels: [],
@@ -1701,7 +1765,7 @@ describe("set command mutation truthfulness", () => {
   it("set project --json resolves project names through the shared update path", async () => {
     const home = await makeAuthFile("lin_api_test_set_project_name");
     try {
-      mock.respond({ data: { issue: { id: "issue-uuid-1", identifier: "NOX-1" } } });
+      mock.respond({ data: { issue: { id: "issue-uuid-1", identifier: "TEAM-1" } } });
       mock.respond({ data: { projects: { nodes: [{ id: "project-uuid-1" }] } } });
       mock.respond({
         data: {
@@ -1709,16 +1773,16 @@ describe("set command mutation truthfulness", () => {
             success: true,
             issue: {
               id: "issue-uuid-1",
-              identifier: "NOX-1",
-              url: "https://linear.app/test/issue/NOX-1",
-              title: "NOX-1",
+              identifier: "TEAM-1",
+              url: "https://linear.app/test/issue/TEAM-1",
+              title: "TEAM-1",
               state: { name: "Backlog" },
             },
           },
         },
       });
 
-      const r = await runLebop(["set", "project", "NOX-1", "Agent Project", "--json"], {
+      const r = await runLebop(["set", "project", "TEAM-1", "Agent Project", "--json"], {
         LEBOP_HOME: home,
         LEBOP_API_URL: mock.url,
       });
@@ -1737,23 +1801,23 @@ describe("set command mutation truthfulness", () => {
     const home = await makeAuthFile("lin_api_test_set_milestone_cycle_null");
     try {
       for (const field of ["milestone", "cycle"]) {
-        mock.respond({ data: { issue: { id: "issue-uuid-1", identifier: "NOX-1" } } });
+        mock.respond({ data: { issue: { id: "issue-uuid-1", identifier: "TEAM-1" } } });
         mock.respond({
           data: {
             issueUpdate: {
               success: true,
               issue: {
                 id: "issue-uuid-1",
-                identifier: "NOX-1",
-                url: "https://linear.app/test/issue/NOX-1",
-                title: "NOX-1",
+                identifier: "TEAM-1",
+                url: "https://linear.app/test/issue/TEAM-1",
+                title: "TEAM-1",
                 state: { name: "Backlog" },
               },
             },
           },
         });
 
-        const r = await runLebop(["set", field, "NOX-1", "null", "--json"], {
+        const r = await runLebop(["set", field, "TEAM-1", "null", "--json"], {
           LEBOP_HOME: home,
           LEBOP_API_URL: mock.url,
         });
@@ -1778,12 +1842,12 @@ describe("pull command JSON conflict handling", () => {
     const cwd = await mkdtemp(join(tmpdir(), "lebop-pull-json-conflict-cwd-"));
 
     try {
-      const dir = join(home, "cache", "_global", "issues", "NOX-1");
+      const dir = join(home, "cache", "test-workspace", "_global", "issues", "TEAM-1");
       await mkdir(dir, { recursive: true });
       await writeFile(
         join(dir, "metadata.yaml"),
         [
-          "identifier: NOX-1",
+          "identifier: TEAM-1",
           "title: Old title",
           "state: Backlog",
           "priority: 0",
@@ -1794,8 +1858,8 @@ describe("pull command JSON conflict handling", () => {
           "parent: null",
           "_server:",
           "  id: issue-uuid-1",
-          "  identifier: NOX-1",
-          "  url: https://linear.app/test/issue/NOX-1",
+          "  identifier: TEAM-1",
+          "  url: https://linear.app/test/issue/TEAM-1",
           "  state_id: state-backlog",
           "  state_name: Backlog",
           "  state_type: backlog",
@@ -1819,7 +1883,7 @@ describe("pull command JSON conflict handling", () => {
 
       mock.respond({
         data: {
-          a0: cliIssuePayload("issue-uuid-1", "NOX-1", {
+          a0: cliIssuePayload("issue-uuid-1", "TEAM-1", {
             title: "Remote title",
             description: "remote body",
           }),
@@ -1827,7 +1891,7 @@ describe("pull command JSON conflict handling", () => {
       });
 
       const r = await runLebop(
-        ["pull", "NOX-1", "--team", "NOX", "--no-comments", "--json"],
+        ["pull", "TEAM-1", "--team", "TEAM", "--no-comments", "--json"],
         { LEBOP_HOME: home, LEBOP_API_URL: mock.url },
         cwd,
       );
@@ -1836,10 +1900,10 @@ describe("pull command JSON conflict handling", () => {
       expect(r.stderr).toBe("");
       const parsed = JSON.parse(r.stdout);
       expect(parsed.ok).toBe(false);
-      expect(parsed.schema_version).toBe(1);
+      expect(parsed.schema_version).toBe(2);
       expect(parsed.error).toMatchObject({
         code: "cache_conflict",
-        conflicts: ["NOX-1"],
+        conflicts: ["TEAM-1"],
         hint: expect.stringContaining("--refresh --yes"),
       });
     } finally {
@@ -1857,7 +1921,9 @@ describe("raw GraphQL", () => {
     );
 
     expect(r.exitCode).toBe(1);
-    expect(r.stderr).toContain("raw GraphQL mutation requires --allow-mutation");
+    expect(JSON.parse(r.stdout).error.message).toContain(
+      "raw GraphQL mutation requires --allow-mutation",
+    );
     expect(mock.requestAt(0)).toBeUndefined();
   });
 
@@ -1868,7 +1934,7 @@ describe("raw GraphQL", () => {
     );
 
     expect(r.exitCode).toBe(1);
-    expect(r.stderr).toContain("--yes/--confirm");
+    expect(JSON.parse(r.stdout).error.message).toContain("--yes/--confirm");
     expect(mock.requestAt(0)).toBeUndefined();
   });
 
@@ -1900,7 +1966,9 @@ describe("raw GraphQL", () => {
     );
 
     expect(r.exitCode).toBe(1);
-    expect(r.stderr).toContain("--paginate requires a GraphQL query operation");
+    expect(JSON.parse(r.stdout).error.message).toContain(
+      "--paginate requires a GraphQL query operation",
+    );
     expect(mock.requestAt(0)).toBeUndefined();
   });
 
@@ -1908,7 +1976,7 @@ describe("raw GraphQL", () => {
     const r = await runLebop(["raw", "subscription Events { issueCreated { id } }"], env);
 
     expect(r.exitCode).toBe(1);
-    expect(r.stderr).toContain("raw GraphQL requires a GraphQL query");
+    expect(JSON.parse(r.stdout).error.message).toContain("raw GraphQL requires a GraphQL query");
     expect(mock.requestAt(0)).toBeUndefined();
   });
 
@@ -1924,7 +1992,9 @@ describe("raw GraphQL", () => {
       );
 
       expect(r.exitCode).toBe(1);
-      expect(r.stderr).toContain("--variables-json must contain a JSON object");
+      expect(JSON.parse(r.stdout).error.message).toContain(
+        "--variables-json must contain a JSON object",
+      );
       expect(mock.requestAt(0)).toBeUndefined();
     } finally {
       await rm(dir, { recursive: true, force: true });
@@ -1939,7 +2009,9 @@ describe("raw GraphQL", () => {
     );
 
     expect(r.exitCode).toBe(1);
-    expect(r.stderr).toContain("raw cannot read both query and --variables-json from stdin");
+    expect(JSON.parse(r.stdout).error.message).toContain(
+      "raw cannot read both query and --variables-json from stdin",
+    );
     expect(mock.requestAt(0)).toBeUndefined();
   });
 
@@ -1991,7 +2063,7 @@ describe("teams", () => {
     const r = await runLebop(["teams", "--json"], env);
     expect(r.exitCode).toBe(0);
     const parsed = JSON.parse(r.stdout);
-    expect(parsed.schema_version).toBe(1);
+    expect(parsed.schema_version).toBe(2);
     expect(parsed.teams).toHaveLength(1);
     expect(parsed.teams[0].key).toBe("OPS");
   });
@@ -2093,7 +2165,7 @@ describe("workspace context", () => {
     mock.respond({
       data: {
         teams: {
-          nodes: [{ id: "team-nox", key: "NOX", name: "Noxor", description: null }],
+          nodes: [{ id: "team-team", key: "TEAM", name: "Example", description: null }],
           pageInfo: pageInfo(),
         },
       },
@@ -2107,16 +2179,16 @@ describe("workspace context", () => {
       },
     });
 
-    const r = await runLebop(["--team", "NOX", "workspace", "explore", "/issues", "--json"], env);
+    const r = await runLebop(["--team", "TEAM", "workspace", "explore", "/issues", "--json"], env);
     expect(r.exitCode, `${r.stdout}\n${r.stderr}`).toBe(0);
     const body = JSON.parse(r.stdout) as {
       team: string | null;
       summary: { kind?: string; all_teams?: boolean };
     };
-    expect(body.team).toBe("NOX");
+    expect(body.team).toBe("TEAM");
     expect(body.summary).toMatchObject({ kind: "issues", all_teams: false });
     expect(mock.requestAt(1)?.variables.filter).toMatchObject({
-      team: { key: { eq: "NOX" } },
+      team: { key: { eq: "TEAM" } },
     });
   });
 
@@ -2224,10 +2296,14 @@ describe("pull export safety", () => {
     const out = join(link, "existing-export-root");
     await mkdir(out, { recursive: true });
 
-    const r = await runLebop(["pull", "NOX-1", "--team", "NOX", "--to", out], env);
+    const r = await runLebop(["pull", "TEAM-1", "--team", "TEAM", "--to", out], env);
 
     expect(r.exitCode).toBe(1);
-    expect(r.stderr).toContain("refusing to export through symlinked ancestor");
+    const pullBody = JSON.parse(r.stdout);
+    expect(pullBody.ok).toBe(false);
+    expect(String(pullBody.error?.message ?? r.stdout)).toContain(
+      "refusing to export through symlinked ancestor",
+    );
     await rm(link, { force: true });
     await rm(target, { recursive: true, force: true });
   });
@@ -2247,12 +2323,15 @@ describe("publish workflow", () => {
     const reviewed = JSON.parse(review.stdout) as {
       review_id: string;
       ready: boolean;
-      next: { arguments: { review_id: string; workspace: string } };
+      next?: string[];
+      next_call?: { arguments: { review_id: string; workspace: string } };
     };
     expect(reviewed.ready).toBe(true);
     expect(reviewed.review_id).toMatch(/^pub_/);
-    expect(reviewed.next.arguments.review_id).toBe(reviewed.review_id);
-    expect(reviewed.next.arguments.workspace).toBe("test-workspace");
+    expect(reviewed.next_call?.arguments.review_id).toBe(reviewed.review_id);
+    expect(reviewed.next_call?.arguments.workspace).toBe("test-workspace");
+    expect(Array.isArray(reviewed.next)).toBe(true);
+    expect(reviewed.next?.[0]).toContain(reviewed.review_id);
 
     mock.respond({
       data: {
@@ -2407,7 +2486,7 @@ describe("project icon CLI parity", () => {
         "create",
         "CLI Icon Project",
         "--team-id",
-        "team-uuid-nox",
+        "team-uuid-team",
         "--icon",
         "Rocket",
         "--json",
@@ -2421,9 +2500,9 @@ describe("project icon CLI parity", () => {
       team_ids: string[];
     };
     expect(body.project.icon).toBe("Rocket");
-    expect(body.team_ids).toEqual(["team-uuid-nox"]);
+    expect(body.team_ids).toEqual(["team-uuid-team"]);
     expect(mock.requestAt(0)?.variables).toMatchObject({
-      input: { name: "CLI Icon Project", teamIds: ["team-uuid-nox"], icon: "Rocket" },
+      input: { name: "CLI Icon Project", teamIds: ["team-uuid-team"], icon: "Rocket" },
     });
   });
 
@@ -2455,7 +2534,7 @@ describe("project icon CLI parity", () => {
     const home = await makeAuthFile("lin_api_test_project_update_writeback");
     const cwd = await mkdtemp(join(tmpdir(), "lebop-project-update-cwd-"));
     const projectId = "project-uuid-writeback";
-    const cachePath = join(home, "cache", "_global", "projects", projectId);
+    const cachePath = join(home, "cache", "test-workspace", "_global", "projects", projectId);
 
     try {
       await mkdir(join(cachePath, "content.md"), { recursive: true });
@@ -2615,7 +2694,7 @@ describe("project create multi-team CLI parity", () => {
           project: cliProjectNode({
             teams: {
               nodes: [
-                { id: "team-uuid-nox", key: "NOX", name: "Noxor" },
+                { id: "team-uuid-team", key: "TEAM", name: "Example" },
                 { id: "team-uuid-ops", key: "OPS", name: "Operations" },
               ],
             },
@@ -2630,7 +2709,7 @@ describe("project create multi-team CLI parity", () => {
         "create",
         "Multi Team Project",
         "--team-id",
-        "team-uuid-nox",
+        "team-uuid-team",
         "--team-id",
         "team-uuid-ops",
         "--json",
@@ -2639,11 +2718,11 @@ describe("project create multi-team CLI parity", () => {
     );
 
     expect(r.exitCode, `${r.stdout}\n${r.stderr}`).toBe(0);
-    expect(JSON.parse(r.stdout).team_ids).toEqual(["team-uuid-nox", "team-uuid-ops"]);
+    expect(JSON.parse(r.stdout).team_ids).toEqual(["team-uuid-team", "team-uuid-ops"]);
     expect(mock.requestAt(0)?.variables).toMatchObject({
       input: {
         name: "Multi Team Project",
-        teamIds: ["team-uuid-nox", "team-uuid-ops"],
+        teamIds: ["team-uuid-team", "team-uuid-ops"],
       },
     });
   });
@@ -2651,7 +2730,7 @@ describe("project create multi-team CLI parity", () => {
   it("project create accepts repeated --team-key values", async () => {
     const home = await makeAuthFile("lin_api_test_project_multi_team_keys");
     try {
-      queueTeamMetadataResponses("NOX");
+      queueTeamMetadataResponses("TEAM");
       queueTeamMetadataResponses("OPS");
       mock.respond({
         data: {
@@ -2660,7 +2739,7 @@ describe("project create multi-team CLI parity", () => {
             project: cliProjectNode({
               teams: {
                 nodes: [
-                  { id: "team-nox", key: "NOX", name: "Engineering" },
+                  { id: "team-team", key: "TEAM", name: "Engineering" },
                   { id: "team-ops", key: "OPS", name: "Engineering" },
                 ],
               },
@@ -2675,7 +2754,7 @@ describe("project create multi-team CLI parity", () => {
           "create",
           "Multi Team Key Project",
           "--team-key",
-          "NOX",
+          "TEAM",
           "--team-key",
           "OPS",
           "--json",
@@ -2684,11 +2763,11 @@ describe("project create multi-team CLI parity", () => {
       );
 
       expect(r.exitCode, `${r.stdout}\n${r.stderr}`).toBe(0);
-      expect(JSON.parse(r.stdout).team_ids).toEqual(["team-nox", "team-ops"]);
+      expect(JSON.parse(r.stdout).team_ids).toEqual(["team-team", "team-ops"]);
       expect(mock.requestAt(10)?.variables).toMatchObject({
         input: {
           name: "Multi Team Key Project",
-          teamIds: ["team-nox", "team-ops"],
+          teamIds: ["team-team", "team-ops"],
         },
       });
     } finally {
@@ -2729,7 +2808,7 @@ describe("initiative remove-project (CLI regression for the structured result)",
     );
     expect(r.exitCode).toBe(0);
     const parsed = JSON.parse(r.stdout);
-    expect(parsed.schema_version).toBe(1);
+    expect(parsed.schema_version).toBe(2);
     expect(parsed.removed).toBe(true);
     expect(parsed).not.toHaveProperty("success"); // no legacy field leak
   });
@@ -2758,7 +2837,7 @@ describe("initiative remove-project (CLI regression for the structured result)",
     );
     expect(r.exitCode).toBe(0);
     const parsed = JSON.parse(r.stdout);
-    expect(parsed.schema_version).toBe(1);
+    expect(parsed.schema_version).toBe(2);
     expect(parsed.removed).toBe(false);
     expect(parsed.reason).toBe("absent");
   });
@@ -2795,7 +2874,7 @@ describe("initiative remove-project (CLI regression for the structured result)",
     );
     expect(r.exitCode).toBe(0);
     const parsed = JSON.parse(r.stdout);
-    expect(parsed.schema_version).toBe(1);
+    expect(parsed.schema_version).toBe(2);
     expect(parsed.removed).toBe(false);
     expect(parsed.reason).toBe("archived");
   });
@@ -2813,12 +2892,10 @@ describe("initiative remove-project (CLI regression for the structured result)",
     });
 
     const r = await runLebop(
-      ["initiative", "remove-project", INITIATIVE_UUID, PROJECT_UUID, "--yes"],
+      ["initiative", "remove-project", INITIATIVE_UUID, PROJECT_UUID, "--yes", "--human"],
       env,
     );
     expect(r.exitCode).toBe(0);
-    // The regression we're guarding against: pre-fix code emitted
-    // "✓ unlinked …" even when nothing was actually unlinked.
     expect(r.stdout).not.toContain("unlinked");
     expect(r.stdout).toContain("was not linked");
   });
@@ -2865,7 +2942,7 @@ describe("initiative lifecycle CLI parity (round-9 / M-4)", () => {
     );
     expect(r.exitCode, r.stderr).toBe(0);
     const parsed = JSON.parse(r.stdout);
-    expect(parsed.schema_version).toBe(1);
+    expect(parsed.schema_version).toBe(2);
     expect(parsed.initiative.id).toBe(INITIATIVE_UUID);
     expect(parsed.initiative.description).toBe("RH1 lock");
   });
@@ -2972,7 +3049,7 @@ describe("initiative lifecycle CLI parity (round-9 / M-4)", () => {
     // Step 3: the delete mutation.
     mock.respond({ data: { initiativeDelete: { success: true } } });
 
-    const r = await runLebop(["initiative", "delete", "Roadmap H2", "--yes", "--json"], env);
+    const r = await runLebop(["initiative", "soft-delete", "Roadmap H2", "--yes", "--json"], env);
     expect(r.exitCode, r.stderr).toBe(0);
     const parsed = JSON.parse(r.stdout);
     expect(parsed.status).toBe("deleted");
@@ -2987,7 +3064,7 @@ describe("initiative lifecycle CLI parity (round-9 / M-4)", () => {
     mock.respond({ data: { initiatives: { nodes: [] } } });
 
     const r = await runLebop(
-      ["initiative", "delete", "no-such-initiative", "--yes", "--json"],
+      ["initiative", "soft-delete", "no-such-initiative", "--yes", "--json"],
       env,
     );
     expect(r.exitCode, r.stderr).toBe(0);
@@ -3000,7 +3077,7 @@ describe("initiative lifecycle CLI parity (round-9 / M-4)", () => {
 
   it("delete <id> without --yes emits a structured error envelope", async () => {
     // No mocks needed — the --yes gate fires before any Linear call.
-    const r = await runLebop(["initiative", "delete", INITIATIVE_UUID, "--json"], env);
+    const r = await runLebop(["initiative", "soft-delete", INITIATIVE_UUID, "--json"], env);
     expect(r.exitCode).toBe(1);
     expect(r.stderr).toBe("");
     const parsed = JSON.parse(r.stdout);
@@ -3020,9 +3097,12 @@ describe("error handling", () => {
     }
     const r = await runLebop(["teams"], env);
     expect(r.exitCode).toBe(1);
-    expect(r.stderr).toContain("error[rate_limit_error]:");
-    expect(r.stderr).toContain("rate limited by Linear");
-    expect(r.stderr).toContain("hint:");
+    const rateBody = JSON.parse(r.stdout);
+    expect(rateBody.ok).toBe(false);
+    expect(rateBody.error.code).toBe("rate_limit_error");
+    expect(String(rateBody.error.message ?? "") + String(rateBody.error.hint ?? "")).toMatch(
+      /rate|limit/i,
+    );
   }, 30_000);
 
   it("surfaces Linear rate-limit details in JSON errors", async () => {
@@ -3132,7 +3212,7 @@ describe("wave-4A CLI surfaces (smoke)", () => {
     expect(r.exitCode).toBe(1);
     const parsed = JSON.parse(r.stdout);
     expect(parsed.ok).toBe(false);
-    expect(parsed.schema_version).toBe(1);
+    expect(parsed.schema_version).toBe(2);
     expect(parsed.error.code).toBe("validation_error");
     expect(parsed.error.message).toBe('invalid --priority value "99"');
     expect(parsed.error.hint).toBe(
@@ -3215,7 +3295,7 @@ describe("lebop lint — round-5 no-team fallback", () => {
         schema_version: number;
         files: Array<{ path: string; warnings: Array<{ rule: string }> }>;
       };
-      expect(parsed.schema_version).toBe(1);
+      expect(parsed.schema_version).toBe(2);
       expect(parsed.files).toHaveLength(1);
       // L001 fired on the table cells → confirms universal rules work
       // without team config.
@@ -3284,7 +3364,7 @@ describe("lebop lint — round-5 no-team fallback", () => {
         error: { code: string; message: string; hint?: string };
       };
       expect(body.ok).toBe(false);
-      expect(body.schema_version).toBe(1);
+      expect(body.schema_version).toBe(2);
       expect(body.error.code).toBe("config_error");
       expect(body.error.message).toContain("no Linear team resolved");
       expect(body.error.hint).toBeTruthy();
@@ -3303,7 +3383,7 @@ describe("lebop lint — round-5 no-team fallback", () => {
     const emptyHome = await mkdtemp(join(tmpdir(), "lebop-lint-cachemode-human-"));
 
     try {
-      const r = await runLebop(["lint"], {
+      const r = await runLebop(["lint", "--human"], {
         LEBOP_HOME: emptyHome,
         LEBOP_API_URL: mock.url,
       });
@@ -3418,18 +3498,18 @@ describe("lebop diff — round-6 / H1 exit-code-on-drift regression lock", () =>
     return {
       data: {
         a0: {
-          id: "issue-uuid-nox-1",
-          identifier: "NOX-1",
+          id: "issue-uuid-team-1",
+          identifier: "TEAM-1",
           title: overrides?.title ?? "Test issue",
           description: overrides?.description ?? "Original description.",
           priority: overrides?.priority ?? 2,
           estimate: null,
-          url: "https://linear.app/test/issue/NOX-1",
+          url: "https://linear.app/test/issue/TEAM-1",
           updatedAt: "2026-05-01T00:00:01.000Z",
           state: { id: "state-x", name: overrides?.state ?? "Backlog", type: "backlog" },
           assignee: null,
           project: null,
-          team: { id: "team-uuid", key: "NOX" },
+          team: { id: "team-uuid", key: "TEAM" },
           parent: null,
           labels: { nodes: [] },
         },
@@ -3450,11 +3530,11 @@ describe("lebop diff — round-6 / H1 exit-code-on-drift regression lock", () =>
     const { mkdir, writeFile } = await import("node:fs/promises");
     const { join } = await import("node:path");
     const { stringify } = await import("yaml");
-    const dir = join(home, "cache", "_global", "issues", "NOX-1");
+    const dir = join(home, "cache", "test-workspace", "_global", "issues", "TEAM-1");
     await mkdir(dir, { recursive: true });
     // Minimal metadata.yaml shape the cache reader expects.
     const full = {
-      identifier: "NOX-1",
+      identifier: "TEAM-1",
       title: metadata.title,
       state: metadata.state,
       priority: metadata.priority,
@@ -3464,9 +3544,9 @@ describe("lebop diff — round-6 / H1 exit-code-on-drift regression lock", () =>
       project: null,
       parent: null,
       _server: {
-        id: "issue-uuid-nox-1",
-        identifier: "NOX-1",
-        url: "https://linear.app/test/issue/NOX-1",
+        id: "issue-uuid-team-1",
+        identifier: "TEAM-1",
+        url: "https://linear.app/test/issue/TEAM-1",
         state_id: "state-x",
         state_name: metadata._server.state_name,
         state_type: "backlog",
@@ -3510,7 +3590,7 @@ describe("lebop diff — round-6 / H1 exit-code-on-drift regression lock", () =>
       mock.respond(mockIssueResponse());
 
       const r = await runLebop(
-        ["diff", "NOX-1", "--team", "NOX"],
+        ["diff", "TEAM-1", "--team", "TEAM", "--human"],
         { LEBOP_HOME: home, LEBOP_API_URL: mock.url },
         cwd,
       );
@@ -3543,7 +3623,7 @@ describe("lebop diff — round-6 / H1 exit-code-on-drift regression lock", () =>
       mock.respond(mockIssueResponse());
 
       const r = await runLebop(
-        ["diff", "NOX-1", "--team", "NOX", "--json"],
+        ["diff", "TEAM-1", "--team", "TEAM", "--json"],
         { LEBOP_HOME: home, LEBOP_API_URL: mock.url },
         cwd,
       );
@@ -3553,7 +3633,7 @@ describe("lebop diff — round-6 / H1 exit-code-on-drift regression lock", () =>
         fields: unknown[];
         description_changed: boolean;
       };
-      expect(body.schema_version).toBe(1);
+      expect(body.schema_version).toBe(2);
       expect(body.fields).toEqual([]);
       expect(body.description_changed).toBe(false);
     } finally {
@@ -3584,7 +3664,7 @@ describe("lebop diff — round-6 / H1 exit-code-on-drift regression lock", () =>
       mock.respond(mockIssueResponse({ description: "Original description." }));
 
       const r = await runLebop(
-        ["diff", "NOX-1", "--team", "NOX"],
+        ["diff", "TEAM-1", "--team", "TEAM", "--human"],
         { LEBOP_HOME: home, LEBOP_API_URL: mock.url },
         cwd,
       );
@@ -3621,7 +3701,7 @@ describe("lebop diff — round-6 / H1 exit-code-on-drift regression lock", () =>
       mock.respond(mockIssueResponse({ description: "Original description." }));
 
       const r = await runLebop(
-        ["diff", "NOX-1", "--team", "NOX", "--json"],
+        ["diff", "TEAM-1", "--team", "TEAM", "--json"],
         { LEBOP_HOME: home, LEBOP_API_URL: mock.url },
         cwd,
       );

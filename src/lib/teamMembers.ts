@@ -207,7 +207,7 @@ async function resolveTeamRecord(
 ): Promise<{ id: string; key: string; name: string }> {
   // Step 1: resolve key -> UUID. teams(filter: {key}) still works.
   // Linear's `team.key.eq` filter is case-sensitive. Match the case-folding
-  // pattern used elsewhere so `--team nox` works the same as `--team NOX`.
+  // pattern used elsewhere so `--team team` works the same as `--team TEAM`.
   const upperTeam = teamKey.toUpperCase();
   const teams = await withClient((c) => c.teams({ filter: { key: { eq: upperTeam } } }));
   const team = teams.nodes[0];

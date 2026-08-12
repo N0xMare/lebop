@@ -100,7 +100,7 @@ describe("loadUserConfig (structured errors)", () => {
     (globalThis as { Bun?: unknown }).Bun = {
       file: () => ({
         exists: async () => true,
-        text: async () => "default_team: [NOX]\nworkspaces:\n  NOX:\n    url_prefix: 1\n",
+        text: async () => "default_team: [TEAM]\nworkspaces:\n  TEAM:\n    url_prefix: 1\n",
       }),
     };
     const err = await loadUserConfig().catch((e) => e);
@@ -153,9 +153,9 @@ describe("resolveConfig (structured errors)", () => {
       }),
     };
 
-    const config = await runWithRequestContext({ team: "NOX" }, () => resolveConfig({ cwd: tmp }));
+    const config = await runWithRequestContext({ team: "TEAM" }, () => resolveConfig({ cwd: tmp }));
 
-    expect(config.team).toBe("NOX");
+    expect(config.team).toBe("TEAM");
     expect(process.env.LEBOP_TEAM).toBeUndefined();
   });
 
@@ -165,11 +165,11 @@ describe("resolveConfig (structured errors)", () => {
         exists: async () => String(path).endsWith("config.yaml"),
         text: async () =>
           [
-            "default_team: NOX",
+            "default_team: TEAM",
             "workspaces:",
             "  test-workspace:",
             "    url_prefix: https://linear.app/workspace-slug",
-            "  NOX:",
+            "  TEAM:",
             "    url_prefix: https://linear.app/team-key",
             "",
           ].join("\n"),
@@ -189,9 +189,9 @@ describe("resolveConfig (structured errors)", () => {
         exists: async () => String(path).endsWith("config.yaml"),
         text: async () =>
           [
-            "default_team: NOX",
+            "default_team: TEAM",
             "workspaces:",
-            "  NOX:",
+            "  TEAM:",
             "    url_prefix: https://linear.app/team-key",
             "",
           ].join("\n"),
@@ -215,7 +215,7 @@ describe("resolveConfig (structured errors)", () => {
 
     const err = await resolveConfig({
       cwd: tmp,
-      teamOverride: "NOX",
+      teamOverride: "TEAM",
       requireGitRoot: true,
     }).catch((e) => e);
 

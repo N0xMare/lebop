@@ -1,7 +1,9 @@
 import chalk from "chalk";
 import type { Command } from "commander";
-import { envelope } from "../lib/envelope.ts";
+import { wantsMachineOutput } from "../lib/encode.ts";
 import { ValidationError } from "../lib/errors.ts";
+import { pullNext } from "../lib/nextStubs.ts";
+import { writeMachineEnvelope } from "../lib/output.ts";
 import { type PullOperationResult, PullOverwriteConflictError } from "../lib/pullOperations.ts";
 import {
   buildPullIssuesInputFromCli,
@@ -25,12 +27,15 @@ export function registerPull(program: Command): void {
       "--to <dir>",
       "write files to <dir>/<id>/ instead of the cache. export-only: `status` and `push` operate on the default cache only",
     )
-    .option("--json", "emit structured summary")
+    .option("--json", "machine output (default; TOON)")
+    .option("--format <fmt>", "toon | json | pretty")
+    .option("--pretty", "pretty-printed JSON")
+    .option("--human", "maintainer/dev chalk tables (opt-in; not agent path; bodies uncapped)")
     .action(async (ids: string[], opts: PullOpts) => {
       if (ids.length === 0 && !opts.project && !opts.projectId) {
         throw new ValidationError(
           "nothing to pull — pass issue IDs or --project / --project-id",
-          "examples: `lebop pull NOX-34 NOX-35` (issue ids) or `lebop pull --project 'My Project'`",
+          "examples: `lebop pull TEAM-34 TEAM-35` (issue ids) or `lebop pull --project 'My Project'`",
         );
       }
       if (opts.refresh === true && !isConfirmed(opts)) {
@@ -48,15 +53,22 @@ export function registerPull(program: Command): void {
             : await executePullIssues(buildPullIssuesInputFromCli({ ids, opts }));
       } catch (err) {
         if (err instanceof PullOverwriteConflictError) {
-          if (opts.json) printConflictJson(err);
+          if (wantsMachineOutput(opts)) printConflictJson(err, opts);
           else printConflict(err);
           return;
         }
         throw err;
       }
 
-      if (opts.json) {
-        process.stdout.write(`${JSON.stringify(envelope({ ...result }), null, 2)}\n`);
+      if (wantsMachineOutput(opts)) {
+        writeMachineEnvelope(
+          { ...result, next: pullNext() } as Record<string, unknown>,
+          {
+            json: true,
+            format: opts.format,
+            pretty: opts.pretty,
+          },
+        );
         if (result.errors.length > 0) process.exitCode = 1;
         return;
       }
@@ -96,6 +108,8 @@ interface PullOpts {
   comments?: boolean; // commander inverts --no-comments into comments=false
   to?: string;
   json?: boolean;
+  format?: string;
+  pretty?: boolean;
 }
 
 function printConflict(err: PullOverwriteConflictError): void {
@@ -108,21 +122,25 @@ function printConflict(err: PullOverwriteConflictError): void {
   process.exitCode = 1;
 }
 
-function printConflictJson(err: PullOverwriteConflictError): void {
-  process.stdout.write(
-    `${JSON.stringify(
-      envelope({
-        ok: false,
-        error: {
-          code: "cache_conflict",
-          message: err.message,
-          conflicts: err.conflicts,
-          hint: "push local edits with `lebop push` or re-run with --refresh --yes",
-        },
-      }),
-      null,
-      2,
-    )}\n`,
+function printConflictJson(
+  err: PullOverwriteConflictError,
+  opts: Pick<PullOpts, "format" | "pretty">,
+): void {
+  writeMachineEnvelope(
+    {
+      ok: false,
+      error: {
+        code: "cache_conflict",
+        message: err.message,
+        conflicts: err.conflicts,
+        hint: "push local edits with `lebop push` or re-run with --refresh --yes",
+      },
+    },
+    {
+      json: true,
+      format: opts.format,
+      pretty: opts.pretty,
+    },
   );
   process.exitCode = 1;
 }

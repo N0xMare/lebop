@@ -391,7 +391,7 @@ jobs:
           export LEBOP_LIVE_WORKSPACE=lebop-playground
           export LEBOP_LIVE_TEAM=LEB
           export LEBOP_SANDBOX_TOKEN="$LEBOP_SANDBOX_TOKEN"
-          bun scripts/live-nox-surface-smoke.mjs
+          bun scripts/live-surface-smoke.mjs
 
       - name: validate full live harness report
         if: github.event_name == 'workflow_dispatch' || github.event.schedule == '0 16 * * 1'
@@ -401,18 +401,18 @@ jobs:
         run: |
           set -euo pipefail
           report="$(
-            find docs/local -maxdepth 1 -type f -name 'live-nox-surface-report-*.json' -printf '%T@ %p\n' |
+            find docs/local -maxdepth 1 -type f -name 'live-surface-report-*.json' -printf '%T@ %p\n' |
               sort -nr |
               awk 'NR == 1 { sub(/^[^ ]+ /, ""); print }'
           )"
-          bun scripts/live-nox-surface-smoke.mjs --validate-report "$report"
+          bun scripts/live-surface-smoke.mjs --validate-report "$report"
 
       - name: upload live harness reports
         if: (github.event_name == 'workflow_dispatch' || github.event.schedule == '0 16 * * 1') && always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: live-sandbox-reports
-          path: docs/local/live-nox-surface-report-*.json
+          path: docs/local/live-surface-report-*.json
           if-no-files-found: warn
 
       - name: upload read smoke reports

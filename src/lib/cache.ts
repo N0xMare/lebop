@@ -7,7 +7,13 @@ import { parseDocument, parse as parseYaml, stringify as stringifyYaml } from "y
 import { findGitRoot, hashRepoRoot } from "./config.ts";
 import { ValidationError } from "./errors.ts";
 import { ISSUE_IDENTIFIER_PATTERN } from "./issueIdentifiers.ts";
-import { CACHE_ROOT } from "./paths.ts";
+import {
+  getCacheRoot,
+  resolveWorkspaceSlugForState,
+  sanitizeWorkspaceSlug,
+  UNSET_WORKSPACE_SLUG,
+  workspaceCacheRoot,
+} from "./paths.ts";
 import {
   assertNoSymlinkedExistingAncestorsSync,
   ensureStateDirectoryForWrite,
@@ -105,25 +111,49 @@ export type ConditionalCacheWriteResult<T> =
   | { status: "written" };
 
 // ---------- paths ----------
+// Layout (0.0.6): ~/.lebop/cache/<workspace-slug>/<repo-hash>/…
+// Migration: clear cache and re-pull (no silent migrator).
 
-export function repoCacheDir(repoHash: string): string {
+/**
+ * Resolve cache directory for a repo under an optional workspace slug.
+ * When workspaceSlug is omitted, uses request context / LEBOP_WORKSPACE / `_unset`.
+ */
+export function repoCacheDir(repoHash: string, workspaceSlug?: string | null): string {
   assertCacheKey("repo hash", repoHash, /^(_global|[a-f0-9]{12})$/);
-  return confineCachePath(CACHE_ROOT, repoHash);
+  const wsRoot = workspaceCacheRoot(workspaceSlug ?? resolveWorkspaceSlugForState());
+  return confineCachePath(wsRoot, repoHash);
 }
 
-export function issueDir(repoHash: string, identifier: string): string {
+export function issueDir(
+  repoHash: string,
+  identifier: string,
+  workspaceSlug?: string | null,
+): string {
   assertCacheKey("issue identifier", identifier, ISSUE_IDENTIFIER_PATTERN);
-  return confineCachePath(repoCacheDir(repoHash), "issues", identifier);
+  return confineCachePath(repoCacheDir(repoHash, workspaceSlug), "issues", identifier);
 }
 
-export function projectDir(repoHash: string, projectId: string): string {
+export function projectDir(
+  repoHash: string,
+  projectId: string,
+  workspaceSlug?: string | null,
+): string {
   assertCacheKey("project id", projectId, /^[a-zA-Z0-9._-]+$/);
-  return confineCachePath(repoCacheDir(repoHash), "projects", projectId);
+  return confineCachePath(repoCacheDir(repoHash, workspaceSlug), "projects", projectId);
 }
 
-export function teamCacheFile(repoHash: string, teamKey: string): string {
+export function teamCacheFile(
+  repoHash: string,
+  teamKey: string,
+  workspaceSlug?: string | null,
+): string {
   assertCacheKey("team key", teamKey, /^[A-Z][A-Z0-9]*$/);
-  return confineCachePath(repoCacheDir(repoHash), "_team", `${teamKey}.yaml`);
+  return confineCachePath(repoCacheDir(repoHash, workspaceSlug), "_team", `${teamKey}.yaml`);
+}
+
+/** Exposed for tests and status displays. */
+export function cacheLayoutKey(workspaceSlug: string | null | undefined, repoHash: string): string {
+  return `${sanitizeWorkspaceSlug(workspaceSlug ?? resolveWorkspaceSlugForState())}/${repoHash}`;
 }
 
 const SAFE_COMMENT_ID_PATTERN = /^[a-zA-Z0-9._-]+$/;
@@ -872,6 +902,8 @@ export type GcReason = "age" | "size" | "explicit";
 
 export interface GcCandidate {
   hash: string;
+  /** Relative path under CACHE_ROOT (workspace/hash or legacy hash). */
+  path?: string;
   lastModified: string;
   sizeMb: number;
   reason: GcReason;
@@ -899,6 +931,8 @@ export interface GcResult {
 
 interface HashEntry {
   hash: string;
+  /** Path relative to CACHE_ROOT (workspace/hash or legacy hash). */
+  relPath: string;
   newestMtimeMs: number;
   totalBytes: number;
 }
@@ -990,16 +1024,38 @@ export async function gcCache(opts: GcOptions = {}): Promise<GcResult> {
     return { candidates: [], removed: [], totalSizeBeforeMb: 0, totalSizeAfterMb: 0 };
   }
 
-  // Enumerate per-repo subdirs (skip _global and any stray files).
-  const rootEntries = await readdir(CACHE_ROOT, { withFileTypes: true });
-  const hashDirs = rootEntries
-    .filter((e) => e.isDirectory() && e.name !== GLOBAL_DIR && REPO_HASH_PATTERN.test(e.name))
-    .map((e) => e.name);
-
+  // Layout 0.0.6: CACHE_ROOT/<workspace-slug>/<repo-hash>/
+  // Also accept legacy CACHE_ROOT/<repo-hash>/ for one transition scan.
+  const cacheRoot = getCacheRoot();
   const entries: HashEntry[] = [];
-  for (const h of hashDirs) {
-    const { totalBytes, newestMtimeMs } = await scanDir(join(CACHE_ROOT, h));
-    entries.push({ hash: h, totalBytes, newestMtimeMs });
+  const rootEntries = await readdir(cacheRoot, { withFileTypes: true });
+  for (const entry of rootEntries) {
+    if (!entry.isDirectory()) continue;
+    const top = entry.name;
+    if (top === GLOBAL_DIR) continue;
+    if (REPO_HASH_PATTERN.test(top)) {
+      // Legacy flat layout (pre-0.0.6).
+      const { totalBytes, newestMtimeMs } = await scanDir(join(cacheRoot, top));
+      entries.push({ hash: top, totalBytes, newestMtimeMs, relPath: top });
+      continue;
+    }
+    // Workspace slug directory — scan children as repo hashes.
+    const wsDir = join(cacheRoot, top);
+    const children = await readdir(wsDir, { withFileTypes: true });
+    for (const child of children) {
+      if (!child.isDirectory()) continue;
+      if (child.name === GLOBAL_DIR) continue;
+      if (!REPO_HASH_PATTERN.test(child.name) && child.name !== GLOBAL_DIR) {
+        // Allow _global under workspace; treat only hash-like names as repos.
+        if (child.name !== GLOBAL_DIR && !REPO_HASH_PATTERN.test(child.name)) {
+          // skip non-hash
+        }
+      }
+      if (!REPO_HASH_PATTERN.test(child.name)) continue;
+      const relPath = `${top}/${child.name}`;
+      const { totalBytes, newestMtimeMs } = await scanDir(join(cacheRoot, top, child.name));
+      entries.push({ hash: child.name, totalBytes, newestMtimeMs, relPath });
+    }
   }
 
   const totalSizeBeforeBytes = entries.reduce((acc, e) => acc + e.totalBytes, 0);
@@ -1013,6 +1069,7 @@ export async function gcCache(opts: GcOptions = {}): Promise<GcResult> {
 
   const toCandidate = (e: HashEntry, reason: GcReason): GcCandidate => ({
     hash: e.hash,
+    path: e.relPath,
     lastModified:
       e.newestMtimeMs > 0 ? new Date(e.newestMtimeMs).toISOString() : new Date(0).toISOString(),
     sizeMb: bytesToMb(e.totalBytes),
@@ -1020,9 +1077,14 @@ export async function gcCache(opts: GcOptions = {}): Promise<GcResult> {
   });
 
   if (explicitHash) {
-    const match = entries.find((e) => e.hash === explicitHash);
+    const match = entries.find(
+      (e) =>
+        e.hash === explicitHash ||
+        e.relPath === explicitHash ||
+        e.relPath.endsWith(`/${explicitHash}`),
+    );
     if (match && !preservedSet.has(match.hash)) {
-      candidatesByHash.set(match.hash, toCandidate(match, "explicit"));
+      candidatesByHash.set(match.relPath, toCandidate(match, "explicit"));
     }
   } else {
     // Age-based: anything older than the threshold qualifies.
@@ -1032,7 +1094,7 @@ export async function gcCache(opts: GcOptions = {}): Promise<GcResult> {
         if (preservedSet.has(e.hash)) continue;
         // Treat zero-byte / unscannable dirs as ancient (newestMtimeMs=0).
         if (e.newestMtimeMs < cutoff) {
-          candidatesByHash.set(e.hash, toCandidate(e, "age"));
+          candidatesByHash.set(e.relPath, toCandidate(e, "age"));
         }
       }
     }
@@ -1046,18 +1108,18 @@ export async function gcCache(opts: GcOptions = {}): Promise<GcResult> {
         // under the limit.
         const alreadySelected = new Set(candidatesByHash.keys());
         let projected = totalSizeBeforeBytes;
-        for (const h of alreadySelected) {
-          const e = entries.find((x) => x.hash === h);
+        for (const key of alreadySelected) {
+          const e = entries.find((x) => x.relPath === key);
           if (e) projected -= e.totalBytes;
         }
         const remaining = entries
-          .filter((e) => !alreadySelected.has(e.hash) && !preservedSet.has(e.hash))
+          .filter((e) => !alreadySelected.has(e.relPath) && !preservedSet.has(e.hash))
           .sort((a, b) => a.newestMtimeMs - b.newestMtimeMs);
         for (const e of remaining) {
           if (projected <= limitBytes) break;
           // Don't override an age-selected entry's reason; only add new ones.
-          if (!candidatesByHash.has(e.hash)) {
-            candidatesByHash.set(e.hash, toCandidate(e, "size"));
+          if (!candidatesByHash.has(e.relPath)) {
+            candidatesByHash.set(e.relPath, toCandidate(e, "size"));
           }
           projected -= e.totalBytes;
         }
@@ -1065,13 +1127,11 @@ export async function gcCache(opts: GcOptions = {}): Promise<GcResult> {
     }
   }
 
-  // Stable order: newest-first feels wrong for a cleanup report — show
-  // oldest first so the most-stale entries lead. Ties by hash for
-  // determinism.
+  // Stable order: oldest first so the most-stale entries lead.
   const candidates = Array.from(candidatesByHash.values()).sort((a, b) => {
     const t = Date.parse(a.lastModified) - Date.parse(b.lastModified);
     if (t !== 0) return t;
-    return a.hash.localeCompare(b.hash);
+    return (a.path ?? a.hash).localeCompare(b.path ?? b.hash);
   });
 
   if (dryRun) {
@@ -1086,12 +1146,13 @@ export async function gcCache(opts: GcOptions = {}): Promise<GcResult> {
   const removed: string[] = [];
   let removedBytes = 0;
   for (const c of candidates) {
-    const dir = join(CACHE_ROOT, c.hash);
+    const rel = c.path ?? c.hash;
+    const dir = join(cacheRoot, rel);
     try {
       await assertGcRemovalTarget(dir, c.hash);
       await rm(dir, { recursive: true, force: true });
-      removed.push(c.hash);
-      const entry = entries.find((e) => e.hash === c.hash);
+      removed.push(rel);
+      const entry = entries.find((e) => e.relPath === rel);
       if (entry) removedBytes += entry.totalBytes;
     } catch {
       // Best-effort: skip directories we couldn't remove (permissions, race).
@@ -1108,18 +1169,19 @@ export async function gcCache(opts: GcOptions = {}): Promise<GcResult> {
 }
 
 async function cacheRootExistsForGc(): Promise<boolean> {
-  assertNoSymlinkedExistingAncestorsSync(CACHE_ROOT, {
+  const cacheRoot = getCacheRoot();
+  assertNoSymlinkedExistingAncestorsSync(cacheRoot, {
     label: "cache root",
     hint: "replace the symlinked state directory or choose a new LEBOP_HOME",
   });
-  const rootStat = await lstat(CACHE_ROOT).catch((err) => {
+  const rootStat = await lstat(cacheRoot).catch((err) => {
     if ((err as { code?: string }).code === "ENOENT") return null;
     throw err;
   });
   if (!rootStat) return false;
   if (rootStat.isSymbolicLink() || !rootStat.isDirectory()) {
     throw new ValidationError(
-      `refusing to run cache gc through unsafe cache root: ${CACHE_ROOT}`,
+      `refusing to run cache gc through unsafe cache root: ${cacheRoot}`,
       "replace the cache root with a normal directory, or choose a new LEBOP_HOME",
     );
   }

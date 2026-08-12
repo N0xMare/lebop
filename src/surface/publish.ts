@@ -272,6 +272,7 @@ export const publishReviewOperation = {
   },
   mcp: {
     tool: "review_linear_changes",
+      profile: "core",
     title: "Review a Linear publish operation",
     description:
       "Task-shaped write review for agent-authored plan directories or modified cache rows: validate, lint, diff/dry-run, and store a review_id for later publish.",
@@ -281,7 +282,6 @@ export const publishReviewOperation = {
       idempotentHint: false,
       openWorldHint: true,
     },
-    inputSchemaKeys: ["source", "strict", "team", "workspace"],
     liveSemantics: "required",
   },
   safety: {
@@ -315,6 +315,7 @@ export const publishApplyOperation = {
   },
   mcp: {
     tool: "publish_linear_changes",
+      profile: "core",
     title: "Publish Linear changes and verify the outcome",
     description:
       "Publishes a stored review_id: validates reviewed local content, applies Linear mutations, writes server-normalized state back, then verifies outcome.",
@@ -325,7 +326,6 @@ export const publishApplyOperation = {
       idempotentHint: false,
       openWorldHint: true,
     },
-    inputSchemaKeys: ["review_id", "verify", "workspace"],
     liveSemantics: "required",
   },
   safety: {

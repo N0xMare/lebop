@@ -27,9 +27,9 @@ describe("listWorkflowStates", () => {
         teams: {
           nodes: [
             {
-              id: "team-uuid-nox",
-              key: "NOX",
-              name: "Noxor",
+              id: "team-uuid-team",
+              key: "TEAM",
+              name: "Example",
               defaultIssueState: { id: "state-bl" },
               states: {
                 nodes: [
@@ -43,8 +43,8 @@ describe("listWorkflowStates", () => {
         },
       },
     });
-    const r = await listWorkflowStates("nox");
-    expect(r?.team).toBe("NOX");
+    const r = await listWorkflowStates("team");
+    expect(r?.team).toBe("TEAM");
     expect(r?.states).toHaveLength(2);
     expect(r?.states.find((s) => s.id === "state-bl")?.default).toBe(true);
     expect(r?.states.find((s) => s.id === "state-ip")?.default).toBe(false);

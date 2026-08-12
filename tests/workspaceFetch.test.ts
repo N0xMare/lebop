@@ -105,12 +105,12 @@ const project = {
   start_date: null,
   target_date: null,
   archived_at: null,
-  teams: [{ id: "team-1", key: "NOX", name: "Noxor" }],
+  teams: [{ id: "team-1", key: "TEAM", name: "Example" }],
   lead: null,
 };
 
 const listedIssue = {
-  identifier: "NOX-1",
+  identifier: "TEAM-1",
   title: "Context issue",
   state: "Todo",
   state_type: "unstarted",
@@ -118,7 +118,7 @@ const listedIssue = {
   assignee: null,
   labels: [],
   updated_at: "2026-06-04T00:00:00.000Z",
-  url: "https://linear.app/test/issue/NOX-1",
+  url: "https://linear.app/test/issue/TEAM-1",
 };
 
 const fullIssue = {
@@ -127,7 +127,7 @@ const fullIssue = {
   description: "Full issue body",
   estimate: null,
   project: { id: "project-1", name: "Workspace Context Project" },
-  team: { id: "team-1", key: "NOX" },
+  team: { id: "team-1", key: "TEAM" },
   parent: null,
 };
 
@@ -168,7 +168,7 @@ const agentSession = {
   created_at: "2026-06-04T00:00:00.000Z",
   updated_at: "2026-06-04T01:00:00.000Z",
   ended_at: null,
-  issue: { id: "issue-1", identifier: "NOX-1", title: "Context issue" },
+  issue: { id: "issue-1", identifier: "TEAM-1", title: "Context issue" },
   creator: { id: "user-1", name: "Agent User", email: "agent@example.com" },
 };
 
@@ -260,7 +260,7 @@ function decodeExploreCursor(cursor: string): { cursors: Record<string, string> 
 describe("fetchLinearWorkspace", () => {
   it("rejects unknown include names before fetching", async () => {
     await expect(
-      fetchLinearWorkspace({ target: "/issues/NOX-1", include: ["comment"] }),
+      fetchLinearWorkspace({ target: "/issues/TEAM-1", include: ["comment"] }),
     ).rejects.toThrow("unknown issue include: comment");
     expect(mocks.getIssue).not.toHaveBeenCalled();
   });
@@ -380,7 +380,7 @@ describe("fetchLinearWorkspace", () => {
       id: "issue-document-1",
       title: "Issue document",
       project: null,
-      issue: { id: "issue-1", identifier: "NOX-1", title: "Context issue" },
+      issue: { id: "issue-1", identifier: "TEAM-1", title: "Context issue" },
     };
     mocks.listDocumentsPage.mockResolvedValue({
       nodes: [{ ...issueDocument, content: undefined }],
@@ -389,7 +389,7 @@ describe("fetchLinearWorkspace", () => {
     mocks.getDocument.mockResolvedValue({ ...issueDocument, content: "Issue document body" });
 
     const result = await fetchLinearWorkspace({
-      target: "/issues/NOX-1/documents",
+      target: "/issues/TEAM-1/documents",
       to: out,
     });
 
@@ -402,15 +402,15 @@ describe("fetchLinearWorkspace", () => {
       limit: 100,
       after: undefined,
     });
-    expect(result.recommended_reads).toContain("issues/NOX-1/documents.json");
+    expect(result.recommended_reads).toContain("issues/TEAM-1/documents.json");
     expect(result.recommended_reads).toContain(
-      "issues/NOX-1/documents/issue-document-1/document.md",
+      "issues/TEAM-1/documents/issue-document-1/document.md",
     );
-    await expect(readFile(join(out, "issues/NOX-1/documents.json"), "utf8")).resolves.toContain(
+    await expect(readFile(join(out, "issues/TEAM-1/documents.json"), "utf8")).resolves.toContain(
       "Issue document",
     );
     await expect(
-      readFile(join(out, "issues/NOX-1/documents/issue-document-1/document.md"), "utf8"),
+      readFile(join(out, "issues/TEAM-1/documents/issue-document-1/document.md"), "utf8"),
     ).resolves.toContain("Issue document body");
     await rm(out, { recursive: true, force: true });
   });
@@ -438,7 +438,7 @@ describe("fetchLinearWorkspace", () => {
     expect(mocks.listIssuesPage).toHaveBeenCalledWith(
       expect.objectContaining({ projectId: "project-1" }),
     );
-    expect(await readFile(join(out, "issues/NOX-1/comments.md"), "utf8")).toContain(
+    expect(await readFile(join(out, "issues/TEAM-1/comments.md"), "utf8")).toContain(
       "Dependent include comment",
     );
     await rm(out, { recursive: true, force: true });
@@ -451,7 +451,7 @@ describe("fetchLinearWorkspace", () => {
       id: "project-issue-document-1",
       title: "Project issue document",
       project: null,
-      issue: { id: "issue-1", identifier: "NOX-1", title: "Context issue" },
+      issue: { id: "issue-1", identifier: "TEAM-1", title: "Context issue" },
     };
     mocks.listIssuesPage.mockResolvedValue({
       nodes: [listedIssue],
@@ -479,9 +479,9 @@ describe("fetchLinearWorkspace", () => {
     ]);
     expect(result.counts.issue_documents).toBe(1);
     expect(result.counts.issue_document_details).toBe(1);
-    expect(result.recommended_reads).toContain("issues/NOX-1/documents.json");
+    expect(result.recommended_reads).toContain("issues/TEAM-1/documents.json");
     await expect(
-      readFile(join(out, "issues/NOX-1/documents/project-issue-document-1/document.md"), "utf8"),
+      readFile(join(out, "issues/TEAM-1/documents/project-issue-document-1/document.md"), "utf8"),
     ).resolves.toContain("Project issue document body");
     await rm(out, { recursive: true, force: true });
   });
@@ -518,19 +518,19 @@ describe("fetchLinearWorkspace", () => {
       limit_semantics: "per_parent",
       reason: "cursor",
     });
-    expect(mocks.getIssue).toHaveBeenCalledWith("NOX-1");
+    expect(mocks.getIssue).toHaveBeenCalledWith("TEAM-1");
     expect(mocks.listAgentSessionsPage).toHaveBeenCalledWith({
       issueId: "issue-1",
       limit: 1,
     });
-    expect(await readFile(join(out, "issues/NOX-1/agent-sessions.json"), "utf8")).toContain(
+    expect(await readFile(join(out, "issues/TEAM-1/agent-sessions.json"), "utf8")).toContain(
       "session-1",
     );
     expect(result.continuations).toEqual([
       expect.objectContaining({
         tool: "fetch_linear_workspace",
         args: {
-          target: "/issues/NOX-1/agent-sessions",
+          target: "/issues/TEAM-1/agent-sessions",
           limit: 1,
           include: ["agent_sessions"],
           cursor: expect.any(String),
@@ -562,7 +562,7 @@ describe("fetchLinearWorkspace", () => {
     expect(result.selected_includes).not.toContain("agent_sessions");
     expect(result.counts.issue_agent_sessions).toBeUndefined();
     expect(mocks.listAgentSessionsPage).not.toHaveBeenCalled();
-    await expect(readFile(join(out, "issues/NOX-1/agent-sessions.json"), "utf8")).rejects.toThrow();
+    await expect(readFile(join(out, "issues/TEAM-1/agent-sessions.json"), "utf8")).rejects.toThrow();
     await rm(out, { recursive: true, force: true });
   });
 
@@ -644,14 +644,14 @@ describe("fetchLinearWorkspace", () => {
       issueId: "issue-1",
       limit: 1,
     });
-    expect(await readFile(join(out, "issues/NOX-1/agent-sessions.json"), "utf8")).toContain(
+    expect(await readFile(join(out, "issues/TEAM-1/agent-sessions.json"), "utf8")).toContain(
       "session-1",
     );
     expect(result.continuations).toEqual([
       expect.objectContaining({
         tool: "fetch_linear_workspace",
         args: {
-          target: "/issues/NOX-1/agent-sessions",
+          target: "/issues/TEAM-1/agent-sessions",
           limit: 1,
           include: ["agent_sessions"],
           cursor: expect.any(String),
@@ -717,7 +717,7 @@ describe("fetchLinearWorkspace", () => {
       reason: "not_available: issue_detail_missing",
     });
     expect(validateFetchPayloadContract(result)).toEqual([]);
-    expect(await readFile(join(out, "issues/NOX-1/issue.md"), "utf8")).toContain(
+    expect(await readFile(join(out, "issues/TEAM-1/issue.md"), "utf8")).toContain(
       "This file contains shallow list data",
     );
     const manifest = JSON.parse(await readFile(join(out, "manifest.json"), "utf8"));
@@ -733,12 +733,12 @@ describe("fetchLinearWorkspace", () => {
     const out = await tempDir("lebop-workspace-project-issues-multipage-");
     const firstPage = Array.from({ length: 250 }, (_, index) => ({
       ...listedIssue,
-      identifier: `NOX-${index + 1}`,
+      identifier: `TEAM-${index + 1}`,
       title: `Issue ${index + 1}`,
     }));
     const secondPage = Array.from({ length: 50 }, (_, index) => ({
       ...listedIssue,
-      identifier: `NOX-${index + 251}`,
+      identifier: `TEAM-${index + 251}`,
       title: `Issue ${index + 251}`,
     }));
     mocks.listIssuesPage.mockImplementation((opts: { after?: string; limit: number }) =>
@@ -785,11 +785,11 @@ describe("fetchLinearWorkspace", () => {
     const secondOut = await tempDir("lebop-workspace-project-issues-page-two-");
     mocks.listIssuesPage
       .mockResolvedValueOnce({
-        nodes: [{ ...listedIssue, identifier: "NOX-1", title: "Page one issue" }],
+        nodes: [{ ...listedIssue, identifier: "TEAM-1", title: "Page one issue" }],
         pageInfo: { hasNextPage: true, endCursor: "project-issues-cursor-1" },
       })
       .mockResolvedValueOnce({
-        nodes: [{ ...listedIssue, identifier: "NOX-2", title: "Page two issue" }],
+        nodes: [{ ...listedIssue, identifier: "TEAM-2", title: "Page two issue" }],
         pageInfo: { hasNextPage: false, endCursor: null },
       });
 
@@ -901,18 +901,18 @@ describe("fetchLinearWorkspace", () => {
       include: ["issues"],
       depth: "shallow",
       limit: 1,
-      workspace: "noxor",
+      workspace: "acme",
       to: out,
     });
 
     expect(result.continuations[0]?.args).toMatchObject({
       include: ["issues"],
-      workspace: "noxor",
+      workspace: "acme",
     });
     const manifest = JSON.parse(await readFile(join(out, "manifest.json"), "utf8"));
     expect(manifest.continuations[0]?.args).toMatchObject({
       include: ["issues"],
-      workspace: "noxor",
+      workspace: "acme",
     });
     await rm(out, { recursive: true, force: true });
   });
@@ -1112,7 +1112,7 @@ describe("fetchLinearWorkspace", () => {
       target: "/projects/project-1",
       to: out,
       limit: 1,
-      workspace: "noxor",
+      workspace: "acme",
     });
 
     expect(result.completeness).toMatchObject({
@@ -1149,17 +1149,17 @@ describe("fetchLinearWorkspace", () => {
             ],
             cursor: expect.any(String),
             depth: "full",
-            workspace: "noxor",
+            workspace: "acme",
           },
         }),
         expect.objectContaining({
           tool: "fetch_linear_workspace",
           args: {
-            target: "/issues/NOX-1/comments",
+            target: "/issues/TEAM-1/comments",
             limit: 1,
             include: ["comments"],
             cursor: expect.any(String),
-            workspace: "noxor",
+            workspace: "acme",
           },
         }),
       ]),
@@ -1175,7 +1175,7 @@ describe("fetchLinearWorkspace", () => {
   it("marks issue relation completeness as truncated when Linear reports more relation pages", async () => {
     const out = await tempDir("lebop-workspace-relation-pages-");
     mocks.listRelationsPage.mockResolvedValue({
-      outbound: [{ id: "relation-1", type: "blocks", otherIdentifier: "NOX-2" }],
+      outbound: [{ id: "relation-1", type: "blocks", otherIdentifier: "TEAM-2" }],
       inbound: [],
       complete: false,
       pageInfo: {
@@ -1185,7 +1185,7 @@ describe("fetchLinearWorkspace", () => {
     });
 
     const result = await fetchLinearWorkspace({
-      target: "/issues/NOX-1",
+      target: "/issues/TEAM-1",
       include: ["relations"],
       limit: 1,
       to: out,
@@ -1204,7 +1204,7 @@ describe("fetchLinearWorkspace", () => {
       expect.objectContaining({
         tool: "fetch_linear_workspace",
         args: {
-          target: "/issues/NOX-1/relations",
+          target: "/issues/TEAM-1/relations",
           limit: 1,
           include: ["relations"],
           cursor: expect.any(String),
@@ -1217,7 +1217,7 @@ describe("fetchLinearWorkspace", () => {
   it("rejects relation fetch pages that report more data without a cursor", async () => {
     const out = await tempDir("lebop-workspace-relation-missing-cursor-");
     mocks.listRelationsPage.mockResolvedValue({
-      outbound: [{ id: "relation-1", type: "blocks", otherIdentifier: "NOX-2" }],
+      outbound: [{ id: "relation-1", type: "blocks", otherIdentifier: "TEAM-2" }],
       inbound: [],
       complete: false,
       pageInfo: {
@@ -1228,7 +1228,7 @@ describe("fetchLinearWorkspace", () => {
 
     await expect(
       fetchLinearWorkspace({
-        target: "/issues/NOX-1",
+        target: "/issues/TEAM-1",
         include: ["relations"],
         limit: 1,
         to: out,
@@ -1241,7 +1241,7 @@ describe("fetchLinearWorkspace", () => {
     const out = await tempDir("lebop-workspace-relation-repeat-cursor-");
     mocks.listRelationsPage
       .mockResolvedValueOnce({
-        outbound: [{ id: "relation-1", type: "blocks", otherIdentifier: "NOX-2" }],
+        outbound: [{ id: "relation-1", type: "blocks", otherIdentifier: "TEAM-2" }],
         inbound: [],
         complete: false,
         pageInfo: {
@@ -1250,7 +1250,7 @@ describe("fetchLinearWorkspace", () => {
         },
       })
       .mockResolvedValueOnce({
-        outbound: [{ id: "relation-2", type: "related", otherIdentifier: "NOX-3" }],
+        outbound: [{ id: "relation-2", type: "related", otherIdentifier: "TEAM-3" }],
         inbound: [],
         complete: false,
         pageInfo: {
@@ -1261,7 +1261,7 @@ describe("fetchLinearWorkspace", () => {
 
     await expect(
       fetchLinearWorkspace({
-        target: "/issues/NOX-1",
+        target: "/issues/TEAM-1",
         include: ["relations"],
         limit: 2,
         to: out,
@@ -1284,7 +1284,7 @@ describe("fetchLinearWorkspace", () => {
 
     await expect(
       fetchLinearWorkspace({
-        target: "/issues/NOX-1",
+        target: "/issues/TEAM-1",
         include: ["relations"],
         limit: 2,
         to: out,
@@ -1297,10 +1297,10 @@ describe("fetchLinearWorkspace", () => {
     const out = await tempDir("lebop-workspace-relation-boundary-");
     mocks.listRelationsPage
       .mockResolvedValueOnce({
-        outbound: [{ id: "outbound-1", type: "blocks", otherIdentifier: "NOX-2" }],
+        outbound: [{ id: "outbound-1", type: "blocks", otherIdentifier: "TEAM-2" }],
         inbound: [
-          { id: "inbound-1", type: "related", otherIdentifier: "NOX-3" },
-          { id: "inbound-2", type: "related", otherIdentifier: "NOX-4" },
+          { id: "inbound-1", type: "related", otherIdentifier: "TEAM-3" },
+          { id: "inbound-2", type: "related", otherIdentifier: "TEAM-4" },
         ],
         complete: false,
         pageInfo: {
@@ -1309,8 +1309,8 @@ describe("fetchLinearWorkspace", () => {
         },
       })
       .mockResolvedValueOnce({
-        outbound: [{ id: "outbound-2", type: "blocks", otherIdentifier: "NOX-5" }],
-        inbound: [{ id: "inbound-3", type: "related", otherIdentifier: "NOX-6" }],
+        outbound: [{ id: "outbound-2", type: "blocks", otherIdentifier: "TEAM-5" }],
+        inbound: [{ id: "inbound-3", type: "related", otherIdentifier: "TEAM-6" }],
         complete: false,
         pageInfo: {
           outbound: { hasNextPage: false, endCursor: null },
@@ -1319,7 +1319,7 @@ describe("fetchLinearWorkspace", () => {
       });
 
     const result = await fetchLinearWorkspace({
-      target: "/issues/NOX-1",
+      target: "/issues/TEAM-1",
       include: ["relations"],
       limit: 2,
       to: out,
@@ -1329,13 +1329,13 @@ describe("fetchLinearWorkspace", () => {
     expect(decodeExploreCursor(relationCursor).cursors).toEqual({
       inbound: "inbound-cursor-2",
     });
-    expect(mocks.listRelationsPage).toHaveBeenNthCalledWith(2, "NOX-1", {
+    expect(mocks.listRelationsPage).toHaveBeenNthCalledWith(2, "TEAM-1", {
       first: 1,
       outboundAfter: "outbound-cursor-1",
       includeOutbound: true,
       includeInbound: false,
     });
-    const relations = JSON.parse(await readFile(join(out, "issues/NOX-1/relations.json"), "utf8"));
+    const relations = JSON.parse(await readFile(join(out, "issues/TEAM-1/relations.json"), "utf8"));
     expect(relations.inbound).toHaveLength(2);
     expect(relations.inbound).not.toEqual(
       expect.arrayContaining([expect.objectContaining({ id: "inbound-3" })]),
@@ -1348,10 +1348,10 @@ describe("fetchLinearWorkspace", () => {
     mocks.listRelationsPage
       .mockResolvedValueOnce({
         outbound: [
-          { id: "outbound-1", type: "blocks", otherIdentifier: "NOX-2" },
-          { id: "outbound-2", type: "blocks", otherIdentifier: "NOX-3" },
+          { id: "outbound-1", type: "blocks", otherIdentifier: "TEAM-2" },
+          { id: "outbound-2", type: "blocks", otherIdentifier: "TEAM-3" },
         ],
-        inbound: [{ id: "inbound-1", type: "related", otherIdentifier: "NOX-4" }],
+        inbound: [{ id: "inbound-1", type: "related", otherIdentifier: "TEAM-4" }],
         complete: false,
         pageInfo: {
           outbound: { hasNextPage: true, endCursor: "outbound-cursor-2" },
@@ -1360,7 +1360,7 @@ describe("fetchLinearWorkspace", () => {
       })
       .mockResolvedValueOnce({
         outbound: [],
-        inbound: [{ id: "inbound-2", type: "related", otherIdentifier: "NOX-5" }],
+        inbound: [{ id: "inbound-2", type: "related", otherIdentifier: "TEAM-5" }],
         complete: false,
         pageInfo: {
           outbound: { hasNextPage: false, endCursor: null },
@@ -1369,13 +1369,13 @@ describe("fetchLinearWorkspace", () => {
       });
 
     const result = await fetchLinearWorkspace({
-      target: "/issues/NOX-1",
+      target: "/issues/TEAM-1",
       include: ["relations"],
       limit: 2,
       to: out,
     });
 
-    expect(mocks.listRelationsPage).toHaveBeenNthCalledWith(2, "NOX-1", {
+    expect(mocks.listRelationsPage).toHaveBeenNthCalledWith(2, "TEAM-1", {
       first: 1,
       includeOutbound: false,
       inboundAfter: "inbound-cursor-1",
@@ -1386,7 +1386,7 @@ describe("fetchLinearWorkspace", () => {
       outbound: "outbound-cursor-2",
       inbound: "inbound-cursor-2",
     });
-    const relations = JSON.parse(await readFile(join(out, "issues/NOX-1/relations.json"), "utf8"));
+    const relations = JSON.parse(await readFile(join(out, "issues/TEAM-1/relations.json"), "utf8"));
     expect(relations.outbound).toHaveLength(2);
     expect(relations.inbound).toHaveLength(2);
     await rm(out, { recursive: true, force: true });
@@ -1402,7 +1402,7 @@ describe("fetchLinearWorkspace", () => {
       outbound: Array.from({ length: 7 }, (_, i) => ({
         id: `relation-${i + 1}`,
         type: "blocks",
-        otherIdentifier: `NOX-${i + 2}`,
+        otherIdentifier: `TEAM-${i + 2}`,
       })),
       inbound: [],
       complete: false,
@@ -1437,7 +1437,7 @@ describe("fetchLinearWorkspace", () => {
       name: "Cycle 1",
       number: 1,
       archived_at: null,
-      team: { id: "team-1", key: "NOX", name: "Noxor" },
+      team: { id: "team-1", key: "TEAM", name: "Example" },
     });
     mocks.listIssuesPage.mockResolvedValue({
       nodes: [listedIssue],
@@ -1471,7 +1471,7 @@ describe("fetchLinearWorkspace", () => {
         },
       }),
     ]);
-    expect(await readFile(join(out, "issues/NOX-1/issue.md"), "utf8")).toContain("Full issue body");
+    expect(await readFile(join(out, "issues/TEAM-1/issue.md"), "utf8")).toContain("Full issue body");
     await rm(out, { recursive: true, force: true });
   });
 
@@ -1518,7 +1518,7 @@ describe("fetchLinearWorkspace", () => {
         },
       }),
     ]);
-    expect(await readFile(join(out, "issues/NOX-1/issue.md"), "utf8")).toContain("Full issue body");
+    expect(await readFile(join(out, "issues/TEAM-1/issue.md"), "utf8")).toContain("Full issue body");
     await rm(out, { recursive: true, force: true });
   });
 
@@ -1531,7 +1531,7 @@ describe("fetchLinearWorkspace", () => {
     });
 
     const result = await fetchLinearWorkspace({
-      target: "/issues/NOX-1/agent-sessions",
+      target: "/issues/TEAM-1/agent-sessions",
       to: out,
       limit: 1,
     });
@@ -1548,7 +1548,7 @@ describe("fetchLinearWorkspace", () => {
       expect.objectContaining({
         tool: "fetch_linear_workspace",
         args: {
-          target: "/issues/NOX-1/agent-sessions",
+          target: "/issues/TEAM-1/agent-sessions",
           limit: 1,
           include: ["agent_sessions"],
           cursor: expect.any(String),
@@ -1638,7 +1638,7 @@ describe("fetchLinearWorkspace", () => {
       id: "project-full-issue-document-1",
       title: "Project full issue document",
       project: null,
-      issue: { id: "issue-1", identifier: "NOX-1", title: "Context issue" },
+      issue: { id: "issue-1", identifier: "TEAM-1", title: "Context issue" },
       content: undefined,
     };
     mocks.listIssuesPage.mockResolvedValue({
@@ -1650,7 +1650,7 @@ describe("fetchLinearWorkspace", () => {
       pageInfo: { hasNextPage: false, endCursor: null },
     });
     mocks.listRelationsPage.mockResolvedValue({
-      outbound: [{ id: "relation-1", type: "blocks", otherIdentifier: "NOX-2" }],
+      outbound: [{ id: "relation-1", type: "blocks", otherIdentifier: "TEAM-2" }],
       inbound: [],
       complete: true,
       pageInfo: {
@@ -1692,16 +1692,16 @@ describe("fetchLinearWorkspace", () => {
     expect(result.counts.issue_attachments).toBe(1);
     expect(result.counts.issue_documents).toBe(1);
     expect(result.counts.issue_document_details).toBe(1);
-    expect(await readFile(join(out, "issues/NOX-1/issue.md"), "utf8")).toContain("Full issue body");
-    expect(await readFile(join(out, "issues/NOX-1/comments.md"), "utf8")).toContain("Comment");
-    expect(await readFile(join(out, "issues/NOX-1/relations.json"), "utf8")).toContain("NOX-2");
-    expect(await readFile(join(out, "issues/NOX-1/attachments.json"), "utf8")).toContain("Spec");
-    expect(await readFile(join(out, "issues/NOX-1/documents.json"), "utf8")).toContain(
+    expect(await readFile(join(out, "issues/TEAM-1/issue.md"), "utf8")).toContain("Full issue body");
+    expect(await readFile(join(out, "issues/TEAM-1/comments.md"), "utf8")).toContain("Comment");
+    expect(await readFile(join(out, "issues/TEAM-1/relations.json"), "utf8")).toContain("TEAM-2");
+    expect(await readFile(join(out, "issues/TEAM-1/attachments.json"), "utf8")).toContain("Spec");
+    expect(await readFile(join(out, "issues/TEAM-1/documents.json"), "utf8")).toContain(
       "Project full issue document",
     );
     expect(
       await readFile(
-        join(out, "issues/NOX-1/documents/project-full-issue-document-1/document.md"),
+        join(out, "issues/TEAM-1/documents/project-full-issue-document-1/document.md"),
         "utf8",
       ),
     ).toContain("Project full issue document body");
@@ -1710,8 +1710,8 @@ describe("fetchLinearWorkspace", () => {
 
   it("keeps full issue dossier output order deterministic while reads run concurrently", async () => {
     const out = await tempDir("lebop-workspace-project-full-order-");
-    const issueOne = { ...listedIssue, identifier: "NOX-1", title: "First issue" };
-    const issueTwo = { ...listedIssue, identifier: "NOX-2", title: "Second issue" };
+    const issueOne = { ...listedIssue, identifier: "TEAM-1", title: "First issue" };
+    const issueTwo = { ...listedIssue, identifier: "TEAM-2", title: "Second issue" };
     mocks.listIssuesPage.mockResolvedValue({
       nodes: [issueOne, issueTwo],
       pageInfo: { hasNextPage: false, endCursor: null },
@@ -1724,10 +1724,10 @@ describe("fetchLinearWorkspace", () => {
               resolve({
                 ...fullIssue,
                 identifier,
-                title: identifier === "NOX-1" ? "First issue" : "Second issue",
+                title: identifier === "TEAM-1" ? "First issue" : "Second issue",
                 description: `${identifier} full body`,
               }),
-            identifier === "NOX-1" ? 20 : 0,
+            identifier === "TEAM-1" ? 20 : 0,
           );
         }),
     );
@@ -1742,15 +1742,15 @@ describe("fetchLinearWorkspace", () => {
     const manifest = JSON.parse(await readFile(join(out, "manifest.json"), "utf8"));
     const files = manifest.generated_files as string[];
     const metadata = manifest.generated_file_metadata as Array<{ path: string; role: string }>;
-    expect(files.indexOf("issues/NOX-1/issue.md")).toBeLessThan(
-      files.indexOf("issues/NOX-2/issue.md"),
+    expect(files.indexOf("issues/TEAM-1/issue.md")).toBeLessThan(
+      files.indexOf("issues/TEAM-2/issue.md"),
     );
     expect(metadata.map((entry) => entry.path)).toEqual(files);
     expect(metadata.find((entry) => entry.path === "index.md")).toMatchObject({
       role: "index",
     });
-    expect(await readFile(join(out, "issues/NOX-1/issue.md"), "utf8")).toContain("NOX-1 full body");
-    expect(await readFile(join(out, "issues/NOX-2/issue.md"), "utf8")).toContain("NOX-2 full body");
+    expect(await readFile(join(out, "issues/TEAM-1/issue.md"), "utf8")).toContain("TEAM-1 full body");
+    expect(await readFile(join(out, "issues/TEAM-2/issue.md"), "utf8")).toContain("TEAM-2 full body");
     await rm(out, { recursive: true, force: true });
   });
 
@@ -1800,7 +1800,7 @@ describe("fetchLinearWorkspace", () => {
     });
 
     const result = await fetchLinearWorkspace({
-      target: "/issues/NOX-1/agent-sessions",
+      target: "/issues/TEAM-1/agent-sessions",
       to: out,
       limit: 1,
     });
@@ -1815,7 +1815,7 @@ describe("fetchLinearWorkspace", () => {
       expect.objectContaining({
         tool: "fetch_linear_workspace",
         args: {
-          target: "/issues/NOX-1/agent-sessions",
+          target: "/issues/TEAM-1/agent-sessions",
           limit: 1,
           include: ["agent_sessions"],
           cursor: expect.any(String),
@@ -1975,7 +1975,9 @@ describe("fetchLinearWorkspace", () => {
       repoRoot: nested,
     });
 
-    expect(result.root).toContain(`/context/${hashRepoRoot(repoRoot)}/`);
+    // Lane 3: context roots nest under workspace slug when auth.default is set.
+    expect(result.root).toContain(`/${hashRepoRoot(repoRoot)}/`);
+    expect(result.root).toMatch(/\/context\//);
     await rm(result.root, { recursive: true, force: true });
     await rm(repoRoot, { recursive: true, force: true });
   });

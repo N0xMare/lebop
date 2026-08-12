@@ -1,7 +1,9 @@
 import chalk from "chalk";
 import type { Command } from "commander";
 import { findGitRoot, hashRepoRoot } from "../lib/config.ts";
-import { envelope } from "../lib/envelope.ts";
+import { wantsMachineOutput } from "../lib/encode.ts";
+import { bulkNext } from "../lib/nextStubs.ts";
+import { writeMachineEnvelope } from "../lib/output.ts";
 import { buildIssueBulkUpdateInputFromCli, executeIssueBulkUpdate } from "../surface/issues.ts";
 
 /**
@@ -28,7 +30,10 @@ export function registerBulk(program: Command): void {
     .option("--dry-run", "resolve and preview the batch update without mutating Linear")
     .option("--yes", "confirm the batch update")
     .option("--confirm", "alias for --yes")
-    .option("--json", "emit the per-row result envelope")
+    .option("--json", "machine output (default; TOON)")
+    .option("--format <fmt>", "toon | json | pretty")
+    .option("--pretty", "pretty-printed JSON")
+    .option("--human", "maintainer/dev chalk tables (opt-in; not agent path; bodies uncapped)")
     .action(
       async (
         identifiers: string[],
@@ -46,6 +51,8 @@ export function registerBulk(program: Command): void {
           yes?: boolean;
           confirm?: boolean;
           json?: boolean;
+          format?: string;
+          pretty?: boolean;
         },
       ) => {
         const repoRoot = findGitRoot(process.cwd());
@@ -59,13 +66,19 @@ export function registerBulk(program: Command): void {
         );
         if (result.summary.failed > 0 || result.cache.failed > 0) process.exitCode = 1;
 
-        if (opts.json) {
-          process.stdout.write(
-            `${JSON.stringify(
-              envelope({ results: result.results, summary: result.summary, cache: result.cache }),
-              null,
-              2,
-            )}\n`,
+        if (wantsMachineOutput(opts)) {
+          writeMachineEnvelope(
+            {
+              results: result.results,
+              summary: result.summary,
+              cache: result.cache,
+              next: bulkNext(),
+            },
+            {
+              json: true,
+              format: opts.format,
+              pretty: opts.pretty,
+            },
           );
           return;
         }

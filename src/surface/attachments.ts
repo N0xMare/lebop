@@ -213,7 +213,6 @@ export const attachmentListOperation = {
       idempotentHint: true,
       openWorldHint: true,
     },
-    inputSchemaKeys: ["identifier", "workspace"],
   },
   safety: { readOnly: true, destructive: false, idempotent: true, openWorld: true },
   fromCli: buildAttachmentListInputFromCli,
@@ -250,7 +249,6 @@ export const attachmentUpdateOperation = {
       idempotentHint: true,
       openWorldHint: true,
     },
-    inputSchemaKeys: ["id", "title", "url", "workspace"],
   },
   safety: { readOnly: false, destructive: false, idempotent: true, openWorld: true },
   fromCli: buildAttachmentUpdateInputFromCli,
@@ -287,7 +285,6 @@ export const attachmentDeleteOperation = {
       idempotentHint: true,
       openWorldHint: true,
     },
-    inputSchemaKeys: ["id", "confirm", "workspace"],
   },
   safety: {
     readOnly: false,
@@ -306,15 +303,43 @@ export const attachmentDeleteOperation = {
   AttachmentDeleteMcpInput
 >;
 
+/** CLI file upload has no MCP dual (hosts upload via Linear API/other channels). */
+export const attachmentUploadOperation = {
+  id: "attachments.upload",
+  domain: "attachments",
+  resource: "attachment",
+  action: "create",
+  title: "Upload file attachment to an issue",
+  description: "Upload a local file and attach it to a Linear issue (CLI-only).",
+  cli: {
+    command: "attachment upload",
+    nonLiveReason:
+      "Requires a local file fixture; covered by unit/integration where present, not main inventory smoke.",
+  },
+  mcp: undefined,
+  safety: {
+    readOnly: false,
+    destructive: false,
+    idempotent: false,
+    openWorld: true,
+  },
+  exception: {
+    kind: "cli_only",
+    reason: "CLI-only local file upload; no MCP dual tool",
+  },
+  notes: "Inventory-only; implementation in commands/attachment.ts.",
+} satisfies SurfaceOperationContract<unknown, unknown>;
+
 export const ATTACHMENT_SURFACE_OPERATIONS = [
   attachmentListOperation,
   attachmentUpdateOperation,
   attachmentDeleteOperation,
+  attachmentUploadOperation,
 ] as const;
 
 export function buildAttachmentListMcpInputSchema(workspaceDescription: string) {
   return {
-    identifier: z.string().describe("Issue identifier, e.g. 'NOX-321'."),
+    identifier: z.string().describe("Issue identifier, e.g. 'TEAM-321'."),
     workspace: workspaceArg.describe(workspaceDescription),
   };
 }

@@ -58,10 +58,15 @@ let teamsResponse: {
   }>;
 } = { nodes: [] };
 
+import { deleteCustomView } from "../src/lib/customViews.ts";
 import { deleteDocument } from "../src/lib/documents.ts";
-import { deleteInitiative } from "../src/lib/initiatives.ts";
+import { deleteInitiative, deleteInitiativeUpdateEntry } from "../src/lib/initiatives.ts";
 import { listMilestones } from "../src/lib/milestones.ts";
-import { deleteProject, listProjects } from "../src/lib/projects.ts";
+import {
+  deleteProject,
+  deleteProjectUpdateEntry,
+  listProjects,
+} from "../src/lib/projects.ts";
 
 function reset() {
   mockResponses = [];
@@ -219,6 +224,78 @@ describe("deleteProject pre-flight detects soft-deleted entity", () => {
     const err = await deleteProject("proj-1").catch((e) => e);
     expect(err).toBeInstanceOf(NotFoundError);
     expect((err as NotFoundError).message).toMatch(/project not found: proj-1/);
+  });
+});
+
+describe("B3-A delete pre-flight (views + status updates)", () => {
+  it("deleteCustomView throws NotFoundError when view is null", async () => {
+    reset();
+    mockResponses.push({ data: { customView: null } });
+    const err = await deleteCustomView("view-missing").catch((e) => e);
+    expect(err).toBeInstanceOf(NotFoundError);
+    expect(calls.some((c) => String(c.query).includes("customViewDelete"))).toBe(false);
+  });
+
+  it("deleteCustomView throws NotFoundError when archivedAt is set", async () => {
+    reset();
+    mockResponses.push({
+      data: { customView: { id: "view-1", archivedAt: "2026-05-12T19:00:00Z" } },
+    });
+    const err = await deleteCustomView("view-1").catch((e) => e);
+    expect(err).toBeInstanceOf(NotFoundError);
+    expect(calls.some((c) => String(c.query).includes("customViewDelete"))).toBe(false);
+  });
+
+  it("deleteCustomView mutates when live", async () => {
+    reset();
+    mockResponses.push({ data: { customView: { id: "view-live", archivedAt: null } } });
+    mockResponses.push({ data: { customViewDelete: { success: true } } });
+    await expect(deleteCustomView("view-live")).resolves.toBe(true);
+    expect(calls.some((c) => String(c.query).includes("customViewDelete"))).toBe(true);
+  });
+
+  it("deleteProjectUpdateEntry throws when null or archived", async () => {
+    reset();
+    mockResponses.push({ data: { projectUpdate: null } });
+    const missing = await deleteProjectUpdateEntry("pu-missing").catch((e) => e);
+    expect(missing).toBeInstanceOf(NotFoundError);
+
+    reset();
+    mockResponses.push({
+      data: { projectUpdate: { id: "pu-1", archivedAt: "2026-05-12T19:00:00Z" } },
+    });
+    const archived = await deleteProjectUpdateEntry("pu-1").catch((e) => e);
+    expect(archived).toBeInstanceOf(NotFoundError);
+    expect(calls.some((c) => String(c.query).includes("projectUpdateArchive"))).toBe(false);
+  });
+
+  it("deleteProjectUpdateEntry mutates when live", async () => {
+    reset();
+    mockResponses.push({ data: { projectUpdate: { id: "pu-live", archivedAt: null } } });
+    mockResponses.push({ data: { projectUpdateArchive: { success: true } } });
+    await expect(deleteProjectUpdateEntry("pu-live")).resolves.toBe(true);
+  });
+
+  it("deleteInitiativeUpdateEntry throws when null or archived", async () => {
+    reset();
+    mockResponses.push({ data: { initiativeUpdate: null } });
+    const missing = await deleteInitiativeUpdateEntry("iu-missing").catch((e) => e);
+    expect(missing).toBeInstanceOf(NotFoundError);
+
+    reset();
+    mockResponses.push({
+      data: { initiativeUpdate: { id: "iu-1", archivedAt: "2026-05-12T19:00:00Z" } },
+    });
+    const archived = await deleteInitiativeUpdateEntry("iu-1").catch((e) => e);
+    expect(archived).toBeInstanceOf(NotFoundError);
+    expect(calls.some((c) => String(c.query).includes("initiativeUpdateArchive"))).toBe(false);
+  });
+
+  it("deleteInitiativeUpdateEntry mutates when live", async () => {
+    reset();
+    mockResponses.push({ data: { initiativeUpdate: { id: "iu-live", archivedAt: null } } });
+    mockResponses.push({ data: { initiativeUpdateArchive: { success: true } } });
+    await expect(deleteInitiativeUpdateEntry("iu-live")).resolves.toBe(true);
   });
 });
 

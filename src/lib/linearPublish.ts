@@ -96,7 +96,16 @@ export interface ReviewLinearChangesResult {
   lint: PlanLintFileResult[] | null;
   diff: PlanDiffResult | null;
   preview: ApplyResult | { results: CachePushResult[]; summary: CachePushSummary } | null;
-  next?: {
+  /**
+   * Agent continuations (string stubs; skill `next[]`).
+   * Present when the review is ready to apply.
+   */
+  next?: string[];
+  /**
+   * Structured MCP apply handoff (tool + arguments). Prefer this over
+   * parsing `next[]` when the host can call tools by name.
+   */
+  next_call?: {
     tool: "publish_linear_changes";
     arguments: { review_id: string; verify: true; workspace: string };
   };
@@ -195,7 +204,7 @@ export async function reviewLinearChanges(
     lint: ctx.lint,
     diff,
     preview,
-    ...(summary.ready ? { next: publishNext(record.review_id, workspace.url_key) } : {}),
+    ...(summary.ready ? publishReadyNext(record.review_id, workspace.url_key) : {}),
   };
 }
 
@@ -448,7 +457,7 @@ async function reviewCacheLinearChanges(
     lint: null,
     diff: null,
     preview,
-    ...(summary.ready ? { next: publishNext(record.review_id, workspace.url_key) } : {}),
+    ...(summary.ready ? publishReadyNext(record.review_id, workspace.url_key) : {}),
   };
 }
 
@@ -631,13 +640,17 @@ async function assertWorkspaceMatches(recorded: { url_key?: string; name?: strin
   }
 }
 
-function publishNext(
+/** Agent-facing continuations for a ready publish review. */
+function publishReadyNext(
   reviewId: string,
   workspace: string,
-): NonNullable<ReviewLinearChangesResult["next"]> {
+): Pick<ReviewLinearChangesResult, "next" | "next_call"> {
   return {
-    tool: "publish_linear_changes",
-    arguments: { review_id: reviewId, verify: true, workspace },
+    next: [`publish apply ${reviewId}`, `publish_linear_changes review_id=${reviewId}`],
+    next_call: {
+      tool: "publish_linear_changes",
+      arguments: { review_id: reviewId, verify: true, workspace },
+    },
   };
 }
 

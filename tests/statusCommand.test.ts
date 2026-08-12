@@ -27,18 +27,18 @@ describe("status command", () => {
       return true;
     });
     mocks.resolveConfig.mockResolvedValue({
-      team: "NOX",
+      team: "TEAM",
       repoRoot: "/repo",
       repoHash: "repo-hash",
     });
     mocks.collectCacheStatus.mockResolvedValue({
-      schema_version: 1,
-      team: "NOX",
+      schema_version: 2,
+      team: "TEAM",
       repo_root: "/repo",
       repo_hash: "repo-hash",
       modified: { issues: [], projects: [] },
       stale: [
-        { kind: "issue", identifier: "NOX-1" },
+        { kind: "issue", identifier: "TEAM-1" },
         { kind: "project", id: "project-1", name: "Project One" },
       ],
       remote_conflicts: [],
@@ -53,9 +53,9 @@ describe("status command", () => {
   });
 
   it("prints stale issue and project refresh selectors separately", async () => {
-    await statusAction({});
+    await statusAction({ human: true });
 
-    expect(output).toContain("NOX-1");
+    expect(output).toContain("TEAM-1");
     expect(output).toContain("project/Project One");
     expect(output).toContain("issue rows: run `lebop pull TEAM-123 --refresh --yes`");
     expect(output).toContain("project rows: run `lebop pull --project-id <uuid> --refresh --yes`");

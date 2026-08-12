@@ -1,4 +1,5 @@
 import { envelope } from "../../lib/envelope.ts";
+import { mcpGetNext } from "../../lib/nextStubs.ts";
 import {
   type AgentSessionListMcpInput,
   agentSessionGetOperation,
@@ -34,7 +35,12 @@ export function buildAgentSessionsToolSpecs(deps: AgentSessionToolDeps): McpTool
       ),
       handler: async (args: AgentSessionListMcpInput) => {
         const result = await executeAgentSessionList(buildAgentSessionListInputFromMcp(args));
-        return text(envelope(agentSessionListPayload(result)));
+        return text(
+          envelope({
+            ...agentSessionListPayload(result),
+            next: mcpGetNext("get_agent_session", "get_issue"),
+          }),
+        );
       },
     },
     {
@@ -48,7 +54,12 @@ export function buildAgentSessionsToolSpecs(deps: AgentSessionToolDeps): McpTool
           buildAgentSessionGetInput(args.id as string),
           AGENT_SESSION_GET_NOT_FOUND_HINT,
         );
-        return text(envelope({ agent_session: session }));
+        return text(
+          envelope({
+            agent_session: session,
+            next: mcpGetNext("get_issue", "list_comments", "list_agent_sessions"),
+          }),
+        );
       },
     },
   ];

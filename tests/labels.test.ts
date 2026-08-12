@@ -31,7 +31,7 @@ vi.mock("../src/lib/sdk.ts", () => ({
 vi.mock("../src/lib/config.ts", () => ({
   resolveConfig: async ({ teamOverride }: { teamOverride?: string } = {}) => ({
     repoHash: "repo-hash",
-    team: teamOverride ?? "NOX",
+    team: teamOverride ?? "TEAM",
   }),
 }));
 
@@ -87,11 +87,11 @@ describe("label mutation truthfulness", () => {
 describe("label name resolution", () => {
   it("resolveLabelByName scans past the first label page", async () => {
     mockRawResponses.push(
-      labelsPage([label("label-other", "Other", "NOX")], true, "labels-cursor-1"),
-      labelsPage([label("label-target", "Target", "NOX")], false, null),
+      labelsPage([label("label-other", "Other", "TEAM")], true, "labels-cursor-1"),
+      labelsPage([label("label-target", "Target", "TEAM")], false, null),
     );
 
-    const resolved = await resolveLabelByName("Target", "NOX");
+    const resolved = await resolveLabelByName("Target", "TEAM");
 
     expect(resolved?.id).toBe("label-target");
     expect(mockRawCalls[1]?.variables).toMatchObject({ after: "labels-cursor-1" });
@@ -99,16 +99,16 @@ describe("label name resolution", () => {
 
   it("selector resolution scans all pages before applying ambiguity checks", async () => {
     mockRawResponses.push(
-      labelsPage([label("label-other", "Other", "NOX")], true, "labels-cursor-1"),
-      labelsPage([label("label-target", "Target", "NOX")], false, null),
+      labelsPage([label("label-other", "Other", "TEAM")], true, "labels-cursor-1"),
+      labelsPage([label("label-target", "Target", "TEAM")], false, null),
     );
 
-    const resolved = await resolveLabelSelectorToId("Target", "team", "NOX");
+    const resolved = await resolveLabelSelectorToId("Target", "team", "TEAM");
 
     expect(resolved).toMatchObject({
       id: "label-target",
       scope: "team",
-      team: "NOX",
+      team: "TEAM",
       label: { id: "label-target", name: "Target" },
     });
     expect(mockRawCalls[1]?.variables).toMatchObject({ after: "labels-cursor-1" });

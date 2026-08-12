@@ -54,7 +54,7 @@ describe("listProjects (structured errors)", () => {
     }));
     teamsSpy.mockResolvedValueOnce({ nodes: [{ projects: teamProjectsSpy }] });
 
-    const projects = await listProjects({ team: "NOX", includeArchived: true, max: 10 });
+    const projects = await listProjects({ team: "TEAM", includeArchived: true, max: 10 });
 
     expect(projects).toHaveLength(1);
     expect(teamProjectsSpy).toHaveBeenCalledWith(
@@ -210,7 +210,7 @@ function baseProjectNode() {
     startDate: null,
     targetDate: null,
     archivedAt: null,
-    teams: { nodes: [{ id: "team-1", key: "NOX", name: "Noxor" }] },
+    teams: { nodes: [{ id: "team-1", key: "TEAM", name: "Example" }] },
     lead: null,
   };
 }

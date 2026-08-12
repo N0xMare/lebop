@@ -17,6 +17,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { refreshCachedProjectAfterUpdate } from "../lib/cacheRefresh.ts";
 import { resolveConfig } from "../lib/config.ts";
+import { filterToolsByProfile, type McpProfile } from "../lib/mcpProfiles.ts";
 import { getTeam } from "../lib/teams.ts";
 import { LEBOP_VERSION } from "../lib/version.ts";
 import {
@@ -36,9 +37,9 @@ export { formatToolError } from "./response.ts";
 // and cycle resolvers from ../lib/resolve.ts. The cycle resolver requires
 // `teamKey` because cycle names are not unique across teams.
 
-export function collectMcpToolDefinitions(): RegisteredMcpToolDefinition[] {
+function buildAllMcpDefinitions(): RegisteredMcpToolDefinition[] {
   const definitions: RegisteredMcpToolDefinition[] = [];
-  const collector = {
+  const collector: McpServerLike = {
     registerTool(
       name: string,
       config: RegisteredMcpToolDefinition["config"],
@@ -47,27 +48,43 @@ export function collectMcpToolDefinitions(): RegisteredMcpToolDefinition[] {
       definitions.push({ name, config, handler });
     },
   };
-  registerTools(collector);
+  registerDomainTools(collector);
   return definitions;
 }
 
-export async function startMcpServer(): Promise<void> {
+export function collectMcpToolDefinitions(
+  profile: McpProfile = "full",
+): RegisteredMcpToolDefinition[] {
+  return filterToolsByProfile(buildAllMcpDefinitions(), profile);
+}
+
+export async function startMcpServer(options?: { profile?: McpProfile }): Promise<void> {
+  const profile = options?.profile ?? "core";
   const server = new McpServer({
     name: "lebop",
     version: LEBOP_VERSION,
   });
 
-  registerTools(server);
+  const selected = collectMcpToolDefinitions(profile);
+  // Handlers already wrapped by registerMcpToolSpecs during collect — register as-is.
+  const registrar = server as unknown as {
+    registerTool: (
+      name: string,
+      config: RegisteredMcpToolDefinition["config"],
+      handler: unknown,
+    ) => void;
+  };
+  for (const def of selected) {
+    registrar.registerTool(def.name, def.config, def.handler);
+  }
   installEnvelopeValidator(server);
 
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  // server.connect resolves when the transport closes; we just await it
-  // implicitly by returning. Stay alive until stdin EOF / parent exit.
 }
 
-/** Register the MCP tools exposed through the stdio server. */
-function registerTools(server: McpServerLike): void {
+/** Build full tool inventory (all domains). */
+function registerDomainTools(server: McpServerLike): void {
   const workspaceParamDescription = WORKSPACE_PARAM_DESCRIPTION;
   const sharedConfirmEntity = {
     workspaceParamDescription,
@@ -108,12 +125,23 @@ function registerTools(server: McpServerLike): void {
       requireConfirm,
     },
     milestones: sharedConfirmEntity,
-    projectUpdates: { workspaceParamDescription },
+    projectUpdates: {
+      workspaceParamDescription,
+      requireConfirm,
+    },
     initiatives: sharedConfirmEntity,
-    initiativeUpdates: { workspaceParamDescription },
+    initiativeUpdates: {
+      workspaceParamDescription,
+      requireConfirm,
+    },
+    coverage: {
+      workspaceParamDescription,
+      requireConfirm,
+    },
     cycles: {
       workspaceParamDescription,
       requireMcpEntity,
+      requireConfirm,
     },
     documents: sharedConfirmEntity,
     agentSessions: {

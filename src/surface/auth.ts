@@ -567,7 +567,7 @@ export function buildRefreshWhoamiMcpInputSchema(workspaceDescription: string) {
 export function buildSetWorkspaceDefaultTeamMcpInputSchema() {
   return {
     workspace_slug: z.string().describe("Workspace slug to set the default team for."),
-    team: z.string().describe("Team key (e.g. 'NOX')."),
+    team: z.string().describe("Team key (e.g. 'TEAM')."),
   };
 }
 
@@ -576,15 +576,15 @@ export function buildSetWorkspaceDefaultTeamMcpInputSchema() {
 // ---------------------------------------------------------------------------
 
 const listWorkspacesDescription =
-  "Returns ALL workspaces stored in ~/.lebop/auth.json (slug, name, viewer email, default flag). This tool is meta — it lists every workspace lebop knows about and intentionally does NOT accept a `workspace` filter param (unlike every other tool). To inspect a single workspace's viewer / cached profile, call `whoami` with `for_workspace=<slug>` instead.";
+  "List auth workspaces in ~/.lebop/auth.json (slug, name, viewer, default). No workspace filter (meta tool). Use whoami for one viewer.";
 
 const setDefaultWorkspaceDescription = "Updates ~/.lebop/auth.json's `default` field.";
 
 const whoamiDescription =
-  "Returns the cached viewer for `for_workspace` (which auth slug to read) or the current default without network I/O. Use refresh_whoami to re-validate and persist updated auth metadata. Two distinct args: `for_workspace` chooses *which auth slug to read*; `workspace` is the universal API-target selector that sets LEBOP_WORKSPACE for this call. Usually they match; the split lets you query one slug while authenticated against another.";
+  "Cached viewer for for_workspace (auth slug) or default; no network. refresh_whoami re-validates. workspace=API target; for_workspace=which auth entry.";
 
 const refreshWhoamiDescription =
-  "Re-validates the stored token for `for_workspace` against Linear, persists the refreshed viewer/workspace metadata to the auth file, and returns the updated viewer. Use whoami for a read-only cached lookup.";
+  "Re-validate token for for_workspace, persist viewer/metadata, return updated viewer. Prefer whoami for cached read.";
 
 const setWorkspaceDefaultTeamDescription =
   "Updates `workspace_team_defaults[<slug>]` in ~/.lebop/config.yaml. Pairs with set_default_workspace. Idempotent at the value level.";
@@ -675,7 +675,6 @@ export const listWorkspacesOperation = {
       idempotentHint: true,
       openWorldHint: true,
     },
-    inputSchemaKeys: [],
   },
   safety: { readOnly: true, destructive: false, idempotent: true, openWorld: true },
   fromCli: buildListWorkspacesInputFromCli,
@@ -711,7 +710,6 @@ export const listWorkspacesDefaultReadOperation = {
       idempotentHint: true,
       openWorldHint: true,
     },
-    inputSchemaKeys: [],
   },
   safety: { readOnly: true, destructive: false, idempotent: true, openWorld: true },
   notes:
@@ -748,7 +746,6 @@ export const setDefaultWorkspaceOperation = {
       idempotentHint: true,
       openWorldHint: false,
     },
-    inputSchemaKeys: ["slug"],
   },
   safety: { readOnly: false, destructive: false, idempotent: true, openWorld: false },
   notes: "Setter mode only; auth default read mode maps to list_workspaces.default.",
@@ -808,7 +805,6 @@ export const whoamiOperation = {
       idempotentHint: true,
       openWorldHint: true,
     },
-    inputSchemaKeys: ["for_workspace", "workspace"],
   },
   safety: { readOnly: true, destructive: false, idempotent: true, openWorld: true },
   fromCli: buildWhoamiInputFromCli,
@@ -838,7 +834,6 @@ export const refreshWhoamiOperation = {
       idempotentHint: true,
       openWorldHint: true,
     },
-    inputSchemaKeys: ["for_workspace", "workspace"],
   },
   safety: { readOnly: false, destructive: false, idempotent: true, openWorld: true },
   notes:
@@ -875,7 +870,6 @@ export const setWorkspaceDefaultTeamOperation = {
       idempotentHint: true,
       openWorldHint: false,
     },
-    inputSchemaKeys: ["workspace_slug", "team"],
   },
   safety: { readOnly: false, destructive: false, idempotent: true, openWorld: false },
   notes:

@@ -33,6 +33,8 @@ lebop plan apply "$plan_dir" --dry-run
 
 # 5. Apply for real. Creates the project + 3 issues + relations in Linear,
 #    then writes `linear_id:` into each frontmatter.
+#    Agents: prefer `lebop publish review --plan "$plan_dir"` then
+#    `lebop publish apply <review_id>` instead of raw plan apply.
 lebop plan apply "$plan_dir"
 
 # 6. Re-apply is idempotent — same files, no changes, no-op.
@@ -56,7 +58,7 @@ grep linear_id plans/getting-started-demo/*.md
 lebop archive TEAM-42 TEAM-43 TEAM-44 --yes
 
 # To clean up the project too, use the first-class project command:
-lebop project delete <project-uuid-from-_project.md> --yes
+lebop project soft-delete <project-uuid-from-_project.md> --yes
 ```
 
 ## See also

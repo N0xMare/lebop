@@ -96,7 +96,7 @@ function mcpProjectNode(overrides: Record<string, unknown> = {}) {
     startDate: null,
     targetDate: null,
     archivedAt: null,
-    teams: { nodes: [{ id: "team-uuid-nox", key: "NOX", name: "Noxor" }] },
+    teams: { nodes: [{ id: "team-uuid-team", key: "TEAM", name: "Example" }] },
     lead: null,
     ...overrides,
   };
@@ -119,7 +119,7 @@ function mcpSdkIssuePayload(
     state: { id: "state-backlog", name: "Backlog", type: "backlog" },
     assignee: null,
     project: null,
-    team: { id: "team-nox", key: "NOX" },
+    team: { id: "team-team", key: "TEAM" },
     parent: null,
     labels: { nodes: [] },
     reactions: [],
@@ -151,7 +151,7 @@ function pageInfo() {
   };
 }
 
-function teamLookupResponse(id = "team-uuid-nox", key = "NOX", name = "Noxor") {
+function teamLookupResponse(id = "team-uuid-team", key = "TEAM", name = "Example") {
   return {
     data: {
       teams: {
@@ -177,7 +177,9 @@ async function writeCachedIssueFixture(
 ) {
   const gitRoot = repoRoot ? findGitRoot(repoRoot) : findGitRoot(process.cwd());
   const repoHash = gitRoot ? hashRepoRoot(gitRoot) : "_global";
-  const dir = join(home, "cache", repoHash, "issues", identifier);
+  // 0.0.6 layout: cache/<workspace-slug>/<repo-hash>/…
+  const workspace = process.env.LEBOP_WORKSPACE ?? "test-workspace";
+  const dir = join(home, "cache", workspace, repoHash, "issues", identifier);
   await mkdir(dir, { recursive: true });
   const descriptionHash = createHash("sha256").update(description).digest("hex");
   await writeFile(join(dir, "description.md"), description);
@@ -222,7 +224,8 @@ async function writeCachedIssueFixture(
 async function writeCachedProjectFixture(home: string, projectId: string, repoRoot: string) {
   const gitRoot = findGitRoot(repoRoot);
   const repoHash = gitRoot ? hashRepoRoot(gitRoot) : "_global";
-  const dir = join(home, "cache", repoHash, "projects", projectId);
+  const workspace = process.env.LEBOP_WORKSPACE ?? "test-workspace";
+  const dir = join(home, "cache", workspace, repoHash, "projects", projectId);
   const content = "before content";
   const contentHash = createHash("sha256").update(content).digest("hex");
   await mkdir(dir, { recursive: true });
@@ -297,7 +300,7 @@ function queueTeamMetadataResponses(teamKey = "ENG", labels: { id: string; name:
   });
 }
 
-async function makeHomeWithDefaultTeam(team = "NOX"): Promise<string> {
+async function makeHomeWithDefaultTeam(team = "TEAM"): Promise<string> {
   const home = await makeAuthFile(`lin_api_test_mcp_default_${team.toLowerCase()}`);
   await writeFile(
     join(home, "config.yaml"),
@@ -315,16 +318,20 @@ async function bootClientWithHome(home: string): Promise<McpClient> {
 }
 
 const REQUIRED_MCP_CONFIRM_ARGS: Record<string, Record<string, unknown>> = {
+  archive_cycle: { id: "11111111-2222-3333-4444-555555555555" },
   archive_initiative: { id: "11111111-2222-3333-4444-555555555555" },
-  archive_issue: { identifiers: ["NOX-1"] },
+  archive_issue: { identifiers: ["TEAM-1"] },
   delete_attachment: { id: "11111111-2222-3333-4444-555555555555" },
   delete_comment: { id: "11111111-2222-3333-4444-555555555555" },
-  delete_document: { id: "11111111-2222-3333-4444-555555555555" },
-  delete_initiative: { id: "11111111-2222-3333-4444-555555555555" },
+  soft_delete_document: { id: "11111111-2222-3333-4444-555555555555" },
+  soft_delete_initiative: { id: "11111111-2222-3333-4444-555555555555" },
+  soft_delete_initiative_update: { id: "11111111-2222-3333-4444-555555555555" },
   delete_label: { id: "11111111-2222-3333-4444-555555555555" },
   delete_milestone: { id: "11111111-2222-3333-4444-555555555555" },
-  delete_project: { id: "11111111-2222-3333-4444-555555555555" },
-  delete_relation: { from: "NOX-1", kind: "related", to: "NOX-2" },
+  soft_delete_project: { id: "11111111-2222-3333-4444-555555555555" },
+  soft_delete_project_update: { id: "11111111-2222-3333-4444-555555555555" },
+  delete_relation: { from: "TEAM-1", kind: "related", to: "TEAM-2" },
+  delete_view: { id: "11111111-2222-3333-4444-555555555555" },
   initiative_remove_project: {
     initiative: "11111111-2222-3333-4444-555555555555",
     project: "22222222-3333-4444-5555-666666666666",
@@ -356,12 +363,13 @@ describe("mcp: handshake + tools/list", () => {
     await client.notifyInitialized();
   });
 
-  it("tools/list returns all 85 tools with stable names", async () => {
+  it("tools/list returns full profile tools with stable names", async () => {
     const { tools } = await client.listTools();
     // Lock the count so future tool additions are intentional. If you add
     // or remove a tool, bump this number AND verify the new tool has an
     // MCP-level test (not just a lib test).
-    expect(tools).toHaveLength(85);
+    // 0.0.6 full profile = prior 85 + coverage tools (search/history/views/fields).
+    expect(tools).toHaveLength(104);
 
     // Sample-check a representative across surfaces — this is the same set
     // the canary workflow asserts on, so the two stay in sync.
@@ -430,12 +438,12 @@ describe("mcp: list surface parity with CLI defaults", () => {
     const home = await makeAuthFile("lin_api_test_mcp_default_team");
     await writeFile(
       join(home, "config.yaml"),
-      ["workspace_team_defaults:", "  test-workspace: NOX", ""].join("\n"),
+      ["workspace_team_defaults:", "  test-workspace: TEAM", ""].join("\n"),
     );
     return home;
   }
 
-  function queueTeamLookup(key = "NOX") {
+  function queueTeamLookup(key = "TEAM") {
     mock.respond({
       data: {
         teams: {
@@ -443,7 +451,7 @@ describe("mcp: list surface parity with CLI defaults", () => {
             {
               id: `team-${key.toLowerCase()}`,
               key,
-              name: "Noxor",
+              name: "Example",
               description: null,
               defaultIssueState: null,
             },
@@ -474,14 +482,14 @@ describe("mcp: list surface parity with CLI defaults", () => {
     try {
       await client.initialize();
       await client.notifyInitialized();
-      queueTeamLookup("NOX");
+      queueTeamLookup("TEAM");
       queueEmptyIssues();
 
       const r = await client.callTool("list_issues", { limit: 1 });
       expect(r.isError, JSON.stringify(r.parsed)).toBeFalsy();
       expect(r.parsed).toMatchObject({
-        scope: { type: "team", team: "NOX" },
-        team: "NOX",
+        scope: { type: "team", team: "TEAM" },
+        team: "TEAM",
         all_teams: false,
         count: 0,
         limit: 1,
@@ -489,9 +497,9 @@ describe("mcp: list surface parity with CLI defaults", () => {
         next_cursor: null,
         truncated: false,
       });
-      expect(mock.requestAt(0)?.variables).toMatchObject({ key: "NOX" });
+      expect(mock.requestAt(0)?.variables).toMatchObject({ key: "TEAM" });
       expect(mock.requestAt(1)?.variables.filter).toMatchObject({
-        team: { key: { eq: "NOX" } },
+        team: { key: { eq: "TEAM" } },
       });
     } finally {
       await client.close();
@@ -555,7 +563,7 @@ describe("mcp: list surface parity with CLI defaults", () => {
   it("list_issues can express CLI mine active-work semantics in one call", async () => {
     const client = await bootClient();
     try {
-      queueTeamLookup("NOX");
+      queueTeamLookup("TEAM");
       mock.respond({
         data: {
           viewer: {
@@ -568,7 +576,7 @@ describe("mcp: list surface parity with CLI defaults", () => {
       queueEmptyIssues();
 
       const r = await client.callTool("list_issues", {
-        team: "NOX",
+        team: "TEAM",
         assignee: "me",
         active_only: true,
         limit: 1,
@@ -577,7 +585,7 @@ describe("mcp: list surface parity with CLI defaults", () => {
       expect(mock.requestAt(2)?.variables.filter).toMatchObject({
         assignee: { id: { eq: "viewer-id" } },
         state: { type: { in: ["triage", "backlog", "unstarted", "started"] } },
-        team: { key: { eq: "NOX" } },
+        team: { key: { eq: "TEAM" } },
       });
     } finally {
       await client.close();
@@ -599,9 +607,9 @@ describe("mcp: list surface parity with CLI defaults", () => {
           teams: {
             nodes: [
               {
-                id: "team-nox",
-                key: "NOX",
-                name: "Noxor",
+                id: "team-team",
+                key: "TEAM",
+                name: "Example",
                 description: null,
                 defaultIssueState: null,
               },
@@ -621,7 +629,7 @@ describe("mcp: list surface parity with CLI defaults", () => {
       let r = await client.callTool("list_cycles", { limit: 1 });
       expect(r.isError, JSON.stringify(r.parsed)).toBeFalsy();
       expect(mock.requestAt(1)?.variables.filter).toMatchObject({
-        team: { key: { eq: "NOX" } },
+        team: { key: { eq: "TEAM" } },
       });
 
       mock.reset();
@@ -655,7 +663,7 @@ describe("mcp: list surface parity with CLI defaults", () => {
       mock.respond({
         data: {
           teams: {
-            nodes: [{ id: "team-nox", key: "NOX", name: "Noxor", description: null }],
+            nodes: [{ id: "team-team", key: "TEAM", name: "Example", description: null }],
             pageInfo: pageInfo(),
           },
         },
@@ -674,7 +682,7 @@ describe("mcp: list surface parity with CLI defaults", () => {
       let r = await client.callTool("list_projects", { include_archived: true, limit: 1 });
       expect(r.isError, JSON.stringify(r.parsed)).toBeFalsy();
       expect(r.parsed).toMatchObject({
-        team: "NOX",
+        team: "TEAM",
         count: 0,
         limit: 1,
         has_more: false,
@@ -683,10 +691,10 @@ describe("mcp: list surface parity with CLI defaults", () => {
         projects: [],
       });
       expect(mock.requestAt(0)?.variables.filter).toMatchObject({
-        key: { eq: "NOX" },
+        key: { eq: "TEAM" },
       });
       expect(mock.requestAt(1)?.variables).toMatchObject({
-        id: "team-nox",
+        id: "team-team",
         includeArchived: true,
       });
 
@@ -736,7 +744,7 @@ describe("mcp: list surface parity with CLI defaults", () => {
     try {
       await client.initialize();
       await client.notifyInitialized();
-      queueTeamLookup("NOX");
+      queueTeamLookup("TEAM");
       mock.respond({
         data: {
           issueLabels: {
@@ -746,7 +754,7 @@ describe("mcp: list surface parity with CLI defaults", () => {
                 name: "Team Label",
                 color: "#ff0000",
                 description: null,
-                team: { id: "team-nox", key: "NOX", name: "Noxor" },
+                team: { id: "team-team", key: "TEAM", name: "Example" },
               },
             ],
             pageInfo: pageInfo(),
@@ -757,13 +765,13 @@ describe("mcp: list surface parity with CLI defaults", () => {
       let r = await client.callTool("list_labels", {});
       expect(r.isError, JSON.stringify(r.parsed)).toBeFalsy();
       expect(r.parsed).toMatchObject({
-        scope: { type: "team", team: "NOX" },
-        team: "NOX",
+        scope: { type: "team", team: "TEAM" },
+        team: "TEAM",
         count: 1,
       });
-      expect(mock.requestAt(0)?.variables).toMatchObject({ key: "NOX" });
+      expect(mock.requestAt(0)?.variables).toMatchObject({ key: "TEAM" });
       expect(mock.requestAt(1)?.variables.filter).toMatchObject({
-        or: [{ team: { key: { eq: "NOX" } } }, { team: { null: true } }],
+        or: [{ team: { key: { eq: "TEAM" } } }, { team: { null: true } }],
       });
 
       mock.reset();
@@ -872,18 +880,13 @@ describe("mcp: read surface (get_issue + list_workspaces)", () => {
         relations: { outbound: unknown[]; inbound: unknown[] };
       };
     };
-    expect(body.schema_version).toBe(1);
+    expect(body.schema_version).toBe(2);
     expect(body.issue.metadata.identifier).toBe("ENG-1");
     expect(body.issue.metadata.title).toBe("First issue");
     expect(body.issue.description).toBe("body");
-    expect(body.issue.comments).toEqual([]);
-    expect(body.issue.relations).toEqual({ outbound: [], inbound: [] });
-    expect(body.issue).toMatchObject({
-      completeness: {
-        comments: { complete: true, has_more: false, count: 0 },
-        relations: { complete: true, has_more: false, outbound_count: 0, inbound_count: 0 },
-      },
-    });
+    // Dense defaults omit comments/relations unless requested.
+    expect(body.issue.comments).toBeUndefined();
+    expect(body.issue.relations).toBeUndefined();
   });
 
   it("get_issue completes comment overflow and marks relation overflow", async () => {
@@ -952,7 +955,11 @@ describe("mcp: read surface (get_issue + list_workspaces)", () => {
       },
     });
 
-    const r = await client.callTool("get_issue", { identifier: "ENG-2" });
+    const r = await client.callTool("get_issue", {
+      identifier: "ENG-2",
+      include_comments: true,
+      include_relations: true,
+    });
     expect(r.isError, JSON.stringify(r.parsed)).toBeFalsy();
     const body = r.parsed as {
       issue: {
@@ -1020,7 +1027,7 @@ describe("mcp: read surface (get_issue + list_workspaces)", () => {
     const r = await client.callToolOmittingArguments("list_workspaces");
     expect(r.isError, JSON.stringify(r.parsed)).toBeFalsy();
     const body = r.parsed as { schema_version: number; default: string };
-    expect(body.schema_version).toBe(1);
+    expect(body.schema_version).toBe(2);
     expect(body.default).toBe("test-workspace");
   });
 
@@ -1202,12 +1209,15 @@ describe("mcp: read surface (get_issue + list_workspaces)", () => {
     const reviewed = review.parsed as {
       review_id: string;
       ready: boolean;
-      next: { arguments: { review_id: string; workspace: string } };
+      next?: string[];
+      next_call?: { arguments: { review_id: string; workspace: string } };
     };
     expect(reviewed.ready).toBe(true);
     expect(reviewed.review_id).toMatch(/^pub_/);
-    expect(reviewed.next.arguments.review_id).toBe(reviewed.review_id);
-    expect(reviewed.next.arguments.workspace).toBe("test-workspace");
+    expect(reviewed.next_call?.arguments.review_id).toBe(reviewed.review_id);
+    expect(reviewed.next_call?.arguments.workspace).toBe("test-workspace");
+    expect(Array.isArray(reviewed.next)).toBe(true);
+    expect(reviewed.next?.[0]).toContain(reviewed.review_id);
 
     mock.respond({
       data: {
@@ -1510,7 +1520,7 @@ describe("mcp: read surface (get_issue + list_workspaces)", () => {
 
   it("review_linear_changes rejects nested cache selector typos", async () => {
     const result = await client.callTool("review_linear_changes", {
-      source: { kind: "cache", identifier: ["NOX-1"] },
+      source: { kind: "cache", identifier: ["TEAM-1"] },
     });
 
     expect(result.isError).toBe(true);
@@ -1619,7 +1629,7 @@ describe("mcp: create / lifecycle / delete (raw-path representatives)", () => {
             name: "team-label",
             color: "#00ff00",
             description: null,
-            team: { id: "team-uuid-nox", key: "NOX", name: "Noxor" },
+            team: { id: "team-uuid-team", key: "TEAM", name: "Example" },
           },
         },
       },
@@ -1628,22 +1638,22 @@ describe("mcp: create / lifecycle / delete (raw-path representatives)", () => {
     const r = await client.callTool("create_label", {
       name: "team-label",
       scope: "team",
-      team: "NOX",
+      team: "TEAM",
       color: "#00ff00",
     });
     expect(r.isError, JSON.stringify(r.parsed)).toBeFalsy();
     const body = r.parsed as { label: { id: string; team: { key: string } } };
     expect(body.label.id).toBe("label-uuid-team");
-    expect(body.label.team.key).toBe("NOX");
-    expect(mock.requestAt(0)?.variables).toMatchObject({ key: "NOX" });
+    expect(body.label.team.key).toBe("TEAM");
+    expect(mock.requestAt(0)?.variables).toMatchObject({ key: "TEAM" });
     expect(mock.requestAt(1)?.variables).toMatchObject({
-      input: { name: "team-label", teamId: "team-uuid-nox", color: "#00ff00" },
+      input: { name: "team-label", teamId: "team-uuid-team", color: "#00ff00" },
     });
     expect(mock.requestAt(2)).toBeUndefined();
   });
 
   it("create_label defaults omitted scope to the configured team", async () => {
-    const home = await makeHomeWithDefaultTeam("NOX");
+    const home = await makeHomeWithDefaultTeam("TEAM");
     const scopedClient = await bootClientWithHome(home);
     try {
       mock.respond(teamLookupResponse());
@@ -1656,7 +1666,7 @@ describe("mcp: create / lifecycle / delete (raw-path representatives)", () => {
               name: "default-team-label",
               color: "#00aa00",
               description: null,
-              team: { id: "team-uuid-nox", key: "NOX", name: "Noxor" },
+              team: { id: "team-uuid-team", key: "TEAM", name: "Example" },
             },
           },
         },
@@ -1674,12 +1684,12 @@ describe("mcp: create / lifecycle / delete (raw-path representatives)", () => {
         team_id: string;
       };
       expect(body.scope).toBe("team");
-      expect(body.team).toBe("NOX");
-      expect(body.team_id).toBe("team-uuid-nox");
-      expect(body.label.team.key).toBe("NOX");
-      expect(mock.requestAt(0)?.variables).toMatchObject({ key: "NOX" });
+      expect(body.team).toBe("TEAM");
+      expect(body.team_id).toBe("team-uuid-team");
+      expect(body.label.team.key).toBe("TEAM");
+      expect(mock.requestAt(0)?.variables).toMatchObject({ key: "TEAM" });
       expect(mock.requestAt(1)?.variables).toMatchObject({
-        input: { name: "default-team-label", teamId: "team-uuid-nox", color: "#00aa00" },
+        input: { name: "default-team-label", teamId: "team-uuid-team", color: "#00aa00" },
       });
     } finally {
       await scopedClient.close();
@@ -1699,14 +1709,14 @@ describe("mcp: create / lifecycle / delete (raw-path representatives)", () => {
 
     const r = await client.callTool("create_project", {
       name: "MCP Icon Project",
-      team_ids: ["team-uuid-nox"],
+      team_ids: ["team-uuid-team"],
       icon: "Rocket",
     });
     expect(r.isError, JSON.stringify(r.parsed)).toBeFalsy();
     const body = r.parsed as { project: { icon: string | null } };
     expect(body.project.icon).toBe("Rocket");
     expect(mock.requestAt(0)?.variables).toMatchObject({
-      input: { name: "MCP Icon Project", teamIds: ["team-uuid-nox"], icon: "Rocket" },
+      input: { name: "MCP Icon Project", teamIds: ["team-uuid-team"], icon: "Rocket" },
     });
   });
 
@@ -1723,22 +1733,22 @@ describe("mcp: create / lifecycle / delete (raw-path representatives)", () => {
 
     const r = await client.callTool("create_project", {
       name: "MCP Icon Project",
-      team: "NOX",
+      team: "TEAM",
       icon: "Rocket",
     });
     expect(r.isError, JSON.stringify(r.parsed)).toBeFalsy();
     const body = r.parsed as { project: { id: string; icon: string | null } };
     expect(body.project.id).toBe("project-uuid-icon");
     expect(body.project.icon).toBe("Rocket");
-    expect(mock.requestAt(0)?.variables).toMatchObject({ key: "NOX" });
+    expect(mock.requestAt(0)?.variables).toMatchObject({ key: "TEAM" });
     expect(mock.requestAt(1)?.variables).toMatchObject({
-      input: { name: "MCP Icon Project", teamIds: ["team-uuid-nox"], icon: "Rocket" },
+      input: { name: "MCP Icon Project", teamIds: ["team-uuid-team"], icon: "Rocket" },
     });
     expect(mock.requestAt(2)).toBeUndefined();
   });
 
   it("create_project uses configured default team when selectors are omitted", async () => {
-    const home = await makeHomeWithDefaultTeam("NOX");
+    const home = await makeHomeWithDefaultTeam("TEAM");
     const scopedClient = await bootClientWithHome(home);
     try {
       mock.respond(teamLookupResponse());
@@ -1757,10 +1767,10 @@ describe("mcp: create / lifecycle / delete (raw-path representatives)", () => {
       expect(r.isError, JSON.stringify(r.parsed)).toBeFalsy();
       const body = r.parsed as { project: { id: string }; team_ids: string[] };
       expect(body.project.id).toBe("project-uuid-icon");
-      expect(body.team_ids).toEqual(["team-uuid-nox"]);
-      expect(mock.requestAt(0)?.variables).toMatchObject({ key: "NOX" });
+      expect(body.team_ids).toEqual(["team-uuid-team"]);
+      expect(mock.requestAt(0)?.variables).toMatchObject({ key: "TEAM" });
       expect(mock.requestAt(1)?.variables).toMatchObject({
-        input: { name: "MCP Icon Project", teamIds: ["team-uuid-nox"] },
+        input: { name: "MCP Icon Project", teamIds: ["team-uuid-team"] },
       });
     } finally {
       await scopedClient.close();
@@ -1781,23 +1791,23 @@ describe("mcp: create / lifecycle / delete (raw-path representatives)", () => {
 
     const r = await client.callTool("create_project", {
       name: "MCP Icon Project",
-      team_ids: ["team-uuid-nox"],
-      team_keys: ["NOX", "NOX"],
-      team: "NOX",
+      team_ids: ["team-uuid-team"],
+      team_keys: ["TEAM", "TEAM"],
+      team: "TEAM",
     });
     expect(r.isError, JSON.stringify(r.parsed)).toBeFalsy();
     const body = r.parsed as { team_ids: string[] };
-    expect(body.team_ids).toEqual(["team-uuid-nox"]);
-    expect(mock.requestAt(0)?.variables).toMatchObject({ key: "NOX" });
+    expect(body.team_ids).toEqual(["team-uuid-team"]);
+    expect(mock.requestAt(0)?.variables).toMatchObject({ key: "TEAM" });
     expect(mock.requestAt(1)?.variables).toMatchObject({
-      input: { name: "MCP Icon Project", teamIds: ["team-uuid-nox"] },
+      input: { name: "MCP Icon Project", teamIds: ["team-uuid-team"] },
     });
     expect(mock.requestAt(2)).toBeUndefined();
   });
 
   it("create_issue rejects project and project_id together before mutation", async () => {
     const r = await client.callTool("create_issue", {
-      team: "NOX",
+      team: "TEAM",
       title: "bad project selector",
       project: "Roadmap",
       project_id: "11111111-2222-3333-4444-555555555555",
@@ -1810,24 +1820,24 @@ describe("mcp: create / lifecycle / delete (raw-path representatives)", () => {
   });
 
   it("archive_issue expands issue ranges like the CLI", async () => {
-    mock.respond({ data: { issue: { id: "issue-uuid-1", identifier: "NOX-1" } } });
+    mock.respond({ data: { issue: { id: "issue-uuid-1", identifier: "TEAM-1" } } });
     mock.respond({ data: { issueArchive: { success: true } } });
-    mock.respond({ data: { issue: { id: "issue-uuid-2", identifier: "NOX-2" } } });
+    mock.respond({ data: { issue: { id: "issue-uuid-2", identifier: "TEAM-2" } } });
     mock.respond({ data: { issueArchive: { success: true } } });
 
     const r = await client.callTool("archive_issue", {
-      identifiers: ["NOX-1..NOX-2"],
+      identifiers: ["TEAM-1..TEAM-2"],
       confirm: true,
     });
     expect(r.isError, JSON.stringify(r.parsed)).toBeFalsy();
     const body = r.parsed as { results: { identifier: string; status: string }[] };
     expect(body.results).toEqual([
-      { identifier: "NOX-1", status: "ok" },
-      { identifier: "NOX-2", status: "ok" },
+      { identifier: "TEAM-1", status: "ok" },
+      { identifier: "TEAM-2", status: "ok" },
     ]);
-    expect(mock.requestAt(0)?.variables).toMatchObject({ id: "NOX-1" });
+    expect(mock.requestAt(0)?.variables).toMatchObject({ id: "TEAM-1" });
     expect(mock.requestAt(1)?.variables).toMatchObject({ id: "issue-uuid-1" });
-    expect(mock.requestAt(2)?.variables).toMatchObject({ id: "NOX-2" });
+    expect(mock.requestAt(2)?.variables).toMatchObject({ id: "TEAM-2" });
     expect(mock.requestAt(3)?.variables).toMatchObject({ id: "issue-uuid-2" });
   });
 
@@ -1875,7 +1885,7 @@ describe("mcp: create / lifecycle / delete (raw-path representatives)", () => {
     expect(body.success).toBe(true);
   });
 
-  it("delete_initiative {id: <uuid>} happy path returns status: 'deleted' (round-9 / M-3)", async () => {
+  it("soft_delete_initiative {id: <uuid>} happy path returns status: 'deleted' (round-9 / M-3)", async () => {
     // UUID input — resolveInitiativeId regex-matches and skips the name
     // lookup. `deleteInitiative` then runs a `getInitiative` pre-flight
     // (round-7 / Q2 archived-check) before issuing the delete mutation,
@@ -1903,7 +1913,7 @@ describe("mcp: create / lifecycle / delete (raw-path representatives)", () => {
     });
     mock.respond({ data: { initiativeDelete: { success: true } } });
 
-    const r = await client.callTool("delete_initiative", {
+    const r = await client.callTool("soft_delete_initiative", {
       id: "11111111-2222-3333-4444-555555555555",
       confirm: true,
     });
@@ -1920,7 +1930,7 @@ describe("mcp: create / lifecycle / delete (raw-path representatives)", () => {
     expect(body.query).toBe("11111111-2222-3333-4444-555555555555");
   });
 
-  it("delete_initiative {id: <name>} resolves name then deletes (round-9 / H1 + M-3)", async () => {
+  it("soft_delete_initiative {id: <name>} resolves name then deletes (round-9 / H1 + M-3)", async () => {
     // Step 1: resolveInitiativeId hits the list-shape `initiatives(filter:
     // { name: { eq } }, includeArchived: true)` query — return one match.
     mock.respond({
@@ -1956,7 +1966,7 @@ describe("mcp: create / lifecycle / delete (raw-path representatives)", () => {
     // Step 3: the actual delete mutation.
     mock.respond({ data: { initiativeDelete: { success: true } } });
 
-    const r = await client.callTool("delete_initiative", { id: "Q4 Goals", confirm: true });
+    const r = await client.callTool("soft_delete_initiative", { id: "Q4 Goals", confirm: true });
     expect(r.isError, JSON.stringify(r.parsed)).toBeFalsy();
     const body = r.parsed as {
       status: string;
@@ -1969,13 +1979,13 @@ describe("mcp: create / lifecycle / delete (raw-path representatives)", () => {
     expect(body.query).toBe("Q4 Goals");
   });
 
-  it("delete_initiative {id: <bogus-name>} returns already-absent without mutation (round-9 / H1 + M-1)", async () => {
+  it("soft_delete_initiative {id: <bogus-name>} returns already-absent without mutation (round-9 / H1 + M-1)", async () => {
     // resolveInitiativeId list query returns empty nodes → already-absent
     // short-circuit fires; NO delete mutation should be sent. The envelope
     // shape carries `id: null` + `query: <input>` for caller observability.
     mock.respond({ data: { initiatives: { nodes: [] } } });
 
-    const r = await client.callTool("delete_initiative", {
+    const r = await client.callTool("soft_delete_initiative", {
       id: "no-such-initiative-xyz",
       confirm: true,
     });
@@ -2070,7 +2080,7 @@ describe("mcp: create / lifecycle / delete (raw-path representatives)", () => {
               name: "delete-me",
               color: "#cccccc",
               description: null,
-              team: { id: "team-uuid-nox", key: "NOX", name: "Noxor" },
+              team: { id: "team-uuid-team", key: "TEAM", name: "Example" },
             },
           ],
           pageInfo: pageInfo(),
@@ -2081,7 +2091,7 @@ describe("mcp: create / lifecycle / delete (raw-path representatives)", () => {
 
     const r = await client.callTool("delete_label", {
       name_or_id: "delete-me",
-      team: "NOX",
+      team: "TEAM",
       confirm: true,
     });
     expect(r.isError, JSON.stringify(r.parsed)).toBeFalsy();
@@ -2089,16 +2099,16 @@ describe("mcp: create / lifecycle / delete (raw-path representatives)", () => {
     expect(body.id).toBe("label-uuid-delete");
     expect(body.selector).toBe("delete-me");
     expect(body.success).toBe(true);
-    expect(mock.requestAt(0)?.variables).toMatchObject({ key: "NOX" });
+    expect(mock.requestAt(0)?.variables).toMatchObject({ key: "TEAM" });
     expect(mock.requestAt(1)?.variables).toMatchObject({
-      filter: { or: [{ team: { key: { eq: "NOX" } } }, { team: { null: true } }] },
+      filter: { or: [{ team: { key: { eq: "TEAM" } } }, { team: { null: true } }] },
     });
     expect(mock.requestAt(2)?.variables).toMatchObject({ id: "label-uuid-delete" });
     expect(mock.requestAt(3)).toBeUndefined();
   });
 
   it("delete_label default team scope does not match workspace-scoped labels", async () => {
-    const home = await makeHomeWithDefaultTeam("NOX");
+    const home = await makeHomeWithDefaultTeam("TEAM");
     const scopedClient = await bootClientWithHome(home);
     try {
       mock.respond(teamLookupResponse());
@@ -2127,9 +2137,9 @@ describe("mcp: create / lifecycle / delete (raw-path representatives)", () => {
       const body = r.parsed as { error: { code: string; message: string } };
       expect(body.error.code).toBe("not_found");
       expect(body.error.message).toContain("label not found");
-      expect(mock.requestAt(0)?.variables).toMatchObject({ key: "NOX" });
+      expect(mock.requestAt(0)?.variables).toMatchObject({ key: "TEAM" });
       expect(mock.requestAt(1)?.variables).toMatchObject({
-        filter: { or: [{ team: { key: { eq: "NOX" } } }, { team: { null: true } }] },
+        filter: { or: [{ team: { key: { eq: "TEAM" } } }, { team: { null: true } }] },
       });
       expect(mock.requestAt(2)).toBeUndefined();
     } finally {
@@ -2194,17 +2204,17 @@ describe("mcp: create / lifecycle / delete (raw-path representatives)", () => {
 
     const r = await client.callTool("lookup_label_by_name", {
       name: "delete-me",
-      team: "NOX",
+      team: "TEAM",
     });
 
     expect(r.isError, JSON.stringify(r.parsed)).toBeFalsy();
     const body = r.parsed as { label: unknown; scope: string; team: string | null };
     expect(body.label).toBeNull();
     expect(body.scope).toBe("team");
-    expect(body.team).toBe("NOX");
-    expect(mock.requestAt(0)?.variables).toMatchObject({ key: "NOX" });
+    expect(body.team).toBe("TEAM");
+    expect(mock.requestAt(0)?.variables).toMatchObject({ key: "TEAM" });
     expect(mock.requestAt(1)?.variables).toMatchObject({
-      filter: { or: [{ team: { key: { eq: "NOX" } } }, { team: { null: true } }] },
+      filter: { or: [{ team: { key: { eq: "TEAM" } } }, { team: { null: true } }] },
     });
     expect(mock.requestAt(2)).toBeUndefined();
   });
@@ -2618,8 +2628,8 @@ describe("mcp: update_issue — wave-2 extras-only regression lock", () => {
     mock.respond({
       data: {
         issue: {
-          id: "issue-uuid-nox-120",
-          identifier: "NOX-120",
+          id: "issue-uuid-team-120",
+          identifier: "TEAM-120",
         },
       },
     });
@@ -2628,20 +2638,20 @@ describe("mcp: update_issue — wave-2 extras-only regression lock", () => {
         issueUpdate: {
           success: true,
           issue: {
-            id: "issue-uuid-nox-120",
-            identifier: "NOX-120",
+            id: "issue-uuid-team-120",
+            identifier: "TEAM-120",
             title: "Existing issue",
             description: "MCP direct body",
             priority: 0,
             estimate: null,
-            url: "https://linear.app/test/issue/NOX-120",
+            url: "https://linear.app/test/issue/TEAM-120",
             updatedAt: "2026-05-01T00:00:01.000Z",
             state: { id: "state-x", name: "Todo", type: "unstarted" },
             assignee: null,
             project: { id: projectUuid, name: "Direct Project" },
             projectMilestone: { id: milestoneUuid, name: "Direct Milestone" },
             cycle: null,
-            team: { id: "team-uuid-nox", key: "NOX" },
+            team: { id: "team-uuid-team", key: "TEAM" },
             parent: null,
             labels: { nodes: [] },
           },
@@ -2650,7 +2660,7 @@ describe("mcp: update_issue — wave-2 extras-only regression lock", () => {
     });
 
     const r = await client.callTool("update_issue", {
-      identifier: "NOX-120",
+      identifier: "TEAM-120",
       description: "MCP direct body",
       project: projectUuid,
       milestone: milestoneUuid,
@@ -2670,9 +2680,9 @@ describe("mcp: update_issue — wave-2 extras-only regression lock", () => {
         labels: { id: string; name: string }[];
       };
     };
-    expect(body.issue.identifier).toBe("NOX-120");
+    expect(body.issue.identifier).toBe("TEAM-120");
     expect(body.remote).toMatchObject({
-      identifier: "NOX-120",
+      identifier: "TEAM-120",
       updated_at: "2026-05-01T00:00:01.000Z",
       description: "MCP direct body",
       project: { id: projectUuid, name: "Direct Project" },
@@ -2683,7 +2693,7 @@ describe("mcp: update_issue — wave-2 extras-only regression lock", () => {
 
     const update = mock.requestAt(1);
     expect(update?.query).toContain("issueUpdate");
-    expect(update?.variables.id).toBe("issue-uuid-nox-120");
+    expect(update?.variables.id).toBe("issue-uuid-team-120");
     expect(update?.variables.input).toMatchObject({
       description: "MCP direct body",
       projectId: projectUuid,
@@ -2696,8 +2706,8 @@ describe("mcp: update_issue — wave-2 extras-only regression lock", () => {
     mock.respond({
       data: {
         issue: {
-          id: "issue-uuid-nox-121",
-          identifier: "NOX-121",
+          id: "issue-uuid-team-121",
+          identifier: "TEAM-121",
           labels: {
             nodes: [
               { id: "label-keep", name: "Keep" },
@@ -2707,7 +2717,7 @@ describe("mcp: update_issue — wave-2 extras-only regression lock", () => {
         },
       },
     });
-    queueTeamMetadataResponses("NOX", [
+    queueTeamMetadataResponses("TEAM", [
       { id: "label-keep", name: "Keep" },
       { id: "label-remove", name: "Remove Me" },
       { id: "label-add", name: "Add Me" },
@@ -2717,7 +2727,7 @@ describe("mcp: update_issue — wave-2 extras-only regression lock", () => {
         issueUpdate: {
           success: true,
           issue: {
-            ...mcpSdkIssuePayload("issue-uuid-nox-121", "NOX-121"),
+            ...mcpSdkIssuePayload("issue-uuid-team-121", "TEAM-121"),
             labels: {
               nodes: [
                 { id: "label-keep", name: "Keep" },
@@ -2730,7 +2740,7 @@ describe("mcp: update_issue — wave-2 extras-only regression lock", () => {
     });
 
     const r = await client.callTool("update_issue", {
-      identifier: "NOX-121",
+      identifier: "TEAM-121",
       labels_add: ["add me"],
       labels_remove: ["remove me"],
     });
@@ -3295,7 +3305,8 @@ describe("mcp: cache write + push parity", () => {
     const repoRoot = await mkdtemp(join(tmpdir(), "lebop-mcp-create-issue-repo-"));
     await mkdir(join(repoRoot, ".git"), { recursive: true });
     const repoHash = hashRepoRoot(repoRoot);
-    const teamDir = join(cacheHome, "cache", repoHash, "_team");
+    const workspace = process.env.LEBOP_WORKSPACE ?? "test-workspace";
+    const teamDir = join(cacheHome, "cache", workspace, repoHash, "_team");
     await mkdir(teamDir, { recursive: true });
     await writeFile(
       join(teamDir, "UE.yaml"),
@@ -4490,7 +4501,7 @@ A single line.
       schema_version: number;
       data: { teams: { nodes: { id: string }[] } };
     };
-    expect(body.schema_version).toBe(1);
+    expect(body.schema_version).toBe(2);
     expect(body.data.teams.nodes.map((team) => team.id)).toEqual(["team-1", "team-2"]);
     expect(mock.requestAt(0)?.variables).toMatchObject({ first: 250 });
     expect(mock.requestAt(1)?.variables).toMatchObject({ first: 250, after: "teams-cursor-1" });
@@ -4634,43 +4645,43 @@ describe("mcp: error shapes", () => {
       ],
     });
 
-    const r = await client.callTool("get_issue", { identifier: "NOX-999999" });
+    const r = await client.callTool("get_issue", { identifier: "TEAM-999999" });
     expect(r.isError).toBe(true);
     const body = r.parsed as {
       schema_version: number;
       error: { code: string; message: string; hint?: string };
     };
-    expect(body.schema_version).toBe(1);
+    expect(body.schema_version).toBe(2);
     expect(body.error.code).toBe("not_found");
-    expect(body.error.message).toContain("issue not found: NOX-999999");
+    expect(body.error.message).toContain("issue not found: TEAM-999999");
   });
 
   it("get_issue with a clean null response also returns structured not_found", async () => {
     mock.respond({ data: { a0: null } });
 
-    const r = await client.callTool("get_issue", { identifier: "NOX-99999" });
+    const r = await client.callTool("get_issue", { identifier: "TEAM-99999" });
     expect(r.isError).toBe(true);
     const body = r.parsed as {
       schema_version: number;
       error: { code: string; message: string; hint?: string };
     };
-    expect(body.schema_version).toBe(1);
+    expect(body.schema_version).toBe(2);
     expect(body.error.code).toBe("not_found");
-    expect(body.error.message).toContain("issue not found: NOX-99999");
+    expect(body.error.message).toContain("issue not found: TEAM-99999");
   });
 
   it("list_comments returns not_found for a missing issue", async () => {
     mock.respond({ data: { issue: null } });
 
-    const r = await client.callTool("list_comments", { identifier: "NOX-99999" });
+    const r = await client.callTool("list_comments", { identifier: "TEAM-99999" });
     expect(r.isError).toBe(true);
     const body = r.parsed as {
       schema_version: number;
       error: { code: string; message: string; hint?: string };
     };
-    expect(body.schema_version).toBe(1);
+    expect(body.schema_version).toBe(2);
     expect(body.error.code).toBe("not_found");
-    expect(body.error.message).toContain("issue not found: NOX-99999");
+    expect(body.error.message).toContain("issue not found: TEAM-99999");
   });
 
   it("whoami with an unknown for_workspace surfaces auth_error with hint", async () => {
@@ -4686,10 +4697,10 @@ describe("mcp: error shapes", () => {
       schema_version: number;
       error: { code: string; message: string; hint?: string };
     };
-    // Error envelopes carry schema_version: 1 (formatToolError uses the
+    // Error envelopes carry schema_version: 2 (formatToolError uses the
     // SCHEMA_VERSION constant from envelope.ts — locks success/error
     // envelopes to the same versioning contract).
-    expect(body.schema_version).toBe(1);
+    expect(body.schema_version).toBe(2);
     expect(body.error.code).toBe("auth_error");
     expect(body.error.message).toContain("not configured");
     expect(body.error.hint).toBeTruthy();
@@ -4818,21 +4829,21 @@ describe("mcp: wave-4A — attachments / lookups / bulk_update_issues", () => {
     // which response. We compensate below by checking the row STATUS, not
     // the mock order.
     mock.respond({
-      data: { issue: { id: "issue-uuid-34", identifier: "NOX-34" } },
+      data: { issue: { id: "issue-uuid-34", identifier: "TEAM-34" } },
     });
     mock.respond({ data: { issue: null } });
-    // Step 2: issueBatchUpdate echoes only NOX-34.
+    // Step 2: issueBatchUpdate echoes only TEAM-34.
     mock.respond({
       data: {
         issueBatchUpdate: {
           success: true,
-          issues: [{ id: "issue-uuid-34", identifier: "NOX-34" }],
+          issues: [{ id: "issue-uuid-34", identifier: "TEAM-34" }],
         },
       },
     });
 
     const r = await client.callTool("bulk_update_issues", {
-      identifiers: ["NOX-34", "NOX-999"],
+      identifiers: ["TEAM-34", "TEAM-999"],
       patch: { priority: "high" },
       confirm: true,
     });
@@ -4843,13 +4854,13 @@ describe("mcp: wave-4A — attachments / lookups / bulk_update_issues", () => {
     };
     expect(body.summary.total).toBe(2);
     // Exactly one updated + one failed. The good identifier may be either
-    // NOX-34 or NOX-999 depending on which lookup the FIFO matched; we
+    // TEAM-34 or TEAM-999 depending on which lookup the FIFO matched; we
     // assert on the row that landed as updated.
     const updated = body.results.find((r2) => r2.status === "updated");
     const failed = body.results.find((r2) => r2.status === "failed");
     expect(updated).toBeDefined();
     expect(failed).toBeDefined();
-    // Either NOX-34 or NOX-999 should show up as not_found — whichever
+    // Either TEAM-34 or TEAM-999 should show up as not_found — whichever
     // happened to consume the `{issue: null}` mock.
     expect(failed?.error?.code).toBe("not_found");
   });
@@ -4859,7 +4870,7 @@ describe("mcp: wave-4A — attachments / lookups / bulk_update_issues", () => {
     await mkdir(join(repoRoot, ".git"), { recursive: true });
     const { descriptionPath } = await writeCachedIssueFixture(
       lebopHome,
-      "NOX-35",
+      "TEAM-35",
       "server baseline",
       repoRoot,
     );
@@ -4867,19 +4878,19 @@ describe("mcp: wave-4A — attachments / lookups / bulk_update_issues", () => {
 
     try {
       mock.respond({
-        data: { issue: { id: "issue-uuid-35", identifier: "NOX-35" } },
+        data: { issue: { id: "issue-uuid-35", identifier: "TEAM-35" } },
       });
       mock.respond({
         data: {
           issueBatchUpdate: {
             success: true,
-            issues: [{ id: "issue-uuid-35", identifier: "NOX-35" }],
+            issues: [{ id: "issue-uuid-35", identifier: "TEAM-35" }],
           },
         },
       });
 
       const r = await client.callTool("bulk_update_issues", {
-        identifiers: ["NOX-35"],
+        identifiers: ["TEAM-35"],
         patch: { priority: "high" },
         repo_root: repoRoot,
         confirm: true,
@@ -4917,11 +4928,11 @@ describe("mcp: wave-4A — attachments / lookups / bulk_update_issues", () => {
 
   it("bulk_update_issues dry_run previews without confirm or mutation", async () => {
     mock.respond({
-      data: { issue: { id: "issue-uuid-36", identifier: "NOX-36" } },
+      data: { issue: { id: "issue-uuid-36", identifier: "TEAM-36" } },
     });
 
     const r = await client.callTool("bulk_update_issues", {
-      identifiers: ["NOX-36"],
+      identifiers: ["TEAM-36"],
       patch: { priority: "high" },
       dry_run: true,
     });
@@ -4932,7 +4943,7 @@ describe("mcp: wave-4A — attachments / lookups / bulk_update_issues", () => {
     };
     expect(body.summary).toMatchObject({ updated: 0, would_update: 1, dry_run: true });
     expect(body.results[0]).toMatchObject({
-      identifier: "NOX-36",
+      identifier: "TEAM-36",
       status: "would_update",
       fields: ["priority"],
     });
@@ -4941,7 +4952,7 @@ describe("mcp: wave-4A — attachments / lookups / bulk_update_issues", () => {
 
   it("bulk_update_issues requires confirm for real mutations before Linear I/O", async () => {
     const r = await client.callTool("bulk_update_issues", {
-      identifiers: ["NOX-37"],
+      identifiers: ["TEAM-37"],
       patch: { priority: "high" },
     });
 
@@ -4982,7 +4993,7 @@ describe("mcp: structured error shapes from converted tool-handler sites (wave-4
   });
 
   it("list_workflow_states resolves the configured default team when omitted", async () => {
-    const home = await makeHomeWithDefaultTeam("NOX");
+    const home = await makeHomeWithDefaultTeam("TEAM");
     const defaultClient = await bootClientWithHome(home);
     try {
       mock.respond({
@@ -4991,8 +5002,8 @@ describe("mcp: structured error shapes from converted tool-handler sites (wave-4
             nodes: [
               {
                 id: "team-uuid",
-                key: "NOX",
-                name: "Noxor",
+                key: "TEAM",
+                name: "Example",
                 defaultIssueState: { id: "state-backlog" },
                 states: {
                   nodes: [
@@ -5009,11 +5020,11 @@ describe("mcp: structured error shapes from converted tool-handler sites (wave-4
       const r = await defaultClient.callTool("list_workflow_states", {});
       expect(r.isError, JSON.stringify(r.parsed)).toBeFalsy();
       expect(r.parsed).toMatchObject({
-        team: "NOX",
+        team: "TEAM",
         count: 1,
         states: [{ id: "state-backlog", default: true }],
       });
-      expect(mock.requestAt(0)?.variables).toMatchObject({ key: "NOX" });
+      expect(mock.requestAt(0)?.variables).toMatchObject({ key: "TEAM" });
     } finally {
       await defaultClient.close();
       await rm(home, { recursive: true, force: true });
@@ -5074,7 +5085,7 @@ describe("mcp: list_team_members — round-5 arg rename (BREAKING: team_key → 
     mock.respond({
       data: {
         teams: {
-          nodes: [{ id: "team-uuid", key: "NOX", name: "Noxor", description: null }],
+          nodes: [{ id: "team-uuid", key: "TEAM", name: "Example", description: null }],
           pageInfo: { hasNextPage: false, endCursor: null },
         },
       },
@@ -5083,8 +5094,8 @@ describe("mcp: list_team_members — round-5 arg rename (BREAKING: team_key → 
       data: {
         team: {
           id: "team-uuid",
-          key: "NOX",
-          name: "Noxor",
+          key: "TEAM",
+          name: "Example",
           memberships: {
             nodes: [
               {
@@ -5104,7 +5115,7 @@ describe("mcp: list_team_members — round-5 arg rename (BREAKING: team_key → 
         },
       },
     });
-    const r = await client.callTool("list_team_members", { team: "NOX" });
+    const r = await client.callTool("list_team_members", { team: "TEAM" });
     expect(r.isError, JSON.stringify(r.parsed)).toBeFalsy();
     const body = r.parsed as {
       schema_version: number;
@@ -5112,20 +5123,20 @@ describe("mcp: list_team_members — round-5 arg rename (BREAKING: team_key → 
       count: number;
       members: Array<{ id: string; email: string }>;
     };
-    expect(body.schema_version).toBe(1);
-    expect(body.team).toBe("NOX");
+    expect(body.schema_version).toBe(2);
+    expect(body.team).toBe("TEAM");
     expect(body.count).toBe(1);
     expect(body.members[0]?.email).toBe("justice@unlink.xyz");
   });
 
   it("omitted team resolves the configured default team", async () => {
-    const home = await makeHomeWithDefaultTeam("NOX");
+    const home = await makeHomeWithDefaultTeam("TEAM");
     const defaultClient = await bootClientWithHome(home);
     try {
       mock.respond({
         data: {
           teams: {
-            nodes: [{ id: "team-uuid", key: "NOX", name: "Noxor", description: null }],
+            nodes: [{ id: "team-uuid", key: "TEAM", name: "Example", description: null }],
             pageInfo: { hasNextPage: false, endCursor: null },
           },
         },
@@ -5134,8 +5145,8 @@ describe("mcp: list_team_members — round-5 arg rename (BREAKING: team_key → 
         data: {
           team: {
             id: "team-uuid",
-            key: "NOX",
-            name: "Noxor",
+            key: "TEAM",
+            name: "Example",
             memberships: {
               nodes: [],
               pageInfo: { hasNextPage: false, endCursor: null },
@@ -5146,8 +5157,8 @@ describe("mcp: list_team_members — round-5 arg rename (BREAKING: team_key → 
 
       const r = await defaultClient.callTool("list_team_members", {});
       expect(r.isError, JSON.stringify(r.parsed)).toBeFalsy();
-      expect(r.parsed).toMatchObject({ team: "NOX", count: 0, members: [] });
-      expect(mock.requestAt(0)?.variables.filter).toMatchObject({ key: { eq: "NOX" } });
+      expect(r.parsed).toMatchObject({ team: "TEAM", count: 0, members: [] });
+      expect(mock.requestAt(0)?.variables.filter).toMatchObject({ key: { eq: "TEAM" } });
     } finally {
       await defaultClient.close();
       await rm(home, { recursive: true, force: true });
@@ -5163,14 +5174,14 @@ describe("mcp: list_team_members — round-5 arg rename (BREAKING: team_key → 
     let threw: unknown = null;
     let toolResult: Awaited<ReturnType<typeof client.callTool>> | null = null;
     try {
-      toolResult = await client.callTool("list_team_members", { team_key: "NOX" });
+      toolResult = await client.callTool("list_team_members", { team_key: "TEAM" });
     } catch (e) {
       threw = e;
     }
     // Either a protocol-level rejection (threw at the JSON-RPC layer) or
     // a handler-level isError envelope is acceptable evidence that the
     // old field name is dead. The one outcome we must NOT see is a
-    // normal success envelope keyed by team="NOX" — that would mean the
+    // normal success envelope keyed by team="TEAM" — that would mean the
     // rename didn't take effect.
     if (threw) {
       expect(threw).toBeTruthy();
@@ -5217,7 +5228,7 @@ describe("mcp: round-6 / H11 — zod validation errors emit the structured envel
         issues?: Array<{ path: unknown[]; code?: string; message?: string }>;
       };
     };
-    expect(body.schema_version).toBe(1);
+    expect(body.schema_version).toBe(2);
     expect(body.error.code).toBe("invalid_arguments");
     expect(body.error.message).toContain("get_issue");
     expect(body.error.hint).toBeTruthy();
@@ -5249,7 +5260,7 @@ describe("mcp: round-6 / H11 — zod validation errors emit the structured envel
         issues?: Array<{ code: string; keys?: string[]; path: unknown[] }>;
       };
     };
-    expect(body.schema_version).toBe(1);
+    expect(body.schema_version).toBe(2);
     expect(body.error.code).toBe("invalid_arguments");
     expect(body.error.message).toContain("bogus_field");
     expect(body.error.issues?.[0]?.code).toBe("unrecognized_keys");
@@ -5278,7 +5289,7 @@ describe("mcp: round-6 / H11 — zod validation errors emit the structured envel
     // `list_issues.priority` has `.min(0).max(4)`. priority=99 trips the
     // `too_big` zod issue code; we lock in that the path + code surface
     // cleanly via the envelope.
-    const r = await client.callTool("list_issues", { team: "NOX", priority: 99 });
+    const r = await client.callTool("list_issues", { team: "TEAM", priority: 99 });
     expect(r.isError).toBe(true);
     const body = r.parsed as {
       schema_version: number;
@@ -5319,7 +5330,7 @@ describe("mcp: round-6 / H11 — zod validation errors emit the structured envel
     } else {
       expect(toolResult?.isError).toBe(true);
       const body = toolResult?.parsed as { schema_version: number; error: { code: string } };
-      expect(body.schema_version).toBe(1);
+      expect(body.schema_version).toBe(2);
       expect(body.error.code).toBe("not_found");
     }
   });
@@ -5338,7 +5349,7 @@ describe("mcp: round-6 / H11 — zod validation errors emit the structured envel
       auth_storage: string;
       viewer: { email: string };
     };
-    expect(body.schema_version).toBe(1);
+    expect(body.schema_version).toBe(2);
     expect(body.auth_file).toBe("LEBOP_HOME/auth.json");
     expect(body.auth_storage).toBe("lebop-home-auth-json");
     expect(body.auth_file).not.toContain(lebopHome);
@@ -5354,7 +5365,7 @@ describe("mcp: round-6 / H11 — zod validation errors emit the structured envel
       workspace: string;
       viewer: { email: string };
     };
-    expect(body.schema_version).toBe(1);
+    expect(body.schema_version).toBe(2);
     expect(body.workspace).toBe("test-workspace");
     expect(typeof body.viewer.email).toBe("string");
   });

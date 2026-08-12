@@ -1,8 +1,9 @@
 import chalk from "chalk";
 import type { Command } from "commander";
 import { importFromSchpet, loadAuth } from "../lib/auth.ts";
-import { envelope } from "../lib/envelope.ts";
+import { wantsMachineOutput } from "../lib/encode.ts";
 import { AuthError, ValidationError } from "../lib/errors.ts";
+import { writeMachineEnvelope } from "../lib/output.ts";
 import { AUTH_FILE_DISPLAY } from "../lib/paths.ts";
 import { promptHidden } from "../lib/prompt.ts";
 import {
@@ -99,14 +100,19 @@ export function registerAuth(program: Command): void {
   auth
     .command("list")
     .description("list configured workspaces")
-    .option("--json", "emit structured records")
-    .action(async (opts: { json?: boolean }) => {
+    .option("--json", "machine output (default; TOON)")
+    .option("--format <fmt>", "toon | json | pretty")
+    .option("--pretty", "pretty-printed JSON")
+    .option("--human", "maintainer/dev chalk tables (opt-in; not agent path; bodies uncapped)")
+    .action(async (opts: MachineOpts) => {
       const result = await executeListWorkspaces(buildListWorkspacesInputFromCli());
 
-      if (opts.json) {
-        process.stdout.write(
-          `${JSON.stringify(envelope(listWorkspacesPayload(result)), null, 2)}\n`,
-        );
+      if (wantsMachineOutput(opts)) {
+        writeMachineEnvelope(listWorkspacesPayload(result) as Record<string, unknown>, {
+          json: true,
+          format: opts.format,
+          pretty: opts.pretty,
+        });
         return;
       }
 
@@ -130,15 +136,20 @@ export function registerAuth(program: Command): void {
   auth
     .command("default [slug]")
     .description("show or set the default workspace")
-    .option("--json", "emit structured result")
-    .action(async (slug: string | undefined, opts: { json?: boolean }) => {
+    .option("--json", "machine output (default; TOON)")
+    .option("--format <fmt>", "toon | json | pretty")
+    .option("--pretty", "pretty-printed JSON")
+    .option("--human", "maintainer/dev chalk tables (opt-in; not agent path; bodies uncapped)")
+    .action(async (slug: string | undefined, opts: MachineOpts) => {
       if (!slug) {
         // Read mode — maps to list_workspaces.default
         const listed = await executeListWorkspaces(buildListWorkspacesInputFromCli());
-        if (opts.json) {
-          process.stdout.write(
-            `${JSON.stringify(envelope(authDefaultReadPayload(listed)), null, 2)}\n`,
-          );
+        if (wantsMachineOutput(opts)) {
+          writeMachineEnvelope(authDefaultReadPayload(listed) as Record<string, unknown>, {
+            json: true,
+            format: opts.format,
+            pretty: opts.pretty,
+          });
           return;
         }
         if (listed.default) {
@@ -156,10 +167,12 @@ export function registerAuth(program: Command): void {
       const result = await executeSetDefaultWorkspace(
         buildSetDefaultWorkspaceInputFromCli({ slug }),
       );
-      if (opts.json) {
-        process.stdout.write(
-          `${JSON.stringify(envelope(setDefaultWorkspacePayload(result)), null, 2)}\n`,
-        );
+      if (wantsMachineOutput(opts)) {
+        writeMachineEnvelope(setDefaultWorkspacePayload(result) as Record<string, unknown>, {
+          json: true,
+          format: opts.format,
+          pretty: opts.pretty,
+        });
         return;
       }
       process.stdout.write(
@@ -191,14 +204,21 @@ export function registerAuth(program: Command): void {
     .command("whoami [slug]")
     .description("print cached viewer for one workspace (or default); --refresh re-validates")
     .option("--refresh", "re-validate the stored token against Linear")
-    .option("--json", "emit structured JSON")
-    .action(async (slug: string | undefined, opts: { refresh?: boolean; json?: boolean }) => {
+    .option("--json", "machine output (default; TOON)")
+    .option("--format <fmt>", "toon | json | pretty")
+    .option("--pretty", "pretty-printed JSON")
+    .option("--human", "maintainer/dev chalk tables (opt-in; not agent path; bodies uncapped)")
+    .action(async (slug: string | undefined, opts: MachineOpts & { refresh?: boolean }) => {
       const result = opts.refresh
         ? await executeRefreshWhoami(buildRefreshWhoamiInputFromCli({ slug }))
         : await executeWhoami(buildWhoamiInputFromCli({ slug }));
 
-      if (opts.json) {
-        process.stdout.write(`${JSON.stringify(envelope(whoamiPayload(result)), null, 2)}\n`);
+      if (wantsMachineOutput(opts)) {
+        writeMachineEnvelope(whoamiPayload(result) as Record<string, unknown>, {
+          json: true,
+          format: opts.format,
+          pretty: opts.pretty,
+        });
         return;
       }
 
@@ -213,25 +233,36 @@ export function registerAuth(program: Command): void {
     .description(
       "set the per-workspace default team (writes workspace_team_defaults in ~/.lebop/config.yaml)",
     )
-    .option("--json", "emit structured result")
-    .action(async (workspace: string, team: string, opts: { json?: boolean }) => {
+    .option("--json", "machine output (default; TOON)")
+    .option("--format <fmt>", "toon | json | pretty")
+    .option("--pretty", "pretty-printed JSON")
+    .option("--human", "maintainer/dev chalk tables (opt-in; not agent path; bodies uncapped)")
+    .action(async (workspace: string, team: string, opts: MachineOpts) => {
       const result = await executeSetWorkspaceDefaultTeam(
         buildSetWorkspaceDefaultTeamInputFromCli({ workspace, team }),
         {
           teamNotFoundHint: `run \`lebop --workspace ${workspace} teams\` to list valid keys`,
         },
       );
-      if (opts.json) {
-        process.stdout.write(
-          // Round-7 / HIGH-3: response envelope key renamed `team_key` →
-          // `team` to match the MCP-side `set_workspace_default_team`
-          // rename (round-6 / C1). Both surfaces now agree on `team`.
-          `${JSON.stringify(envelope(setWorkspaceDefaultTeamPayload(result)), null, 2)}\n`,
-        );
+      if (wantsMachineOutput(opts)) {
+        // Round-7 / HIGH-3: response envelope key renamed `team_key` →
+        // `team` to match the MCP-side `set_workspace_default_team`
+        // rename (round-6 / C1). Both surfaces now agree on `team`.
+        writeMachineEnvelope(setWorkspaceDefaultTeamPayload(result) as Record<string, unknown>, {
+          json: true,
+          format: opts.format,
+          pretty: opts.pretty,
+        });
         return;
       }
       process.stdout.write(
         `${chalk.green("✓")} default team for ${chalk.cyan(result.workspace_slug)} set to ${chalk.bold(result.team)}\n`,
       );
     });
+}
+
+interface MachineOpts {
+  json?: boolean;
+  format?: string;
+  pretty?: boolean;
 }

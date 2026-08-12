@@ -38,11 +38,14 @@ export interface PlanLintInput extends PlanDirInput {
 export interface PlanApplyInput extends PlanDirInput {
   dryRun?: boolean;
   force?: boolean;
+  /** True when CLI --yes/--confirm or MCP confirm:true was provided for force. */
+  confirmed?: boolean;
   strict?: boolean;
 }
 
 export interface PlanPullInput extends PlanDirInput {
   force?: boolean;
+  confirmed?: boolean;
   includeNew?: boolean;
 }
 
@@ -233,6 +236,7 @@ const planApplyCanonicalSchema = z
     team: teamArg,
     dryRun: z.boolean().optional(),
     force: z.boolean().optional(),
+    confirmed: z.boolean().optional(),
     strict: z.boolean().optional(),
   })
   .strict();
@@ -242,6 +246,7 @@ const planPullCanonicalSchema = z
     dir: z.string().min(1),
     team: teamArg,
     force: z.boolean().optional(),
+    confirmed: z.boolean().optional(),
     includeNew: z.boolean().optional(),
   })
   .strict();
@@ -288,7 +293,8 @@ export function buildPlanLintInputFromMcp(input: PlanLintMcpInput): PlanLintInpu
 
 export function buildPlanApplyInputFromCli(input: PlanApplyCliInput): PlanApplyInput {
   const dryRun = input.opts.dryRun === true;
-  if (input.opts.force === true && !dryRun && !isConfirmed(input.opts)) {
+  const confirmed = isConfirmed(input.opts);
+  if (input.opts.force === true && !dryRun && !confirmed) {
     throw new ValidationError(
       "refusing to apply plan with --force without --yes/--confirm",
       "run with --dry-run to preview, or pass --yes/--confirm after verifying plan stale-guard bypass is intended",
@@ -299,16 +305,27 @@ export function buildPlanApplyInputFromCli(input: PlanApplyCliInput): PlanApplyI
     team: input.opts.team,
     dryRun,
     force: input.opts.force,
+    confirmed: confirmed || undefined,
     strict: input.opts.strict,
   });
 }
 
 export function buildPlanApplyInputFromMcp(input: PlanApplyMcpInput): PlanApplyInput {
+  const dryRun = input.dry_run === true;
+  const force = input.force === true;
+  const confirmed = input.confirm === true;
+  if (force && !dryRun && !confirmed) {
+    throw new ValidationError(
+      "refusing to apply plan with force without confirm:true",
+      "pass confirm:true after verifying plan stale-guard bypass is intended, or dry_run:true to preview",
+    );
+  }
   return parseSurfaceInput("plan.apply", planApplyCanonicalSchema, {
     dir: input.dir,
     team: input.team,
     dryRun: input.dry_run,
     force: input.force,
+    confirmed: confirmed || undefined,
     strict: input.strict,
   });
 }
@@ -328,7 +345,8 @@ export function buildPlanDiffInputFromMcp(input: PlanDiffMcpInput): PlanDirInput
 }
 
 export function buildPlanPullInputFromCli(input: PlanPullCliInput): PlanPullInput {
-  if (input.opts.force === true && !isConfirmed(input.opts)) {
+  const confirmed = isConfirmed(input.opts);
+  if (input.opts.force === true && !confirmed) {
     throw new ValidationError(
       "refusing to pull plan with --force without --yes/--confirm",
       "run `lebop plan diff` to inspect first, or pass --yes/--confirm after verifying local file overwrite is intended",
@@ -338,15 +356,25 @@ export function buildPlanPullInputFromCli(input: PlanPullCliInput): PlanPullInpu
     dir: input.dir,
     team: input.opts.team,
     force: input.opts.force,
+    confirmed: confirmed || undefined,
     includeNew: input.opts.includeNew,
   });
 }
 
 export function buildPlanPullInputFromMcp(input: PlanPullMcpInput): PlanPullInput {
+  const force = input.force === true;
+  const confirmed = input.confirm === true;
+  if (force && !confirmed) {
+    throw new ValidationError(
+      "refusing to pull plan with force without confirm:true",
+      "pass confirm:true after verifying local file overwrite is intended",
+    );
+  }
   return parseSurfaceInput("plan.pull", planPullCanonicalSchema, {
     dir: input.dir,
     team: input.team,
     force: input.force,
+    confirmed: confirmed || undefined,
     includeNew: input.include_new,
   });
 }
@@ -458,6 +486,12 @@ export function planLintMcpPayload(result: PlanLintExecutionResult) {
 
 export async function executePlanApply(input: PlanApplyInput): Promise<PlanApplyExecutionResult> {
   const dryRun = input.dryRun === true;
+  if (input.force === true && !dryRun && input.confirmed !== true) {
+    throw new ValidationError(
+      "refusing to apply plan with force without confirm",
+      "pass confirm/yes after verifying plan stale-guard bypass is intended, or dry_run to preview",
+    );
+  }
   const parsed = await parsePlan(input.dir);
   const { config, lintCtx } = await resolvePlanTeamContext(parsed, input.team);
   const { teamMetadata, validation } = await validatePlanWithFreshTeamMetadata(parsed, {
@@ -565,10 +599,16 @@ export function hasPlanDiffFailure(result: PlanDiffResult): boolean {
 }
 
 export async function executePlanPull(input: PlanPullInput): Promise<PlanPullExecutionResult> {
+  const force = input.force === true;
+  if (force && input.confirmed !== true) {
+    throw new ValidationError(
+      "refusing to pull plan with force without confirm",
+      "pass confirm/yes after verifying local file overwrite is intended",
+    );
+  }
   const parsed = await parsePlan(input.dir);
   const { config } = await resolvePlanTeamContext(parsed, input.team);
   const teamMetadata = await getTeamMetadata(config.repoHash, config.team);
-  const force = input.force === true;
 
   if (!force) {
     const preDiff = await diffPlan(parsed, teamMetadata);
@@ -720,7 +760,6 @@ export const planValidateOperation = {
       idempotentHint: true,
       openWorldHint: true,
     },
-    inputSchemaKeys: ["dir", "team", "workspace"],
   },
   safety: {
     readOnly: true,
@@ -765,7 +804,6 @@ export const planLintOperation = {
       idempotentHint: true,
       openWorldHint: true,
     },
-    inputSchemaKeys: ["dir", "fix", "strict", "team", "workspace"],
   },
   safety: {
     readOnly: false,
@@ -810,7 +848,6 @@ export const planApplyOperation = {
       idempotentHint: false,
       openWorldHint: true,
     },
-    inputSchemaKeys: ["dir", "dry_run", "force", "confirm", "strict", "team", "workspace"],
   },
   safety: {
     readOnly: false,
@@ -853,7 +890,6 @@ export const planDiffOperation = {
       idempotentHint: true,
       openWorldHint: true,
     },
-    inputSchemaKeys: ["dir", "team", "workspace"],
   },
   safety: {
     readOnly: true,
@@ -897,7 +933,6 @@ export const planPullOperation = {
       idempotentHint: true,
       openWorldHint: true,
     },
-    inputSchemaKeys: ["dir", "force", "confirm", "include_new", "team", "workspace"],
   },
   safety: {
     readOnly: false,

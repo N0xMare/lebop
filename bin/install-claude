@@ -1,18 +1,31 @@
 #!/usr/bin/env bash
-# Wire lebop's Claude Code integration assets (skill + slash commands) into
+# Wire lebop's Claude Code integration assets (skills + slash commands) into
 # the user's ~/.claude/ directory via symlinks. Re-runnable; safe to repeat
 # after `git pull` since symlinks resolve through the repo.
+#
+# Skills: 6 total — CLI medium (3) + MCP medium (3), each a complete vertical.
+# Install names match SKILL.md frontmatter `name:` fields.
 #
 # Usage:  ./bin/install-claude
 
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-SKILL_SRC="$REPO_ROOT/agents/skills/lebop"
+SKILLS_SRC="$REPO_ROOT/agents/skills"
 COMMANDS_SRC="$REPO_ROOT/agents/commands"
 
+# medium/role_dir → install name under ~/.claude/skills/
+# shellcheck disable=SC2034
+SKILL_INSTALLS=(
+  "cli/lebop:lebop-cli"
+  "cli/lebop-program:lebop-cli-program"
+  "cli/lebop-execution:lebop-cli-execution"
+  "mcp/lebop:lebop-mcp"
+  "mcp/lebop-program:lebop-mcp-program"
+  "mcp/lebop-execution:lebop-mcp-execution"
+)
+
 CLAUDE_HOME="${CLAUDE_HOME:-$HOME/.claude}"
-SKILL_DST="$CLAUDE_HOME/skills/lebop"
 COMMANDS_DST="$CLAUDE_HOME/commands"
 
 backup_path() {
@@ -67,15 +80,37 @@ link_path() {
 mkdir -p "$CLAUDE_HOME/skills"
 ensure_real_dir "$COMMANDS_DST"
 
-# Skill — directory symlink. -n prevents replacing through an existing symlink target.
-link_path "$SKILL_SRC" "$SKILL_DST"
+for entry in "${SKILL_INSTALLS[@]}"; do
+  rel="${entry%%:*}"
+  install_name="${entry##*:}"
+  src="$SKILLS_SRC/$rel"
+  if [ ! -d "$src" ] || [ ! -f "$src/SKILL.md" ]; then
+    echo "error: missing skill directory or SKILL.md: $src" >&2
+    exit 1
+  fi
+  # frontmatter name: must match install name
+  front_name="$(sed -n 's/^name:[[:space:]]*//p' "$src/SKILL.md" | head -n1 | tr -d '\r')"
+  if [ "$front_name" != "$install_name" ]; then
+    echo "error: $src/SKILL.md name: '$front_name' != install name '$install_name'" >&2
+    exit 1
+  fi
+  link_path "$src" "$CLAUDE_HOME/skills/$install_name"
+done
 
-# Slash commands — file-level symlinks so unrelated commands in ~/.claude/commands aren't touched.
 for f in "$COMMANDS_SRC"/lebop-*.md; do
   name="$(basename "$f")"
   dst="$COMMANDS_DST/$name"
   link_path "$f" "$dst"
 done
 
+# Migrate pre-split flat skill names aside (no longer used).
+for legacy in lebop lebop-program lebop-execution; do
+  legacy_dst="$CLAUDE_HOME/skills/$legacy"
+  if [ -e "$legacy_dst" ] || [ -L "$legacy_dst" ]; then
+    backup_existing "$legacy_dst"
+  fi
+done
+
 echo
-echo "done. restart Claude Code (or open a new session) to pick up the skill + commands."
+echo "done. restart Claude Code (or open a new session) to pick up skills + commands."
+echo "installed skills: lebop-cli, lebop-cli-program, lebop-cli-execution, lebop-mcp, lebop-mcp-program, lebop-mcp-execution"

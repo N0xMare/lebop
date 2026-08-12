@@ -1,5 +1,6 @@
 import { invalidateTeamMetadata } from "../../lib/cache.ts";
 import { envelope } from "../../lib/envelope.ts";
+import { mcpGetNext, mcpListNext } from "../../lib/nextStubs.ts";
 import {
   buildProjectCreateInputFromMcp,
   buildProjectCreateMcpInputSchema,
@@ -56,7 +57,18 @@ export function buildProjectToolSpecs(deps: ProjectToolDeps): McpToolSpec[] {
         const result = await executeProjectList(buildProjectListInputFromMcp(args), {
           resolveTeam: deps.resolveTeam,
         });
-        return text(envelope(projectListPayload(result)));
+        const body = projectListPayload(result);
+        return text(
+          envelope({
+            ...body,
+            // Core-profile-safe next (list_project_updates / milestones are full-only).
+            next: mcpListNext("list_projects", body.has_more, body.next_cursor, [
+              "get_project",
+              "list_issues",
+              "fetch_linear_workspace",
+            ]),
+          }),
+        );
       },
     },
     {
@@ -66,11 +78,23 @@ export function buildProjectToolSpecs(deps: ProjectToolDeps): McpToolSpec[] {
         buildProjectGetMcpInputSchema(deps.workspaceParamDescription),
       ),
       handler: async (args: ToolHandlerArgs) => {
-        const project = await executeProjectGet(
-          buildProjectGetInput(args.id as string),
+        const { mcpEntityTruncatedNext } = await import("../../lib/nextStubs.ts");
+        const { project, content, truncated } = await executeProjectGet(
+          buildProjectGetInput(args.id as string, {
+            fullContent: args.full_content === true,
+            contentFile: typeof args.content_file === "string" ? args.content_file : undefined,
+          }),
           "verify the project UUID; run list_projects to discover ids",
         );
-        return text(envelope({ project }));
+        return text(
+          envelope({
+            project,
+            content,
+            next: truncated
+              ? mcpEntityTruncatedNext("get_project", `id=${args.id}`)
+              : mcpGetNext("list_issues", "fetch_linear_workspace", "pull_issues"),
+          }),
+        );
       },
     },
     {
@@ -88,7 +112,13 @@ export function buildProjectToolSpecs(deps: ProjectToolDeps): McpToolSpec[] {
           },
         );
         await invalidateTeamMetadata(deps.resolveMcpRepoCacheContext(undefined).repoHash);
-        return text(envelope({ project, team_ids: teamIds }));
+        return text(
+          envelope({
+            project,
+            team_ids: teamIds,
+            next: mcpGetNext("get_project", "list_issues", "fetch_linear_workspace"),
+          }),
+        );
       },
     },
     {
@@ -105,23 +135,28 @@ export function buildProjectToolSpecs(deps: ProjectToolDeps): McpToolSpec[] {
         await invalidateTeamMetadata(
           deps.resolveMcpRepoCacheContext(args.repo_root as string | undefined).repoHash,
         );
-        return text(envelope({ ...result }));
+        return text(
+          envelope({
+            ...result,
+            next: mcpGetNext("get_project", "list_issues"),
+          }),
+        );
       },
     },
     {
-      name: "delete_project",
+      name: "soft_delete_project",
       // Required true for deletion. The schema builder owns the field shape.
       config: mcpToolConfig(
         projectDeleteOperation,
         buildProjectDeleteMcpInputSchema(deps.workspaceParamDescription),
       ),
       handler: async (args: ProjectDeleteMcpInput) => {
-        deps.requireConfirm(args, "delete_project");
+        deps.requireConfirm(args, "soft_delete_project");
         const result = await executeProjectDelete(buildProjectDeleteInputFromMcp(args));
         if (result.status === "deleted") {
           await invalidateTeamMetadata(deps.resolveMcpRepoCacheContext(undefined).repoHash);
         }
-        return text(envelope({ ...result }));
+        return text(envelope({ ...result, next: mcpGetNext("list_projects") }));
       },
     },
   ];

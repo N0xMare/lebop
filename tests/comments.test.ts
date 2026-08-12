@@ -98,22 +98,22 @@ describe("listComments", () => {
       },
     });
 
-    const comments = await listComments("nox-1");
+    const comments = await listComments("team-1");
     expect(comments).toHaveLength(2);
     expect(comments[0]?.id).toBe("c1");
     expect(comments[0]?.parent_id).toBeNull();
     expect(comments[1]?.parent_id).toBe("c1");
     // listComments calls .toUpperCase() on the identifier before the query.
-    expect(calls[0]?.variables).toMatchObject({ id: "NOX-1" });
+    expect(calls[0]?.variables).toMatchObject({ id: "TEAM-1" });
   });
 
   it("throws NotFoundError when issue is missing", async () => {
     reset();
     mockRawResponses.push({ data: { issue: null } });
-    const err = await listComments("NOX-X").catch((e) => e);
+    const err = await listComments("TEAM-X").catch((e) => e);
     expect(err).toBeInstanceOf(NotFoundError);
     expect(err.code).toBe("not_found");
-    expect(err.message).toMatch(/issue not found: NOX-X/);
+    expect(err.message).toMatch(/issue not found: TEAM-X/);
   });
 
   it("returns one comment page with Linear cursor metadata", async () => {
@@ -138,12 +138,12 @@ describe("listComments", () => {
       },
     });
 
-    const page = await listCommentsPage("nox-1", { first: 1, after: "prior-cursor" });
+    const page = await listCommentsPage("team-1", { first: 1, after: "prior-cursor" });
 
     expect(page.comments).toHaveLength(1);
     expect(page.pageInfo).toEqual({ hasNextPage: true, endCursor: "comment-cursor-1" });
     expect(calls[0]?.variables).toMatchObject({
-      id: "NOX-1",
+      id: "TEAM-1",
       first: 1,
       after: "prior-cursor",
     });
@@ -153,7 +153,7 @@ describe("listComments", () => {
 describe("addComment", () => {
   it("rejects empty bodies before resolving the issue or mutating", async () => {
     reset();
-    const err = await addComment({ identifier: "NOX-1", body: " \n\t " }).catch((e) => e);
+    const err = await addComment({ identifier: "TEAM-1", body: " \n\t " }).catch((e) => e);
     expect(err).toBeInstanceOf(ValidationError);
     expect(err.message).toBe("empty comment body");
     expect(createCommentArgs).toHaveLength(0);
@@ -166,7 +166,7 @@ describe("addComment", () => {
       comment: { id: "c-new", createdAt: new Date("2026-05-10T00:00:00Z") },
     };
 
-    const result = await addComment({ identifier: "NOX-1", body: "hello" });
+    const result = await addComment({ identifier: "TEAM-1", body: "hello" });
     expect(result.id).toBe("c-new");
     expect(result.created_at).toBe("2026-05-10T00:00:00.000Z");
     expect(createCommentArgs[0]).toEqual({ issueId: "issue-uuid-123", body: "hello" });
@@ -189,7 +189,7 @@ describe("addComment", () => {
         user: Promise.resolve({ id: "u1", name: "Alice", email: "a@x.io" }),
       } as never,
     };
-    const result = await addComment({ identifier: "NOX-1", body: "hello rich" });
+    const result = await addComment({ identifier: "TEAM-1", body: "hello rich" });
     expect(result.id).toBe("c-rich");
     expect(result.body).toBe("hello rich");
     expect(result.url).toBe("https://linear.app/test/comment/c-rich");
@@ -202,7 +202,7 @@ describe("addComment", () => {
       success: true,
       comment: { id: "c-reply", createdAt: "2026-05-10T00:00:00Z" },
     };
-    await addComment({ identifier: "NOX-1", body: "thread reply", parentId: "c-parent" });
+    await addComment({ identifier: "TEAM-1", body: "thread reply", parentId: "c-parent" });
     expect(createCommentArgs[0]).toEqual({
       issueId: "issue-uuid-123",
       body: "thread reply",
@@ -216,10 +216,10 @@ describe("addComment", () => {
     // stable exit code via `code: 'validation_error'`.
     reset();
     mockCreateCommentResult = { success: false, comment: { id: "x", createdAt: "x" } };
-    const err = await addComment({ identifier: "NOX-1", body: "x" }).catch((e) => e);
+    const err = await addComment({ identifier: "TEAM-1", body: "x" }).catch((e) => e);
     expect(err).toBeInstanceOf(ValidationError);
     expect(err.code).toBe("validation_error");
-    expect(err.message).toMatch(/Linear rejected the comment on NOX-1/);
+    expect(err.message).toMatch(/Linear rejected the comment on TEAM-1/);
     expect(err.hint).toMatch(/archived|valid/);
   });
 
@@ -227,7 +227,7 @@ describe("addComment", () => {
     reset();
     mockCreateCommentResult = { success: true, comment: null };
 
-    const err = await addComment({ identifier: "NOX-1", body: "x" }).catch((e) => e);
+    const err = await addComment({ identifier: "TEAM-1", body: "x" }).catch((e) => e);
 
     expect(err).toBeInstanceOf(ValidationError);
     expect(err.message).toBe("commentCreate did not return comment");
@@ -238,10 +238,10 @@ describe("addComment", () => {
     // (issues.ts had the same shape). Verify the structured form here too.
     reset();
     issueLookupOverride = () => null;
-    const err = await addComment({ identifier: "NOX-GHOST", body: "x" }).catch((e) => e);
+    const err = await addComment({ identifier: "TEAM-GHOST", body: "x" }).catch((e) => e);
     expect(err).toBeInstanceOf(NotFoundError);
     expect(err.code).toBe("not_found");
-    expect(err.message).toMatch(/issue not found: NOX-GHOST/);
+    expect(err.message).toMatch(/issue not found: TEAM-GHOST/);
   });
 });
 

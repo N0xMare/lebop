@@ -1,7 +1,7 @@
 /**
  * Tests for setWorkspaceDefaultTeam. Mirrors the cache_gc.test.ts pattern:
- * set LEBOP_HOME to a fresh tmpdir BEFORE importing the lib so the path
- * resolution lands in our throwaway directory and never touches the
+ * set LEBOP_HOME to a fresh tmpdir BEFORE exercising the lib so live path
+ * getters resolve into our throwaway directory and never touch the
  * developer's real `~/.lebop/config.yaml`.
  *
  * Also stubs `Bun.file` + `Bun.write` to forward to node:fs primitives —
@@ -26,7 +26,7 @@ interface ConfigWriteModule {
   setWorkspaceDefaultTeam: typeof import("../src/lib/configWrite.ts").setWorkspaceDefaultTeam;
 }
 interface PathsModule {
-  CONFIG_FILE: string;
+  getConfigFilePath: () => string;
 }
 
 let home: string;
@@ -75,7 +75,7 @@ afterEach(() => {
 describe("setWorkspaceDefaultTeam", () => {
   it("creates the config file with the workspace_team_defaults entry", async () => {
     await mod.setWorkspaceDefaultTeam("unlink-xyz", "UE");
-    const parsed = parseYaml(readFileSync(paths.CONFIG_FILE, "utf8")) as {
+    const parsed = parseYaml(readFileSync(paths.getConfigFilePath(), "utf8")) as {
       workspace_team_defaults?: Record<string, string>;
     };
     expect(parsed.workspace_team_defaults).toEqual({ "unlink-xyz": "UE" });
@@ -103,7 +103,7 @@ describe("setWorkspaceDefaultTeam", () => {
     await mod.setWorkspaceDefaultTeam("b", "BBB");
     await mod.setWorkspaceDefaultTeam("a", "AAA2"); // change
 
-    const parsed = parseYaml(readFileSync(paths.CONFIG_FILE, "utf8")) as {
+    const parsed = parseYaml(readFileSync(paths.getConfigFilePath(), "utf8")) as {
       workspace_team_defaults: Record<string, string>;
     };
     expect(parsed.workspace_team_defaults).toEqual({ a: "AAA2", b: "BBB" });
@@ -115,7 +115,7 @@ describe("setWorkspaceDefaultTeam", () => {
       mod.setWorkspaceDefaultTeam("workspace-b", "BBB"),
     ]);
 
-    const parsed = parseYaml(readFileSync(paths.CONFIG_FILE, "utf8")) as {
+    const parsed = parseYaml(readFileSync(paths.getConfigFilePath(), "utf8")) as {
       workspace_team_defaults: Record<string, string>;
     };
     expect(parsed.workspace_team_defaults).toEqual({ "workspace-a": "AAA", "workspace-b": "BBB" });
@@ -128,9 +128,9 @@ describe("setWorkspaceDefaultTeam", () => {
     // which would otherwise surface a bare Error("Document with errors
     // cannot be stringified") that lacks an actionable hint.
     const { ValidationError } = await import("../src/lib/errors.ts");
-    writeFileSync(paths.CONFIG_FILE, "\troot:\n\t  bad: indent\n");
+    writeFileSync(paths.getConfigFilePath(), "\troot:\n\t  bad: indent\n");
 
-    const err = await mod.setWorkspaceDefaultTeam("ws", "NOX").catch((e) => e);
+    const err = await mod.setWorkspaceDefaultTeam("ws", "TEAM").catch((e) => e);
     expect(err).toBeInstanceOf(ValidationError);
     expect(err).toMatchObject({
       code: "validation_error",

@@ -130,7 +130,6 @@ export const linkUrlOperation = {
       idempotentHint: true,
       openWorldHint: true,
     },
-    inputSchemaKeys: ["identifier", "url", "title", "workspace"],
   },
   safety: { readOnly: false, destructive: false, idempotent: true, openWorld: true },
   notes: "CLI JSON key is `issue`; MCP JSON key is `identifier` (behavior freeze).",

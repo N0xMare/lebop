@@ -1,13 +1,17 @@
 import chalk from "chalk";
 import type { Command } from "commander";
 import { findGitRoot, hashRepoRoot } from "../lib/config.ts";
-import { envelope } from "../lib/envelope.ts";
+import { wantsMachineOutput } from "../lib/encode.ts";
 import { ValidationError } from "../lib/errors.ts";
 import type { LifecycleResult } from "../lib/issues.ts";
+import { archiveNext } from "../lib/nextStubs.ts";
+import { writeMachineEnvelope } from "../lib/output.ts";
 import { buildIssueArchiveInputFromCli, executeIssueArchive } from "../surface/issues.ts";
 
 interface ArchiveOpts {
   json?: boolean;
+  format?: string;
+  pretty?: boolean;
   yes?: boolean;
   bulkFile?: string;
   bulkStdin?: boolean;
@@ -36,21 +40,19 @@ function parseIdentifierList(text: string): string[] {
 export function registerArchive(program: Command): void {
   program
     .command("archive [ids...]")
-    .description("archive one or more issues (reversible in Linear UI)")
+    .description("soft-archive one or more issues (reverse with unarchive)")
     .option(
       "--bulk-file <path>",
       "read identifiers from a file (whitespace-separated, # comments OK)",
     )
     .option("--bulk-stdin", "read identifiers from stdin")
     .option("--yes", "confirm destructive operation (required)")
-    .option("--json", "emit structured results")
+    .option("--json", "machine output (default; TOON)")
+    .option("--format <fmt>", "toon | json | pretty")
+    .option("--pretty", "pretty-printed JSON")
+    .option("--human", "maintainer/dev chalk tables (opt-in; not agent path; bodies uncapped)")
     .action(async (ids: string[], opts: ArchiveOpts) => {
-      if (!opts.yes) {
-        throw new ValidationError(
-          "refusing to archive issues without --yes",
-          "re-run with --yes to confirm this destructive state change",
-        );
-      }
+      // Confirm is enforced in surface `buildIssueArchiveInputFromCli` (single gate).
       // Merge args + bulk inputs. Identifier sources combine; ranges
       // (TEAM-101..TEAM-105) are still expanded for any source.
       const fromFile = opts.bulkFile ? await readBulkFile(opts.bulkFile) : [];
@@ -71,8 +73,15 @@ export function registerArchive(program: Command): void {
       // human-friendly verb.
       const { results, cache } = await executeIssueArchive(input, CLI_ISSUE_CACHE_DEPS);
 
-      if (opts.json) {
-        process.stdout.write(`${JSON.stringify(envelope({ results, cache }), null, 2)}\n`);
+      if (wantsMachineOutput(opts)) {
+        writeMachineEnvelope(
+          { results, cache, next: archiveNext("archive") } as Record<string, unknown>,
+          {
+            json: true,
+            format: opts.format,
+            pretty: opts.pretty,
+          },
+        );
       } else {
         for (const r of results) {
           process.stdout.write(`${renderHumanLine(r)}\n`);

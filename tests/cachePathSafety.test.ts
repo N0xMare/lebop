@@ -27,20 +27,20 @@ import { assertNoSymlinkedExistingAncestorsSync } from "../src/lib/stateSafety.t
 describe("cache path safety", () => {
   it("accepts canonical cache keys", () => {
     expect(repoCacheDir("_global")).toContain("_global");
-    expect(issueDir("_global", "NOX-180")).toContain("NOX-180");
+    expect(issueDir("_global", "TEAM-180")).toContain("TEAM-180");
     expect(issueDir("_global", "A1-42")).toContain("A1-42");
     expect(projectDir("_global", "project-uuid_1.2")).toContain("project-uuid_1.2");
-    expect(teamCacheFile("_global", "NOX")).toContain("NOX.yaml");
+    expect(teamCacheFile("_global", "TEAM")).toContain("TEAM.yaml");
     expect(commentFileName("comment-a")).toBe("comment-a.md");
   });
 
   it("rejects traversal-shaped cache keys", () => {
     expect(() => repoCacheDir("../outside")).toThrow(ValidationError);
-    expect(() => issueDir("_global", "../NOX-1")).toThrow(ValidationError);
+    expect(() => issueDir("_global", "../TEAM-1")).toThrow(ValidationError);
     expect(() => projectDir("_global", "../../project")).toThrow(ValidationError);
     expect(() => projectDir("_global", ".")).toThrow(ValidationError);
     expect(() => projectDir("_global", "..")).toThrow(ValidationError);
-    expect(() => teamCacheFile("_global", "NOX/../../x")).toThrow(ValidationError);
+    expect(() => teamCacheFile("_global", "TEAM/../../x")).toThrow(ValidationError);
     expect(commentFileName("../outside")).toMatch(/^comment-[a-f0-9]{32}\.md$/);
   });
 
@@ -100,15 +100,15 @@ describe("cache integrity", () => {
   });
 
   it("reports incomplete issue and project cache rows", async () => {
-    mkdirSync(join(home, "cache", "_global", "issues", "NOX-1"), { recursive: true });
-    writeFileSync(join(home, "cache", "_global", "issues", "NOX-1", "metadata.yaml"), "{}");
+    mkdirSync(join(home, "cache", "_global", "issues", "TEAM-1"), { recursive: true });
+    writeFileSync(join(home, "cache", "_global", "issues", "TEAM-1", "metadata.yaml"), "{}");
     mkdirSync(join(home, "cache", "_global", "projects", "project-1"), { recursive: true });
     writeFileSync(join(home, "cache", "_global", "projects", "project-1", "content.md"), "");
 
     await expect(cache.inspectCacheIntegrity("_global")).resolves.toEqual([
       expect.objectContaining({
         kind: "issue",
-        id: "NOX-1",
+        id: "TEAM-1",
         problem: "incomplete-row",
         missing_files: ["description.md"],
         repair_hint: expect.stringContaining("--refresh --yes"),
@@ -130,8 +130,8 @@ describe("cache integrity", () => {
     await expect(
       cache.writeIssue(
         "_global",
-        issueMetadata("NOX-1", {
-          title: "NOX-1",
+        issueMetadata("TEAM-1", {
+          title: "TEAM-1",
           description: "body",
           updatedAt: "2026-06-04T00:00:00.000Z",
         }),
@@ -142,7 +142,7 @@ describe("cache integrity", () => {
       message: expect.stringContaining("symlinked ancestor"),
     });
     expect(() =>
-      readFileSync(join(realCache, "_global", "issues", "NOX-1", "metadata.yaml")),
+      readFileSync(join(realCache, "_global", "issues", "TEAM-1", "metadata.yaml")),
     ).toThrow();
     rmSync(realCache, { recursive: true, force: true });
   });
@@ -150,7 +150,7 @@ describe("cache integrity", () => {
   it("encodes traversal-shaped comment ids before writing cache comment files", async () => {
     await cache.writeIssue(
       "_global",
-      issueMetadata("NOX-7", {
+      issueMetadata("TEAM-7", {
         title: "Comment path safety",
         description: "body",
         updatedAt: "2026-06-04T00:00:00.000Z",
@@ -158,7 +158,7 @@ describe("cache integrity", () => {
       "body",
     );
 
-    await cache.writeComment("_global", "NOX-7", {
+    await cache.writeComment("_global", "TEAM-7", {
       frontmatter: {
         id: "../outside",
         author: "user-1",
@@ -169,11 +169,11 @@ describe("cache integrity", () => {
       body: "unsafe id stayed in frontmatter only",
     });
 
-    const commentsDir = join(home, "cache", "_global", "issues", "NOX-7", "comments");
+    const commentsDir = join(home, "cache", "_global", "issues", "TEAM-7", "comments");
     const encoded = cache.commentFileName("../outside");
     expect(readdirSync(commentsDir)).toEqual([encoded]);
     expect(() =>
-      readFileSync(join(home, "cache", "_global", "issues", "NOX-7", "outside.md")),
+      readFileSync(join(home, "cache", "_global", "issues", "TEAM-7", "outside.md")),
     ).toThrow();
     expect(readFileSync(join(commentsDir, encoded), "utf8")).toContain(
       "unsafe id stayed in frontmatter only",
@@ -204,18 +204,18 @@ describe("cache integrity", () => {
   });
 
   it("reports valid YAML with invalid issue metadata shape as an integrity problem", async () => {
-    mkdirSync(join(home, "cache", "_global", "issues", "NOX-5"), { recursive: true });
-    writeFileSync(join(home, "cache", "_global", "issues", "NOX-5", "metadata.yaml"), "{}\n");
-    writeFileSync(join(home, "cache", "_global", "issues", "NOX-5", "description.md"), "body");
+    mkdirSync(join(home, "cache", "_global", "issues", "TEAM-5"), { recursive: true });
+    writeFileSync(join(home, "cache", "_global", "issues", "TEAM-5", "metadata.yaml"), "{}\n");
+    writeFileSync(join(home, "cache", "_global", "issues", "TEAM-5", "description.md"), "body");
 
     await expect(cache.inspectCacheIntegrity("_global")).resolves.toEqual([
       expect.objectContaining({
         kind: "issue",
-        id: "NOX-5",
+        id: "TEAM-5",
         problem: "invalid-metadata",
       }),
     ]);
-    await expect(cache.readIssue("_global", "NOX-5")).rejects.toMatchObject({
+    await expect(cache.readIssue("_global", "TEAM-5")).rejects.toMatchObject({
       code: "validation_error",
     });
   });
@@ -244,14 +244,14 @@ describe("cache integrity", () => {
   });
 
   it("rejects issue cache rows whose metadata identity does not match the selected directory", async () => {
-    mkdirSync(join(home, "cache", "_global", "issues", "NOX-1"), { recursive: true });
-    const metadata = issueMetadata("NOX-2", {
+    mkdirSync(join(home, "cache", "_global", "issues", "TEAM-1"), { recursive: true });
+    const metadata = issueMetadata("TEAM-2", {
       title: "Wrong row",
       description: "body",
       updatedAt: "2026-06-04T00:00:00.000Z",
     });
     writeFileSync(
-      join(home, "cache", "_global", "issues", "NOX-1", "metadata.yaml"),
+      join(home, "cache", "_global", "issues", "TEAM-1", "metadata.yaml"),
       [
         `identifier: ${metadata.identifier}`,
         `title: ${metadata.title}`,
@@ -285,9 +285,9 @@ describe("cache integrity", () => {
         "",
       ].join("\n"),
     );
-    writeFileSync(join(home, "cache", "_global", "issues", "NOX-1", "description.md"), "body");
+    writeFileSync(join(home, "cache", "_global", "issues", "TEAM-1", "description.md"), "body");
 
-    await expect(cache.readIssue("_global", "NOX-1")).rejects.toMatchObject({
+    await expect(cache.readIssue("_global", "TEAM-1")).rejects.toMatchObject({
       code: "validation_error",
       message: expect.stringContaining("cache issue identity mismatch"),
     });
@@ -329,26 +329,26 @@ describe("cache integrity", () => {
   });
 
   it("reports malformed metadata as a cache integrity problem", async () => {
-    mkdirSync(join(home, "cache", "_global", "issues", "NOX-3"), { recursive: true });
-    writeFileSync(join(home, "cache", "_global", "issues", "NOX-3", "metadata.yaml"), "\tbad\n");
-    writeFileSync(join(home, "cache", "_global", "issues", "NOX-3", "description.md"), "");
+    mkdirSync(join(home, "cache", "_global", "issues", "TEAM-3"), { recursive: true });
+    writeFileSync(join(home, "cache", "_global", "issues", "TEAM-3", "metadata.yaml"), "\tbad\n");
+    writeFileSync(join(home, "cache", "_global", "issues", "TEAM-3", "description.md"), "");
 
     await expect(cache.inspectCacheIntegrity("_global")).resolves.toEqual([
       expect.objectContaining({
         kind: "issue",
-        id: "NOX-3",
+        id: "TEAM-3",
         problem: "invalid-metadata",
       }),
     ]);
   });
 
   it("includes cache integrity problems in shared status output", async () => {
-    mkdirSync(join(home, "cache", "_global", "issues", "NOX-2"), { recursive: true });
-    writeFileSync(join(home, "cache", "_global", "issues", "NOX-2", "description.md"), "");
+    mkdirSync(join(home, "cache", "_global", "issues", "TEAM-2"), { recursive: true });
+    writeFileSync(join(home, "cache", "_global", "issues", "TEAM-2", "description.md"), "");
     const { collectCacheStatus } = await import("../src/lib/cacheStatus.ts");
 
     const status = await collectCacheStatus({
-      team: "NOX",
+      team: "TEAM",
       repoRoot: null,
       repoHash: "_global",
       checkRemote: false,
@@ -358,7 +358,7 @@ describe("cache integrity", () => {
     expect(status.integrity.problems).toEqual([
       expect.objectContaining({
         kind: "issue",
-        id: "NOX-2",
+        id: "TEAM-2",
         problem: "incomplete-row",
         missing_files: ["metadata.yaml"],
         repair_hint: expect.stringContaining("--refresh --yes"),
@@ -369,9 +369,9 @@ describe("cache integrity", () => {
   });
 
   it("blocks implicit cache push plans on invalid metadata shape", async () => {
-    mkdirSync(join(home, "cache", "_global", "issues", "NOX-6"), { recursive: true });
-    writeFileSync(join(home, "cache", "_global", "issues", "NOX-6", "metadata.yaml"), "{}\n");
-    writeFileSync(join(home, "cache", "_global", "issues", "NOX-6", "description.md"), "body");
+    mkdirSync(join(home, "cache", "_global", "issues", "TEAM-6"), { recursive: true });
+    writeFileSync(join(home, "cache", "_global", "issues", "TEAM-6", "metadata.yaml"), "{}\n");
+    writeFileSync(join(home, "cache", "_global", "issues", "TEAM-6", "description.md"), "body");
     const { collectCachePushPlans } = await import("../src/lib/cachePush.ts");
 
     await expect(collectCachePushPlans("_global")).rejects.toMatchObject({
@@ -383,7 +383,7 @@ describe("cache integrity", () => {
   it("reports remote conflicts for modified rows and missing clean remotes", async () => {
     vi.doMock("../src/lib/pushMutations.ts", () => ({
       fetchIssueCasStates: async () => ({
-        "NOX-3": {
+        "TEAM-3": {
           id: "issue-uuid-3",
           updatedAt: "2026-06-06T00:00:00.000Z",
         },
@@ -392,7 +392,7 @@ describe("cache integrity", () => {
     }));
     await cache.writeIssue(
       "_global",
-      issueMetadata("NOX-3", {
+      issueMetadata("TEAM-3", {
         title: "Remote-safe",
         description: "server body",
         updatedAt: "2026-06-04T00:00:00.000Z",
@@ -401,7 +401,7 @@ describe("cache integrity", () => {
     );
     await cache.writeIssue(
       "_global",
-      issueMetadata("NOX-4", {
+      issueMetadata("TEAM-4", {
         title: "Missing remote",
         description: "clean body",
         updatedAt: "2026-06-04T00:00:00.000Z",
@@ -411,24 +411,24 @@ describe("cache integrity", () => {
     const { collectCacheStatus } = await import("../src/lib/cacheStatus.ts");
 
     const status = await collectCacheStatus({
-      team: "NOX",
+      team: "TEAM",
       repoRoot: null,
       repoHash: "_global",
       checkRemote: true,
     });
 
-    expect(status.modified.issues).toEqual([{ identifier: "NOX-3", fields: ["description"] }]);
+    expect(status.modified.issues).toEqual([{ identifier: "TEAM-3", fields: ["description"] }]);
     expect(status.remote_conflicts).toEqual([
       expect.objectContaining({
         kind: "issue",
-        identifier: "NOX-3",
+        identifier: "TEAM-3",
         local_status: "modified",
         reason: "remote-changed",
         fields: ["description"],
       }),
       expect.objectContaining({
         kind: "issue",
-        identifier: "NOX-4",
+        identifier: "TEAM-4",
         local_status: "clean",
         reason: "remote-missing",
       }),
@@ -457,7 +457,7 @@ function issueMetadata(
     _server: {
       id: `uuid-${identifier}`,
       identifier,
-      url: `https://linear.app/nox/issue/${identifier}`,
+      url: `https://linear.app/example/issue/${identifier}`,
       state_id: "state-todo",
       state_name: "Todo",
       state_type: "unstarted",
@@ -495,7 +495,7 @@ function projectMetadata(
     state: "started",
     _server: {
       id,
-      url: `https://linear.app/nox/project/${id}`,
+      url: `https://linear.app/example/project/${id}`,
       state: "started",
       name: input.name,
       description: input.description,

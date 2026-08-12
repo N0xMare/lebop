@@ -1,12 +1,17 @@
 import chalk from "chalk";
 import type { Command } from "commander";
-import { envelope } from "../lib/envelope.ts";
+import { wantsMachineOutput } from "../lib/encode.ts";
 import { resolveBody } from "../lib/io.ts";
+import { writeMachineEnvelope } from "../lib/output.ts";
 import {
   buildProjectUpdateCreateInputFromCli,
+  buildProjectUpdateDeleteInputFromCli,
   buildProjectUpdateListInputFromCli,
+  buildProjectUpdateUpdateInputFromCli,
   executeProjectUpdateCreate,
+  executeProjectUpdateDelete,
   executeProjectUpdateList,
+  executeProjectUpdateUpdate,
   projectUpdateListPayload,
 } from "../surface/project-updates.ts";
 
@@ -27,7 +32,10 @@ export function registerProjectUpdate(program: Command): void {
     .option("--body-file <path>", "read body from a file")
     .option("--stdin", "read body from stdin")
     .option("--health <state>", "onTrack | atRisk | offTrack")
-    .option("--json", "emit structured result")
+    .option("--json", "machine output (default; TOON)")
+    .option("--format <fmt>", "toon | json | pretty")
+    .option("--pretty", "pretty-printed JSON")
+    .option("--human", "maintainer/dev chalk tables (opt-in; not agent path; bodies uncapped)")
     .action(
       async (
         project: string,
@@ -37,6 +45,8 @@ export function registerProjectUpdate(program: Command): void {
           stdin?: boolean;
           health?: string;
           json?: boolean;
+          format?: string;
+          pretty?: boolean;
         },
       ) => {
         const body = await resolveBody(opts);
@@ -44,9 +54,10 @@ export function registerProjectUpdate(program: Command): void {
           buildProjectUpdateCreateInputFromCli({ project, body, health: opts.health }),
         );
 
-        if (opts.json) {
-          process.stdout.write(
-            `${JSON.stringify(envelope({ project_update: result.project_update }), null, 2)}\n`,
+        if (wantsMachineOutput(opts)) {
+          writeMachineEnvelope(
+            { project_update: result.project_update } as Record<string, unknown>,
+            { json: true, format: opts.format, pretty: opts.pretty },
           );
           return;
         }
@@ -59,28 +70,126 @@ export function registerProjectUpdate(program: Command): void {
   cmd
     .command("list <project>")
     .description("list status updates on a project (project is name or UUID)")
-    .option("--json", "emit structured records")
-    .action(async (project: string, opts: { json?: boolean }) => {
-      const result = await executeProjectUpdateList(
-        buildProjectUpdateListInputFromCli({ project }),
-      );
-      if (opts.json) {
-        process.stdout.write(
-          `${JSON.stringify(envelope(projectUpdateListPayload(result)), null, 2)}\n`,
+    .option("--json", "machine output (default; TOON)")
+    .option("--format <fmt>", "toon | json | pretty")
+    .option("--pretty", "pretty-printed JSON")
+    .option("--human", "maintainer/dev chalk tables (opt-in; not agent path; bodies uncapped)")
+    .action(
+      async (project: string, opts: { json?: boolean; format?: string; pretty?: boolean }) => {
+        const result = await executeProjectUpdateList(
+          buildProjectUpdateListInputFromCli({ project }),
         );
-        return;
-      }
+        if (wantsMachineOutput(opts)) {
+          writeMachineEnvelope(
+            {
+              ...projectUpdateListPayload(result),
+              next: ["project-update create <project>", "project view <id>"],
+            } as Record<string, unknown>,
+            {
+              json: true,
+              format: opts.format,
+              pretty: opts.pretty,
+            },
+          );
+          return;
+        }
 
-      if (result.updates.length === 0) {
-        process.stdout.write("no updates\n");
-        return;
-      }
-      for (const u of result.updates) {
-        const health = u.health ? `  ${chalk.cyan(u.health)}` : "";
-        const who = u.user ? `${u.user.name} <${u.user.email}>` : "unknown";
-        process.stdout.write(
-          `\n${chalk.dim(u.created_at)}  ${chalk.bold(who)}${health}  ${chalk.gray(u.id)}\n${u.body}\n`,
+        if (result.updates.length === 0) {
+          process.stdout.write("no updates\n");
+          return;
+        }
+        for (const u of result.updates) {
+          const health = u.health ? `  ${chalk.cyan(u.health)}` : "";
+          const who = u.user ? `${u.user.name} <${u.user.email}>` : "unknown";
+          process.stdout.write(
+            `\n${chalk.dim(u.created_at)}  ${chalk.bold(who)}${health}  ${chalk.gray(u.id)}\n${u.body}\n`,
+          );
+        }
+      },
+    );
+
+  cmd
+    .command("update <id>")
+    .description("edit a project status update by UUID")
+    .option("--body <text>")
+    .option("--body-file <path>")
+    .option("--stdin", "read body from stdin")
+    .option("--health <state>", "onTrack | atRisk | offTrack")
+    .option("--json", "machine output (default; TOON)")
+    .option("--format <fmt>", "toon | json | pretty")
+    .option("--pretty", "pretty-printed JSON")
+    .option("--human", "maintainer/dev chalk tables (opt-in; not agent path; bodies uncapped)")
+    .action(
+      async (
+        id: string,
+        opts: {
+          body?: string;
+          bodyFile?: string;
+          stdin?: boolean;
+          health?: string;
+          json?: boolean;
+          format?: string;
+          pretty?: boolean;
+        },
+      ) => {
+        const body =
+          opts.body !== undefined || opts.bodyFile || opts.stdin
+            ? await resolveBody(opts)
+            : undefined;
+        const project_update = await executeProjectUpdateUpdate(
+          buildProjectUpdateUpdateInputFromCli({
+            id,
+            body,
+            health: opts.health,
+          }),
         );
-      }
-    });
+        if (wantsMachineOutput(opts)) {
+          writeMachineEnvelope({ project_update } as Record<string, unknown>, {
+            json: true,
+            format: opts.format,
+            pretty: opts.pretty,
+          });
+          return;
+        }
+        process.stdout.write(
+          `${chalk.green("✓")} updated project update ${chalk.gray(project_update.id)}\n`,
+        );
+      },
+    );
+
+  cmd
+    .command("soft-delete <id>")
+    .description("archive (soft-delete) a project status update by UUID")
+    .option("--yes", "confirm destructive operation (required)")
+    .option("--json", "machine output (default; TOON)")
+    .option("--format <fmt>", "toon | json | pretty")
+    .option("--pretty", "pretty-printed JSON")
+    .option("--human", "maintainer/dev chalk tables (opt-in; not agent path; bodies uncapped)")
+    .action(
+      async (
+        id: string,
+        opts: { yes?: boolean; json?: boolean; format?: string; pretty?: boolean },
+      ) => {
+        const result = await executeProjectUpdateDelete(
+          buildProjectUpdateDeleteInputFromCli({ id, opts }),
+        );
+        if (wantsMachineOutput(opts)) {
+          writeMachineEnvelope(result as Record<string, unknown>, {
+            json: true,
+            format: opts.format,
+            pretty: opts.pretty,
+          });
+          return;
+        }
+        if (result.status === "already-absent") {
+          process.stdout.write(
+            `${chalk.gray("·")} project update ${chalk.gray(result.id)} already absent\n`,
+          );
+          return;
+        }
+        process.stdout.write(
+          `${chalk.green("✓")} deleted project update ${chalk.gray(result.id)}\n`,
+        );
+      },
+    );
 }

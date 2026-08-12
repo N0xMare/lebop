@@ -1,23 +1,14 @@
 ---
-description: Lint local markdown for Linear renderer quirks (table-cell markers, setext H2, etc.)
-argument-hint: [paths…] [--fix] [--strict] [--json]
+description: Lint markdown for Linear renderer quirks (CLI)
+argument-hint: [paths…] [--fix] [--strict]
 ---
 
-Run `lebop lint $ARGUMENTS` from the current working directory.
+**CLI only.** If `lebop` is missing, stop and report.
 
-If no paths are provided, lebop scans `description.md` and `content.md` across the current repo's cache.
+```sh
+lebop lint $ARGUMENTS
+```
 
-After it completes:
-- If warnings were emitted and `--fix` was NOT passed, summarise which rules fired (e.g. "L001×2, L006×1") and offer to re-run with `--fix`. Don't auto-fix without asking — some fixes (like L006 inserting a blank line) shift line numbers and may not match the user's intent.
-- If `--fix` was passed, treat JSON `warnings` / `warning_count` as remaining post-fix diagnostics. Fixed warnings are not still outstanding unless they appear again in the result.
-- If `--strict` was passed and exit was 1, that's the expected pre-commit gate — surface the count clearly.
-- L003 / L005 are info-only with no autofix; flag those without offering `--fix`.
+Omit paths to lint the repo cache. `--fix` safe rewrites; `--strict` fail on warnings.
 
-The rule catalog (full reference in the lebop SKILL):
-- L001 — `N.` at table-cell start (autofix → `Row N — …`)
-- L002 — `- ` / `* ` at table-cell start (autofix → `• …`)
-- L003 — code fence with 4+ leading spaces (info)
-- L005 — bare URL inside backticks (info)
-- L006 — `text\n---` becomes `## text` setext H2 on push (autofix inserts blank line)
-
-If `lebop` isn't on PATH, stop and report.
+Rules catch table-cell list markers and setext H2 (`text` + `---` with no blank line).

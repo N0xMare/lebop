@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { parseCliLimit } from "../lib/cliOptions.ts";
+import { applyEntityTextField } from "../lib/contentSize.ts";
 import {
   createDocument,
   deleteDocument,
@@ -37,6 +38,14 @@ export type DocumentListMcpInput = Record<string, unknown> & {
 
 export interface DocumentGetInput {
   id: string;
+  fullContent?: boolean;
+  contentFile?: string;
+}
+
+export interface DocumentGetExecutionResult {
+  document: FullDocument;
+  content: Record<string, unknown>;
+  truncated: boolean;
 }
 
 export interface DocumentCreateInput {
@@ -45,6 +54,8 @@ export interface DocumentCreateInput {
   project?: string;
   /** CLI `--project-id` only — UUID passthrough, no name lookup. */
   projectId?: string;
+  /** Issue identifier or UUID for issue-scoped documents (0.0.6). */
+  issueId?: string;
   content?: string;
   icon?: string;
   /** Channel-specific NotFoundError hint when project selector misses. */
@@ -56,6 +67,7 @@ export interface DocumentCreateCliInput {
   opts: {
     project?: string;
     projectId?: string;
+    issue?: string;
     icon?: string;
   };
   content?: string;
@@ -63,7 +75,8 @@ export interface DocumentCreateCliInput {
 
 export type DocumentCreateMcpInput = Record<string, unknown> & {
   title: string;
-  project: string;
+  project?: string;
+  issue_id?: string;
   content?: string;
   icon?: string;
 };
@@ -91,6 +104,7 @@ export type DocumentUpdateMcpInput = Record<string, unknown> & {
 
 export interface DocumentDeleteInput {
   id: string;
+  confirmed?: boolean;
 }
 
 export interface DocumentDeleteCliInput {
@@ -138,13 +152,20 @@ const documentListCanonicalSchema = z
   })
   .strict();
 
-const documentGetCanonicalSchema = z.object({ id: z.string().min(1) }).strict();
+const documentGetCanonicalSchema = z
+  .object({
+    id: z.string().min(1),
+    fullContent: z.boolean().optional(),
+    contentFile: z.string().optional(),
+  })
+  .strict();
 
 const documentCreateCanonicalSchema = z
   .object({
     title: z.string(),
     project: z.string().optional(),
     projectId: z.string().optional(),
+    issueId: z.string().optional(),
     content: z.string().optional(),
     icon: z.string().optional(),
     projectNotFoundHint: z.string().optional(),
@@ -164,7 +185,7 @@ const documentUpdateCanonicalSchema = z
   })
   .strict();
 
-const documentDeleteCanonicalSchema = z.object({ id: z.string().min(1) }).strict();
+const documentDeleteCanonicalSchema = z.object({ id: z.string().min(1), confirmed: z.boolean().optional() }).strict();
 
 // ── Builders ────────────────────────────────────────────────────────────────
 
@@ -185,8 +206,18 @@ export function buildDocumentListInputFromMcp(input: DocumentListMcpInput): Docu
   });
 }
 
-export function buildDocumentGetInput(id: string): DocumentGetInput {
-  return parseSurfaceInput("documents.get", documentGetCanonicalSchema, { id });
+export function buildDocumentGetInput(
+  id: string,
+  opts?: { fullContent?: boolean; contentFile?: string },
+): DocumentGetInput {
+  return parseSurfaceInput("documents.get", documentGetCanonicalSchema, {
+    id,
+    fullContent: opts?.fullContent === true ? true : undefined,
+    contentFile:
+      typeof opts?.contentFile === "string" && opts.contentFile.trim()
+        ? opts.contentFile.trim()
+        : undefined,
+  });
 }
 
 export function buildDocumentCreateInputFromCli(
@@ -198,16 +229,25 @@ export function buildDocumentCreateInputFromCli(
       "choose one project selector",
     );
   }
-  if (!input.opts.project && !input.opts.projectId) {
+  const hasProject = Boolean(input.opts.project || input.opts.projectId);
+  const hasIssue = Boolean(input.opts.issue);
+  if (hasProject && hasIssue) {
     throw new ValidationError(
-      "either --project <name-or-id> or --project-id <uuid> is required",
-      "documents must be created inside a project",
+      "pass either a project selector or --issue, not both",
+      "documents are scoped to one parent (project or issue)",
+    );
+  }
+  if (!hasProject && !hasIssue) {
+    throw new ValidationError(
+      "either --project / --project-id or --issue is required",
+      "create documents on a project or attach them to an issue",
     );
   }
   return parseSurfaceInput("documents.create", documentCreateCanonicalSchema, {
     title: input.title,
     project: input.opts.project,
     projectId: input.opts.projectId,
+    issueId: input.opts.issue,
     content: input.content,
     icon: input.opts.icon,
   });
@@ -216,9 +256,22 @@ export function buildDocumentCreateInputFromCli(
 export function buildDocumentCreateInputFromMcp(
   input: DocumentCreateMcpInput,
 ): DocumentCreateInput {
+  if (input.project && input.issue_id) {
+    throw new ValidationError(
+      "create_document accepts either project or issue_id, not both",
+      "scope the document to one parent",
+    );
+  }
+  if (!input.project && !input.issue_id) {
+    throw new ValidationError(
+      "create_document requires project or issue_id",
+      "pass project for project-scoped docs, or issue_id for issue-scoped docs",
+    );
+  }
   return parseSurfaceInput("documents.create", documentCreateCanonicalSchema, {
     title: input.title,
     project: input.project,
+    issueId: input.issue_id,
     content: input.content,
     icon: input.icon,
     projectNotFoundHint: DOCUMENT_MCP_PROJECT_NOT_FOUND_HINT,
@@ -268,20 +321,28 @@ export function buildDocumentDeleteInputFromCli(
 ): DocumentDeleteInput {
   if (!input.opts.yes) {
     throw new ValidationError(
-      `refusing to delete document ${input.id} without --yes`,
-      "re-run with --yes to confirm. This operation is irreversible.",
+      `refusing to soft-delete document ${input.id} without --yes`,
+      "re-run with --yes to confirm. Soft-deletes (archived_at); not restored by lebop unarchive.",
     );
   }
-  return parseSurfaceInput("documents.delete", documentDeleteCanonicalSchema, {
+  return parseSurfaceInput("documents.soft_delete", documentDeleteCanonicalSchema, {
     id: input.id,
+    confirmed: true,
   });
 }
 
 export function buildDocumentDeleteInputFromMcp(
   input: DocumentDeleteMcpInput,
 ): DocumentDeleteInput {
-  return parseSurfaceInput("documents.delete", documentDeleteCanonicalSchema, {
+  if (input.confirm !== true) {
+    throw new ValidationError(
+      "soft_delete_document requires confirm:true for destructive execution",
+      "pass confirm:true after verifying the soft-delete is intended",
+    );
+  }
+  return parseSurfaceInput("documents.soft_delete", documentDeleteCanonicalSchema, {
     id: input.id,
+    confirmed: true,
   });
 }
 
@@ -310,15 +371,35 @@ export function documentListPayload(result: DocumentListExecutionResult) {
 export async function executeDocumentGet(
   input: DocumentGetInput,
   hint?: string,
-): Promise<FullDocument> {
+): Promise<DocumentGetExecutionResult> {
   const document = await getDocument(input.id);
   if (!document) {
     throw new NotFoundError(`document not found: ${input.id}`, hint);
   }
-  return document;
+  const applied = await applyEntityTextField(
+    document as unknown as Record<string, unknown>,
+    "content",
+    {
+      fullContent: input.fullContent === true,
+      contentFile: input.contentFile,
+    },
+  );
+  return {
+    document: applied.entity as unknown as FullDocument,
+    content: applied.content,
+    truncated: applied.truncated,
+  };
 }
 
 export async function executeDocumentCreate(input: DocumentCreateInput): Promise<FullDocument> {
+  if (input.issueId) {
+    return createDocument({
+      title: input.title,
+      issueId: input.issueId,
+      content: input.content,
+      icon: input.icon,
+    });
+  }
   const projectId = await resolveCreateProjectId(input);
   return createDocument({
     title: input.title,
@@ -337,6 +418,12 @@ export async function executeDocumentUpdate(
 export async function executeDocumentDelete(
   input: DocumentDeleteInput,
 ): Promise<DocumentDeleteExecutionResult> {
+  if (input.confirmed !== true) {
+    throw new ValidationError(
+      "refusing to soft-delete document without confirm",
+      "pass --yes (CLI) or confirm:true (MCP) after verifying the soft-delete is intended",
+    );
+  }
   const r = await tryIdempotentDelete(() => deleteDocument(input.id));
   return {
     id: input.id,
@@ -383,7 +470,6 @@ export const documentListOperation = {
       idempotentHint: true,
       openWorldHint: true,
     },
-    inputSchemaKeys: ["project", "limit", "workspace"],
   },
   safety: { readOnly: true, destructive: false, idempotent: true, openWorld: true },
   fromCli: buildDocumentListInputFromCli,
@@ -403,7 +489,7 @@ export const documentGetOperation = {
   action: "get",
   title: "Get one document by UUID (with content)",
   description:
-    "Returns one document with content. Missing ids surface as structured not_found errors, matching `lebop document view --json`.",
+    "Returns one document with content. Dense (64 KiB default); prefer content_file for large bodies. content_file writes host FS.",
   cli: {
     command: "document view",
     liveSteps: ["cli:document view --json"],
@@ -412,17 +498,18 @@ export const documentGetOperation = {
     tool: "get_document",
     title: "Get one document by UUID (with content)",
     description:
-      "Returns one document with content. Missing ids surface as structured not_found errors, matching `lebop document view --json`.",
+      "Returns one document with content. Dense (64 KiB default); prefer content_file for large bodies. content_file writes host FS.",
     annotations: {
       title: "Get one document by UUID (with content)",
-      readOnlyHint: true,
+      readOnlyHint: false,
       idempotentHint: true,
       openWorldHint: true,
     },
-    inputSchemaKeys: ["id", "workspace"],
   },
-  safety: { readOnly: true, destructive: false, idempotent: true, openWorld: true },
-} satisfies SurfaceOperationContract<DocumentGetInput, FullDocument>;
+  safety: { readOnly: false, destructive: false, idempotent: true, openWorld: true },
+  notes: "Content size policy applied in execute. content_file is a host FS write.",
+  execute: (input) => executeDocumentGet(input),
+} satisfies SurfaceOperationContract<DocumentGetInput, DocumentGetExecutionResult>;
 
 export const documentCreateOperation = {
   id: "documents.create",
@@ -446,7 +533,6 @@ export const documentCreateOperation = {
       idempotentHint: false,
       openWorldHint: true,
     },
-    inputSchemaKeys: ["title", "project", "content", "icon", "workspace"],
   },
   safety: { readOnly: false, destructive: false, idempotent: false, openWorld: true },
   notes:
@@ -483,7 +569,6 @@ export const documentUpdateOperation = {
       idempotentHint: true,
       openWorldHint: true,
     },
-    inputSchemaKeys: ["id", "title", "content", "icon", "workspace"],
   },
   safety: { readOnly: false, destructive: false, idempotent: true, openWorld: true },
   notes:
@@ -499,30 +584,29 @@ export const documentUpdateOperation = {
 >;
 
 export const documentDeleteOperation = {
-  id: "documents.delete",
+  id: "documents.soft_delete",
   domain: "documents",
   resource: "document",
-  action: "delete",
-  title: "Delete a document permanently",
+  action: "soft_delete",
+  title: "Soft-delete a document",
   description:
-    "Delete a document by UUID. Soft delete server-side (sets `archived_at`); not user-restorable via Linear's standard UI flows. Idempotent — re-deleting an already-soft-deleted document returns `{status: 'already-absent'}`.",
+    "Delete a document by UUID. Soft delete server-side (sets `archived_at`); not restored by unarchive; soft-delete via archived_at. Idempotent — re-deleting an already-soft-deleted document returns `{status: 'already-absent'}`.",
   cli: {
-    command: "document delete",
-    liveSteps: ["cli:document delete --json"],
+    command: "document soft-delete",
+    liveSteps: ["cli:document soft-delete --json"],
   },
   mcp: {
-    tool: "delete_document",
-    title: "Delete a document permanently",
+    tool: "soft_delete_document",
+    title: "Soft-delete a document",
     description:
-      "Delete a document by UUID. Soft delete server-side (sets `archived_at`); not user-restorable via Linear's standard UI flows. Idempotent — re-deleting an already-soft-deleted document returns `{status: 'already-absent'}`.",
+      "Delete a document by UUID. Soft delete server-side (sets `archived_at`); not restored by unarchive; soft-delete via archived_at. Idempotent — re-deleting an already-soft-deleted document returns `{status: 'already-absent'}`.",
     annotations: {
-      title: "Delete a document permanently",
+      title: "Soft-delete a document",
       readOnlyHint: false,
       destructiveHint: true,
       idempotentHint: true,
       openWorldHint: true,
     },
-    inputSchemaKeys: ["id", "confirm", "workspace"],
   },
   safety: {
     readOnly: false,
@@ -562,6 +646,16 @@ export function buildDocumentListMcpInputSchema(workspaceDescription: string) {
 export function buildDocumentGetMcpInputSchema(workspaceDescription: string) {
   return {
     id: z.string(),
+    full_content: z
+      .boolean()
+      .optional()
+      .describe("Full document content on the wire (bypass 64 KiB agent size cap)."),
+    content_file: z
+      .string()
+      .optional()
+      .describe(
+        "Write full content to this host path; wire stays dense. Prefer for large bodies. Side-effect: writes disk.",
+      ),
     workspace: workspaceArg.describe(workspaceDescription),
   };
 }
@@ -569,7 +663,16 @@ export function buildDocumentGetMcpInputSchema(workspaceDescription: string) {
 export function buildDocumentCreateMcpInputSchema(workspaceDescription: string) {
   return {
     title: z.string(),
-    project: z.string().describe("Project name or UUID."),
+    project: z
+      .string()
+      .optional()
+      .describe("Project name or UUID. Mutually exclusive with issue_id."),
+    issue_id: z
+      .string()
+      .optional()
+      .describe(
+        "Issue identifier or UUID for issue-scoped documents. Mutually exclusive with project.",
+      ),
     content: z.string().optional(),
     icon: z
       .string()

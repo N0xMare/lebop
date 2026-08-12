@@ -1,66 +1,85 @@
 # Agent integrations for lebop
 
-This directory contains agent-facing assets — skill content + slash-command
-prompts — describing how an autonomous coding agent should use `lebop` to
-operate inside Linear. The content is plain markdown; each agent platform
-loads it from a different path, but the content itself is portable.
+Agent-facing assets: **skills** (complete vertical playbooks) and **slash commands**
+(thin CLI entry points). Plain markdown — portable across agent platforms.
 
 ## Layout
 
 ```
 agents/
-├── skills/lebop/SKILL.md         # the main "how an agent uses lebop" guide
-└── commands/                     # individual prompts for common workflows
-    ├── lebop-research.md         # workspace explore -> fetch research flow
-    ├── lebop-pull.md             # pull → edit → push loop
-    ├── lebop-push.md             # updatedAt stale-guarded push
-    ├── lebop-publish.md          # publish review -> apply flow
-    └── lebop-lint.md             # markdown lint pre-mutation
+├── skills/
+│   ├── cli/                          # shell + lebop CLI only
+│   │   ├── lebop/SKILL.md            # install name: lebop-cli
+│   │   ├── lebop-program/SKILL.md    # install name: lebop-cli-program
+│   │   └── lebop-execution/SKILL.md  # install name: lebop-cli-execution
+│   └── mcp/                          # lebop MCP tools only
+│       ├── lebop/SKILL.md            # install name: lebop-mcp
+│       ├── lebop-program/SKILL.md    # install name: lebop-mcp-program
+│       └── lebop-execution/SKILL.md  # install name: lebop-mcp-execution
+└── commands/                         # CLI slash entry points
+    ├── lebop-research.md
+    ├── lebop-pull.md
+    ├── lebop-push.md
+    ├── lebop-publish.md
+    └── lebop-lint.md
 ```
 
-`skills/lebop/SKILL.md` carries Claude Code-style frontmatter (`name`,
-`description`) at the top. Most agent platforms either consume that
-frontmatter natively or treat it as a comment block — either way the body
-is plain markdown that any agent can ingest.
+## Six skills (medium × role)
+
+| Install name | Medium | Role |
+|--------------|--------|------|
+| `lebop-cli` | CLI | Monolith control plane |
+| `lebop-cli-program` | CLI | Program: research → plan → initiative compose → updates |
+| `lebop-cli-execution` | CLI | Day-loop: mine/set/pull/push |
+| `lebop-mcp` | MCP | Monolith control plane |
+| `lebop-mcp-program` | MCP | Program via tools (prefer full profile) |
+| `lebop-mcp-execution` | MCP | Day-loop via tools (core often enough) |
+
+**Rules:**
+
+- Each `SKILL.md` is **self-contained** (no `references/`, no cross-skill links).
+- **CLI** skills teach shell `lebop …` only.
+- **MCP** skills teach tool names / profiles only.
+- Boundary: can run shell + `lebop` → CLI skills; host has only MCP tools → MCP skills.
+
+Frontmatter `name:` matches the install name. Bodies are plain markdown.
 
 ## Per-agent installation
 
 ### Claude Code
 
-Run the bundled installer from a source or package checkout that will remain
-on disk. It symlinks the whole `agents/skills/lebop/` directory into
-`~/.claude/skills/lebop/` and each `agents/commands/*.md` file into
-`~/.claude/commands/`:
+From a source or package checkout that remains on disk:
 
 ```sh
 ./bin/install-claude
 ```
 
-Symlinks resolve through the repo, so `git pull` keeps everything current
-with no re-install.
+Symlinks each skill directory into `~/.claude/skills/<install-name>/` and each
+`agents/commands/lebop-*.md` into `~/.claude/commands/`. Re-run after `git pull`.
 
-The one-line release installer installs only the `lebop` binary. CLI and MCP
-work normally without these markdown assets; install the assets separately
-when you want Claude Code slash commands or the skill.
+The release binary installer does **not** install these assets. CLI and MCP work
+without them; install assets when you want skills / slash commands.
 
 ### Other agents
 
-Point your agent at the files in this directory using whatever mechanism
-it supports (rules, prompts, custom instructions, etc.). The exact path
-will depend on the platform; the content is the same.
+Point the host at the relevant `SKILL.md` files. Load **one** skill for the
+medium + role of the task (do not stack all six by default).
 
-For MCP-capable agents, register the server as a stdio command:
+MCP host example:
 
 ```json
 {
   "mcpServers": {
     "lebop": {
       "command": "/Users/you/.local/bin/lebop",
-      "args": ["mcp"]
+      "args": ["mcp"],
+      "env": {
+        "LEBOP_WORKSPACE": "your-org-url-key"
+      }
     }
   }
 }
 ```
 
-If you wire up a one-shot installer for another agent, drop a script
-alongside `bin/install-claude` and PR it.
+Use `"args": ["mcp", "--profile", "full"]` when program/PM tools are required.
+Pin `LEBOP_WORKSPACE` so multi-workspace agents hit the intended org.

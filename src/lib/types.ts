@@ -21,6 +21,7 @@ export interface WorkspaceAuth {
   slug: string;
   name: string;
   url_key: string;
+  /** Personal API key (or user OAuth token). Single supported identity model. */
   token: string;
   viewer: Viewer;
   created_at: string;
@@ -69,7 +70,7 @@ export interface UserConfig {
    * Example:
    *   workspace_team_defaults:
    *     unlink-xyz: UE
-   *     noxor: NOX
+   *     acme: TEAM
    */
   workspace_team_defaults?: Record<string, string>;
   workspaces?: Record<string, WorkspaceConfig>;

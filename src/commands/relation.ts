@@ -1,6 +1,8 @@
 import chalk from "chalk";
 import type { Command } from "commander";
-import { envelope } from "../lib/envelope.ts";
+import { wantsMachineOutput } from "../lib/encode.ts";
+import { relationNext } from "../lib/nextStubs.ts";
+import { writeMachineEnvelope } from "../lib/output.ts";
 import { LINK_KINDS } from "../lib/relations.ts";
 import {
   buildRelationAddInputFromCli,
@@ -34,17 +36,33 @@ export function registerRelation(program: Command): void {
       "--yes",
       "confirm replacement/destructive relation creation when an existing pair relation would be replaced or a duplicate relation may move issue state",
     )
-    .option("--json", "emit structured result")
+    .option("--json", "machine output (default; TOON)")
+    .option("--format <fmt>", "toon | json | pretty")
+    .option("--pretty", "pretty-printed JSON")
+    .option("--human", "maintainer/dev chalk tables (opt-in; not agent path; bodies uncapped)")
     .action(
-      async (id: string, kind: string, other: string, opts: { json?: boolean; yes?: boolean }) => {
+      async (
+        id: string,
+        kind: string,
+        other: string,
+        opts: { json?: boolean; yes?: boolean; format?: string; pretty?: boolean },
+      ) => {
         const result = await executeRelationAdd(
           buildRelationAddInputFromCli({ id, kind, other, opts }),
         );
 
         if (result.status === "unchanged") {
-          if (opts.json) {
-            process.stdout.write(
-              `${JSON.stringify(envelope(relationAddCliPayload(result)), null, 2)}\n`,
+          if (wantsMachineOutput(opts)) {
+            writeMachineEnvelope(
+              {
+                ...relationAddCliPayload(result),
+                next: relationNext("add"),
+              } as Record<string, unknown>,
+              {
+                json: true,
+                format: opts.format,
+                pretty: opts.pretty,
+              },
             );
             return;
           }
@@ -54,9 +72,17 @@ export function registerRelation(program: Command): void {
           return;
         }
 
-        if (opts.json) {
-          process.stdout.write(
-            `${JSON.stringify(envelope(relationAddCliPayload(result)), null, 2)}\n`,
+        if (wantsMachineOutput(opts)) {
+          writeMachineEnvelope(
+            {
+              ...relationAddCliPayload(result),
+              next: relationNext("add"),
+            } as Record<string, unknown>,
+            {
+              json: true,
+              format: opts.format,
+              pretty: opts.pretty,
+            },
           );
           if (result.writebackFailed) process.exitCode = 1;
           return;
@@ -78,17 +104,33 @@ export function registerRelation(program: Command): void {
     .command("delete <id> <kind> <other>")
     .description("remove a relation between two issues (requires --yes)")
     .option("--yes", "confirm destructive operation (required)")
-    .option("--json", "emit structured result")
+    .option("--json", "machine output (default; TOON)")
+    .option("--format <fmt>", "toon | json | pretty")
+    .option("--pretty", "pretty-printed JSON")
+    .option("--human", "maintainer/dev chalk tables (opt-in; not agent path; bodies uncapped)")
     .action(
-      async (id: string, kind: string, other: string, opts: { json?: boolean; yes?: boolean }) => {
+      async (
+        id: string,
+        kind: string,
+        other: string,
+        opts: { json?: boolean; yes?: boolean; format?: string; pretty?: boolean },
+      ) => {
         const result = await executeRelationDelete(
           buildRelationDeleteInputFromCli({ id, kind, other, opts }),
         );
 
         if (result.status === "already-absent") {
-          if (opts.json) {
-            process.stdout.write(
-              `${JSON.stringify(envelope(relationDeleteCliPayload(result)), null, 2)}\n`,
+          if (wantsMachineOutput(opts)) {
+            writeMachineEnvelope(
+              {
+                ...relationDeleteCliPayload(result),
+                next: relationNext("delete"),
+              } as Record<string, unknown>,
+              {
+                json: true,
+                format: opts.format,
+                pretty: opts.pretty,
+              },
             );
           } else {
             process.stdout.write(
@@ -98,9 +140,17 @@ export function registerRelation(program: Command): void {
           return;
         }
 
-        if (opts.json) {
-          process.stdout.write(
-            `${JSON.stringify(envelope(relationDeleteCliPayload(result)), null, 2)}\n`,
+        if (wantsMachineOutput(opts)) {
+          writeMachineEnvelope(
+            {
+              ...relationDeleteCliPayload(result),
+              next: relationNext("delete"),
+            } as Record<string, unknown>,
+            {
+              json: true,
+              format: opts.format,
+              pretty: opts.pretty,
+            },
           );
           if (result.writebackFailed) process.exitCode = 1;
           return;
@@ -121,12 +171,25 @@ export function registerRelation(program: Command): void {
   rel
     .command("list <id>")
     .description("list outbound + inbound relations for an issue")
-    .option("--json", "emit structured records")
-    .action(async (id: string, opts: { json?: boolean }) => {
+    .option("--json", "machine output (default; TOON)")
+    .option("--format <fmt>", "toon | json | pretty")
+    .option("--pretty", "pretty-printed JSON")
+    .option("--human", "maintainer/dev chalk tables (opt-in; not agent path; bodies uncapped)")
+    .action(async (id: string, opts: { json?: boolean; format?: string; pretty?: boolean }) => {
       const result = await executeRelationList(buildRelationListInputFromCli({ id }));
 
-      if (opts.json) {
-        process.stdout.write(`${JSON.stringify(envelope(relationListPayload(result)), null, 2)}\n`);
+      if (wantsMachineOutput(opts)) {
+        writeMachineEnvelope(
+          {
+            ...relationListPayload(result),
+            next: relationNext("list"),
+          } as Record<string, unknown>,
+          {
+            json: true,
+            format: opts.format,
+            pretty: opts.pretty,
+          },
+        );
         return;
       }
 

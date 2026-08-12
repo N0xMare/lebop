@@ -210,12 +210,12 @@ describe("listIssuesWithMetadata", () => {
 
   it("returns page completeness metadata for finite issue lists", async () => {
     const issues = vi.fn().mockResolvedValueOnce({
-      nodes: [issue("NOX-1")],
+      nodes: [issue("TEAM-1")],
       pageInfo: { hasNextPage: true, endCursor: "cursor-1" },
     });
     sdkMocks.linear.mockResolvedValue({ issues });
 
-    const result = await listIssuesWithMetadata({ resolvedTeam: "NOX", max: 1 });
+    const result = await listIssuesWithMetadata({ resolvedTeam: "TEAM", max: 1 });
 
     expect(result).toMatchObject({
       count: 1,
@@ -224,11 +224,11 @@ describe("listIssuesWithMetadata", () => {
       truncated: true,
       next_cursor: "cursor-1",
     });
-    expect(result.issues[0]).toMatchObject({ identifier: "NOX-1", state_type: "unstarted" });
+    expect(result.issues[0]).toMatchObject({ identifier: "TEAM-1", state_type: "unstarted" });
     expect(issues).toHaveBeenCalledWith(
       expect.objectContaining({
         first: 1,
-        filter: { team: { key: { eq: "NOX" } } },
+        filter: { team: { key: { eq: "TEAM" } } },
       }),
     );
   });

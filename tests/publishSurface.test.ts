@@ -14,13 +14,13 @@ describe("publish surface contracts", () => {
         ids: [],
         opts: {
           plan: "plans/release",
-          team: "NOX",
+          team: "TEAM",
           strict: true,
         },
       }),
     ).toEqual({
       source: { kind: "plan", dir: "plans/release" },
-      team: "NOX",
+      team: "TEAM",
       strict: true,
     });
   });
@@ -28,22 +28,22 @@ describe("publish surface contracts", () => {
   it("normalizes CLI cache review inputs with expanded issue ranges", () => {
     expect(
       buildPublishReviewInputFromCli({
-        ids: ["nox-1..nox-2"],
+        ids: ["team-1..team-2"],
         opts: {
           cache: true,
           projectId: ["project-1"],
           allModified: false,
-          team: "NOX",
+          team: "TEAM",
         },
       }),
     ).toEqual({
       source: {
         kind: "cache",
-        identifiers: ["NOX-1", "NOX-2"],
+        identifiers: ["TEAM-1", "TEAM-2"],
         projectIds: ["project-1"],
         allModified: false,
       },
-      team: "NOX",
+      team: "TEAM",
       strict: undefined,
     });
   });
@@ -67,7 +67,7 @@ describe("publish surface contracts", () => {
         source: { kind: "plan", dir: "/tmp/plan" },
         team: "UE",
         strict: false,
-        workspace: "noxor",
+        workspace: "acme",
       }),
     ).toEqual({
       source: { kind: "plan", dir: "/tmp/plan" },
@@ -86,7 +86,7 @@ describe("publish surface contracts", () => {
           project_ids: ["project-1"],
           all_modified: false,
         },
-        workspace: "noxor",
+        workspace: "acme",
       }),
     ).toEqual({
       source: {
@@ -104,7 +104,7 @@ describe("publish surface contracts", () => {
   it("rejects nested MCP cache selector typos at the surface boundary", () => {
     expect(() =>
       buildPublishReviewInputFromMcp({
-        source: { kind: "cache", identifier: ["NOX-1"] } as never,
+        source: { kind: "cache", identifier: ["TEAM-1"] } as never,
       }),
     ).toThrow(ValidationError);
   });
@@ -121,7 +121,7 @@ describe("publish surface contracts", () => {
       buildPublishApplyInputFromMcp({
         review_id: "pub_20260609_review",
         verify: true,
-        workspace: "noxor",
+        workspace: "acme",
       }),
     ).toEqual({ reviewId: "pub_20260609_review", verify: true });
   });

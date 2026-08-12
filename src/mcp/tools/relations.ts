@@ -1,4 +1,5 @@
 import { envelope } from "../../lib/envelope.ts";
+import { mcpGetNext } from "../../lib/nextStubs.ts";
 import {
   buildRelationAddInputFromMcp,
   buildRelationAddMcpInputSchema,
@@ -51,7 +52,12 @@ export function buildRelationToolSpecs(deps: RelationToolDeps): McpToolSpec[] {
       ),
       handler: async (args: RelationAddMcpInput) => {
         const result = await executeRelationAdd(buildRelationAddInputFromMcp(args), mcpCacheDeps);
-        return text(envelope(relationAddMcpPayload(result)));
+        return text(
+          envelope({
+            ...relationAddMcpPayload(result),
+            next: mcpGetNext("list_relations", "get_issue"),
+          }),
+        );
       },
     },
     {
@@ -68,7 +74,12 @@ export function buildRelationToolSpecs(deps: RelationToolDeps): McpToolSpec[] {
           deps.requireConfirm(args, "update_relations");
         }
         const result = await executeRelationUpdate(preview, mcpCacheDeps);
-        return text(envelope(relationUpdateMcpPayload(result)));
+        return text(
+          envelope({
+            ...relationUpdateMcpPayload(result),
+            next: mcpGetNext("list_relations", "get_issue"),
+          }),
+        );
       },
     },
     {
@@ -79,7 +90,12 @@ export function buildRelationToolSpecs(deps: RelationToolDeps): McpToolSpec[] {
       ),
       handler: async (args: RelationListMcpInput) => {
         const result = await executeRelationList(buildRelationListInputFromMcp(args));
-        return text(envelope(relationListPayload(result)));
+        return text(
+          envelope({
+            ...relationListPayload(result),
+            next: mcpGetNext("add_relation", "get_issue", "update_relations"),
+          }),
+        );
       },
     },
     {
@@ -94,7 +110,12 @@ export function buildRelationToolSpecs(deps: RelationToolDeps): McpToolSpec[] {
           buildRelationDeleteInputFromMcp(args),
           mcpCacheDeps,
         );
-        return text(envelope(relationDeleteMcpPayload(result)));
+        return text(
+          envelope({
+            ...relationDeleteMcpPayload(result),
+            next: mcpGetNext("list_relations", "get_issue"),
+          }),
+        );
       },
     },
   ];

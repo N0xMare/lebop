@@ -21,7 +21,7 @@ describe("issues surface contracts", () => {
   it("normalizes equivalent CLI and MCP issue list inputs", () => {
     const cli = buildIssueListInputFromCli({
       opts: {
-        team: "NOX",
+        team: "TEAM",
         project: "Agent Project",
         stateType: "started",
         assignee: "me",
@@ -33,7 +33,7 @@ describe("issues surface contracts", () => {
       },
     });
     const mcp = buildIssueListInputFromMcp({
-      team: "NOX",
+      team: "TEAM",
       project: "Agent Project",
       state_type: "started",
       assignee: "me",
@@ -42,12 +42,12 @@ describe("issues surface contracts", () => {
       include_archived: true,
       limit: 25,
       cursor: "issue-cursor-1",
-      workspace: "noxor",
+      workspace: "acme",
     });
 
     expect(cli).toEqual(mcp);
     expect(cli).toMatchObject({
-      team: "NOX",
+      team: "TEAM",
       project: "Agent Project",
       stateType: "started",
       assignee: "me",
@@ -61,10 +61,10 @@ describe("issues surface contracts", () => {
 
   it("normalizes mine and MCP active_only to the same active state preset", () => {
     const mine = buildIssueMineInputFromCli({
-      opts: { team: "NOX", limit: "0", cursor: "mine-cursor" },
+      opts: { team: "TEAM", limit: "0", cursor: "mine-cursor" },
     });
     const mcp = buildIssueListInputFromMcp({
-      team: "NOX",
+      team: "TEAM",
       assignee: "me",
       active_only: true,
       limit: 0,
@@ -92,22 +92,37 @@ describe("issues surface contracts", () => {
   });
 
   it("normalizes show/get_issue defaults without leaking workspace into canonical input", () => {
-    expect(buildIssueGetInputFromCli({ id: "nox-1", opts: {} })).toEqual({
-      identifier: "nox-1",
-      includeComments: true,
+    // 0.0.6 dense defaults: comments off; CLI keeps relations on for shell.
+    expect(buildIssueGetInputFromCli({ id: "team-1", opts: {} })).toEqual({
+      identifier: "team-1",
+      includeComments: false,
       includeRelations: true,
+      fullContent: false,
     });
     expect(
       buildIssueGetInputFromMcp({
-        identifier: "NOX-1",
+        identifier: "TEAM-1",
         include_comments: false,
         include_relations: false,
-        workspace: "noxor",
+        workspace: "acme",
       }),
     ).toEqual({
-      identifier: "NOX-1",
+      identifier: "TEAM-1",
       includeComments: false,
       includeRelations: false,
+      fullContent: false,
+    });
+    expect(
+      buildIssueGetInputFromMcp({
+        identifier: "TEAM-1",
+        include_comments: true,
+        include_relations: true,
+      }),
+    ).toEqual({
+      identifier: "TEAM-1",
+      includeComments: true,
+      includeRelations: true,
+      fullContent: false,
     });
   });
 
@@ -138,25 +153,25 @@ describe("issues surface contracts", () => {
   });
 
   it("rejects empty update_issue inputs before execution", () => {
-    expect(() => buildIssueUpdateInputFromMcp({ identifier: "NOX-1" })).toThrow(
+    expect(() => buildIssueUpdateInputFromMcp({ identifier: "TEAM-1" })).toThrow(
       "nothing to update",
     );
     expect(() =>
       buildIssueUpdateInputFromMcp({
-        identifier: "NOX-1",
+        identifier: "TEAM-1",
         labels_add: [],
         labels_remove: [],
       }),
     ).toThrow("nothing to update");
     expect(
       buildIssueUpdateInputFromMcp({
-        identifier: "NOX-1",
+        identifier: "TEAM-1",
         estimate: null,
         project: null,
         repo_root: "/repo/root",
       }),
     ).toMatchObject({
-      identifier: "NOX-1",
+      identifier: "TEAM-1",
       estimate: null,
       project: null,
       repoRoot: "/repo/root",
@@ -166,18 +181,18 @@ describe("issues surface contracts", () => {
   it("normalizes update_issue label deltas and rejects mixed label modes", () => {
     expect(
       buildIssueUpdateInputFromMcp({
-        identifier: "NOX-1",
+        identifier: "TEAM-1",
         labels_add: ["type:feature"],
         labels_remove: ["type:bug"],
       }),
     ).toMatchObject({
-      identifier: "NOX-1",
+      identifier: "TEAM-1",
       labelDeltas: { add: ["type:feature"], remove: ["type:bug"] },
     });
 
     expect(() =>
       buildIssueUpdateInputFromMcp({
-        identifier: "NOX-1",
+        identifier: "TEAM-1",
         labels: ["type:feature"],
         labels_add: ["urgent"],
       }),
@@ -185,40 +200,48 @@ describe("issues surface contracts", () => {
   });
 
   it("normalizes archive/unarchive ranges and destructive confirmation differences", () => {
-    expect(() => buildIssueArchiveInputFromCli({ identifiers: ["NOX-1"], opts: {} })).toThrow(
+    expect(() => buildIssueArchiveInputFromCli({ identifiers: ["TEAM-1"], opts: {} })).toThrow(
       "refusing to archive issues without --yes",
     );
 
     expect(
       buildIssueArchiveInputFromCli({
-        identifiers: ["nox-1..nox-2"],
+        identifiers: ["team-1..team-2"],
         opts: { yes: true },
       }),
-    ).toEqual({ identifiers: ["NOX-1", "NOX-2"], repoRoot: undefined });
+    ).toEqual({ identifiers: ["TEAM-1", "TEAM-2"], confirmed: true });
 
     expect(
       buildIssueArchiveInputFromMcp({
-        identifiers: ["NOX-3..NOX-4"],
+        identifiers: ["TEAM-3..TEAM-4"],
+        repo_root: "/repo/root",
+        confirm: true,
+      }),
+    ).toEqual({ identifiers: ["TEAM-3", "TEAM-4"], repoRoot: "/repo/root", confirmed: true });
+
+    expect(() =>
+      buildIssueArchiveInputFromMcp({
+        identifiers: ["TEAM-3"],
         repo_root: "/repo/root",
       }),
-    ).toEqual({ identifiers: ["NOX-3", "NOX-4"], repoRoot: "/repo/root" });
+    ).toThrow(/confirm:true/);
 
-    expect(buildIssueUnarchiveInputFromCli({ identifiers: ["nox-5..nox-6"] })).toEqual({
-      identifiers: ["NOX-5", "NOX-6"],
+    expect(buildIssueUnarchiveInputFromCli({ identifiers: ["team-5..team-6"] })).toEqual({
+      identifiers: ["TEAM-5", "TEAM-6"],
       repoRoot: undefined,
     });
     expect(
       buildIssueUnarchiveInputFromMcp({
-        identifiers: ["NOX-7"],
+        identifiers: ["TEAM-7"],
         repo_root: "/repo/root",
       }),
-    ).toEqual({ identifiers: ["NOX-7"], repoRoot: "/repo/root" });
+    ).toEqual({ identifiers: ["TEAM-7"], repoRoot: "/repo/root" });
   });
 
   it("normalizes bulk update CLI null strings and MCP cache context", () => {
     expect(
       buildIssueBulkUpdateInputFromCli({
-        identifiers: ["NOX-1"],
+        identifiers: ["TEAM-1"],
         opts: {
           priority: "high",
           label: ["backend"],
@@ -227,14 +250,14 @@ describe("issues surface contracts", () => {
           project: "null",
           milestone: "Roadmap",
           cycle: "null",
-          team: "NOX",
+          team: "TEAM",
           yes: true,
         },
         repoHash: "repo-hash",
         repoRoot: "/repo/root",
       }),
     ).toEqual({
-      identifiers: ["NOX-1"],
+      identifiers: ["TEAM-1"],
       patch: {
         priority: "high",
         labels: ["backend"],
@@ -244,25 +267,26 @@ describe("issues surface contracts", () => {
         milestone: "Roadmap",
         cycle: null,
       },
-      team: "NOX",
+      team: "TEAM",
+      confirmed: true,
       repoHash: "repo-hash",
       repoRoot: "/repo/root",
     });
 
     expect(() =>
       buildIssueBulkUpdateInputFromCli({
-        identifiers: ["NOX-1"],
+        identifiers: ["TEAM-1"],
         opts: { priority: "high" },
       }),
     ).toThrow(/without --yes/);
 
     expect(
       buildIssueBulkUpdateInputFromCli({
-        identifiers: ["NOX-1"],
+        identifiers: ["TEAM-1"],
         opts: { priority: "high", dryRun: true },
       }),
     ).toMatchObject({
-      identifiers: ["NOX-1"],
+      identifiers: ["TEAM-1"],
       patch: { priority: "high" },
       dryRun: true,
     });
@@ -270,9 +294,10 @@ describe("issues surface contracts", () => {
     expect(
       buildIssueBulkUpdateInputFromMcp(
         {
-          identifiers: ["NOX-2"],
+          identifiers: ["TEAM-2"],
           patch: { assignee: null, project: null },
           repo_root: "/repo/root",
+          confirm: true,
         },
         {
           resolveCacheContext: (repoRoot) => ({
@@ -282,9 +307,10 @@ describe("issues surface contracts", () => {
         },
       ),
     ).toEqual({
-      identifiers: ["NOX-2"],
+      identifiers: ["TEAM-2"],
       patch: { assignee: null, project: null },
       team: undefined,
+      confirmed: true,
       repoHash: "repo-hash",
       repoRoot: "/repo/root",
     });

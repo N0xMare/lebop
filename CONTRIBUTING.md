@@ -30,26 +30,46 @@ actionlint .github/workflows/*.yml
 ```
 
 Release tags run the same gate, build four Bun-compiled binaries, and gate
-the Linux x64 release artifact on the full Noxor live harness report
-validator.
+the Linux x64 release artifact on the full live harness report validator
+and the discovery live smoke as co-gates.
 
 ## Project shape
 
-- **`src/lib/`** — core library functions. No `console.*`, no
-  `process.exit`. Throw `LebopError` (or a subtype) for structured errors.
-  This module is consumed by both the CLI and the MCP server.
-- **`src/commands/`** — thin shells over `lib/`. Parse argv, call lib,
-  format output. Use `withClient` for idempotent reads + idempotent
-  updates; use `linear()` directly only for non-idempotent creates +
-  archives + deletes (retry-after-success would duplicate or
-  spurious-not-found).
-- **`src/mcp/`** — MCP server registration. Each tool wraps a `lib/`
-  function via the `safe()` decorator (handles error formatting + per-call
-  workspace env restore).
-- **`tests/`** — vitest unit tests. Mock at `src/lib/sdk.ts` for
-  network-touching code paths.
+- **`src/surface/`** — **L2 contract authority.** Each dual-surface (or
+  declared exception) operation lives here as a `SurfaceOperationContract`
+  on `SURFACE_OPERATIONS` (`src/surface/index.ts`): CLI command, MCP tool,
+  safety/confirm, live steps, adapters. Public inventories
+  (`CLI_SURFACE_MANIFEST` / `MCP_SURFACE_MANIFEST`) and live coverage are
+  **derived** from this list — extend surface ops rather than hand-editing
+  tool name inventories.
+- **`src/lib/`** — core library functions (Linear I/O, cache, encode). No
+  `console.*`, no `process.exit`. Throw `LebopError` (or a subtype) for
+  structured errors. Consumed by surface execute paths and thin adapters.
+- **`src/commands/`** — thin CLI shells: parse argv, call surface/lib,
+  format output (agent-default machine TOON). Prefer surface `fromCli` +
+  `execute*`.
+- **`src/mcp/`** — thin MCP registration: `mcpToolConfig(operation, schema)`
+  + surface `fromMcp`/`execute*`. Profile filter (core vs full) is derived
+  from surface core tags.
+- **`tests/`** — vitest unit/integration tests. Mock at `src/lib/sdk.ts` for
+  network-touching code paths. Use `bun run test` (not bare `bun test`).
 
 See `docs/spec.md` for the full architecture.
+
+## Agent skills (`agents/skills/`)
+
+Six isolated verticals: `cli/{lebop,lebop-program,lebop-execution}` and
+`mcp/{lebop,lebop-program,lebop-execution}` → install names `lebop-cli*`,
+`lebop-mcp*`. Rules:
+
+- **Complete `SKILL.md` only** — no `references/` trees.
+- **No cross-skill links** or peer install-name routing; each skill is self-contained.
+- **Medium purity:** CLI skills teach shell; MCP skills teach tools (no dual inventory dump).
+- Frontmatter `name:` must match `bin/install-claude` install map.
+- When adding an MCP tool, update `MCP_REGISTRATION_ORDER_LOCK` in
+  `src/mcp/tools/index.ts` (order-only secondary list; presence stays surface-derived).
+
+`bun run check:package` and `tests/installClaude.test.ts` enforce skill count and isolation.
 
 ## Testing against Linear
 
@@ -60,8 +80,11 @@ real Linear data during development.
 Project-only fixtures are not enough for the current surface: live coverage
 touches labels, projects, initiatives, milestones, documents, cycles, agent
 sessions, publish/cache flows, destructive cleanup, and MCP calls. Use a
-dedicated workspace/team boundary like the NOX/Noxor sandbox described in
-`docs/spec.md`, and keep that discipline when adding new GraphQL paths.
+dedicated workspace/team boundary like the **lebop-playground / LEB** sandbox
+(CI secret `LEBOP_SANDBOX_TOKEN`), and keep that discipline when adding new
+GraphQL paths. Maintainers run `scripts/live-surface-smoke.mjs` (full
+surface) and `scripts/live-discovery-smoke.mjs` (discovery/features); both
+honor `LEBOP_LIVE_BIN` for compiled-binary provenance.
 
 ## Commits + PRs
 

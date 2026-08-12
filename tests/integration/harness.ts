@@ -255,6 +255,8 @@ export async function runLebop(
         // Force colors off so chalk doesn't pollute stdout assertions.
         NO_COLOR: "1",
         FORCE_COLOR: "0",
+        // Integration tests JSON.parse --json output; agents default to TOON.
+        LEBOP_MACHINE_FORMAT: "json",
         ...env,
       },
       stdio: [stdin === undefined ? "ignore" : "pipe", "pipe", "pipe"],
@@ -389,15 +391,21 @@ interface JsonRpcResponse {
  * Error that includes it for fast diagnosis.
  */
 export async function startMcpClient(env: Record<string, string> = {}): Promise<McpClient> {
-  const child: ChildProcessWithoutNullStreams = spawn("bun", [LEBOP_BIN, "mcp"], {
-    env: {
-      ...process.env,
-      NO_COLOR: "1",
-      FORCE_COLOR: "0",
-      ...env,
+  // Integration tests cover the full inventory; production default is --profile core.
+  const child: ChildProcessWithoutNullStreams = spawn(
+    "bun",
+    [LEBOP_BIN, "mcp", "--profile", "full"],
+    {
+      env: {
+        ...process.env,
+        NO_COLOR: "1",
+        FORCE_COLOR: "0",
+        LEBOP_MACHINE_FORMAT: "json",
+        ...env,
+      },
+      stdio: ["pipe", "pipe", "pipe"],
     },
-    stdio: ["pipe", "pipe", "pipe"],
-  });
+  );
 
   let stderr = "";
   child.stderr.on("data", (d) => {

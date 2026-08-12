@@ -20,8 +20,8 @@ import { dirname, join } from "node:path";
 import { Document, parseDocument } from "yaml";
 import { writeAtomic } from "./cache.ts";
 import { ValidationError } from "./errors.ts";
-import { CONFIG_FILE, LEBOP_HOME } from "./paths.ts";
 import { ensureLebopHomeForWrite } from "./stateSafety.ts";
+import { getConfigFilePath, getLebopHome } from "./paths.ts";
 
 const CONFIG_WRITE_LOCK_TIMEOUT_MS = 30_000;
 const CONFIG_WRITE_LOCK_POLL_MS = 25;
@@ -31,7 +31,7 @@ async function sleep(ms: number): Promise<void> {
 }
 
 async function withConfigWriteLock<T>(fn: () => Promise<T>): Promise<T> {
-  const lockDir = join(LEBOP_HOME, ".config.yaml.lebop-write.lock");
+  const lockDir = join(getLebopHome(), ".config.yaml.lebop-write.lock");
   const started = Date.now();
   while (true) {
     try {
@@ -71,11 +71,13 @@ export async function setWorkspaceDefaultTeam(
 ): Promise<void> {
   // Ensure ~/.lebop/ exists with mode 0700 (matches auth.ts).
   ensureLebopHomeForWrite();
-  if (!existsSync(LEBOP_HOME)) {
-    mkdirSync(LEBOP_HOME, { recursive: true, mode: 0o700 });
+  const lebopHome = getLebopHome();
+  const configFile = getConfigFilePath();
+  if (!existsSync(lebopHome)) {
+    mkdirSync(lebopHome, { recursive: true, mode: 0o700 });
   }
-  chmodSync(LEBOP_HOME, 0o700);
-  const dir = dirname(CONFIG_FILE);
+  chmodSync(lebopHome, 0o700);
+  const dir = dirname(configFile);
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
 
   await withConfigWriteLock(async () => {
@@ -83,8 +85,8 @@ export async function setWorkspaceDefaultTeam(
     // the round-trip. If the file is absent we synthesize an empty Document;
     // `setIn` auto-builds the missing map structure.
     let doc: Document;
-    if (existsSync(CONFIG_FILE)) {
-      const raw = await Bun.file(CONFIG_FILE).text();
+    if (existsSync(configFile)) {
+      const raw = await Bun.file(configFile).text();
       doc = parseDocument(raw);
       // parseDocument doesn't throw on malformed YAML — it collects parse errors
       // on `doc.errors`. doc.toString() WOULD throw `Document with errors cannot
@@ -102,11 +104,11 @@ export async function setWorkspaceDefaultTeam(
     }
     doc.setIn(["workspace_team_defaults", workspaceSlug], teamKey);
 
-    await writeAtomic(CONFIG_FILE, doc.toString());
+    await writeAtomic(configFile, doc.toString());
     // 0600 — config carries no secrets today but might in future (e.g.
     // additional per-workspace tokens). Defense in depth.
     try {
-      chmodSync(CONFIG_FILE, 0o600);
+      chmodSync(configFile, 0o600);
     } catch {
       // chmod can fail on exotic filesystems (e.g. Windows mounts under WSL).
       // The atomic write already landed; just skip the perms tighten.

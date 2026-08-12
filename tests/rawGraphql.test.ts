@@ -27,7 +27,7 @@ describe("classifyRawGraphQLOperation", () => {
   it("detects operation definitions after leading fragments", () => {
     expect(
       classifyRawGraphQLOperation(
-        'fragment IssueFields on Issue { id title }\nquery GetIssue { issue(id: "NOX-1") { ...IssueFields } }',
+        'fragment IssueFields on Issue { id title }\nquery GetIssue { issue(id: "TEAM-1") { ...IssueFields } }',
       ),
     ).toBe("query");
     expect(

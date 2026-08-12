@@ -1,19 +1,26 @@
 import chalk from "chalk";
 import type { Command } from "commander";
 import { findGitRoot, hashRepoRoot } from "../lib/config.ts";
-import { envelope } from "../lib/envelope.ts";
+import { wantsMachineOutput } from "../lib/encode.ts";
 import type { LifecycleResult } from "../lib/issues.ts";
+import { archiveNext } from "../lib/nextStubs.ts";
+import { writeMachineEnvelope } from "../lib/output.ts";
 import { buildIssueUnarchiveInputFromCli, executeIssueUnarchive } from "../surface/issues.ts";
 
 interface UnarchiveOpts {
   json?: boolean;
+  format?: string;
+  pretty?: boolean;
 }
 
 export function registerUnarchive(program: Command): void {
   program
     .command("unarchive <ids...>")
     .description("unarchive one or more issues (reverse of `archive`)")
-    .option("--json", "emit structured results")
+    .option("--json", "machine output (default; TOON)")
+    .option("--format <fmt>", "toon | json | pretty")
+    .option("--pretty", "pretty-printed JSON")
+    .option("--human", "maintainer/dev chalk tables (opt-in; not agent path; bodies uncapped)")
     .action(async (ids: string[], opts: UnarchiveOpts) => {
       // Wave-3 parity: delegate to the lib's unarchiveIssues so the CLI and
       // MCP emit the same per-row status enum (`"ok"` instead of CLI-only
@@ -23,8 +30,15 @@ export function registerUnarchive(program: Command): void {
         CLI_ISSUE_CACHE_DEPS,
       );
 
-      if (opts.json) {
-        process.stdout.write(`${JSON.stringify(envelope({ results, cache }), null, 2)}\n`);
+      if (wantsMachineOutput(opts)) {
+        writeMachineEnvelope(
+          { results, cache, next: archiveNext("unarchive") } as Record<string, unknown>,
+          {
+            json: true,
+            format: opts.format,
+            pretty: opts.pretty,
+          },
+        );
       } else {
         for (const r of results) {
           process.stdout.write(`${renderHumanLine(r)}\n`);

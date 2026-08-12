@@ -917,6 +917,94 @@ export async function createInitiativeUpdate(
   };
 }
 
+const UPDATE_INITIATIVE_UPDATE_MUTATION = /* GraphQL */ `
+  mutation UpdateInitiativeUpdate($id: String!, $input: InitiativeUpdateUpdateInput!) {
+    initiativeUpdateUpdate(id: $id, input: $input) {
+      success
+      initiativeUpdate {
+        id body health createdAt
+        user { id name email }
+      }
+    }
+  }
+`;
+
+export async function updateInitiativeUpdateEntry(
+  id: string,
+  input: { body?: string; health?: InitiativeHealth },
+): Promise<ListedInitiativeUpdate> {
+  if (input.body !== undefined) assertInitiativeUpdateBody(input.body);
+  const payload: Record<string, unknown> = {};
+  if (input.body !== undefined) payload.body = input.body;
+  if (input.health !== undefined) payload.health = input.health;
+  const response = (await withClient((c) =>
+    c.client.rawRequest(UPDATE_INITIATIVE_UPDATE_MUTATION, { id, input: payload }),
+  )) as {
+    data: {
+      initiativeUpdateUpdate: {
+        success: boolean;
+        initiativeUpdate: InitiativeUpdateNode;
+      };
+    };
+  };
+  const u = requireMutationEntity<InitiativeUpdateNode>(
+    "initiativeUpdateUpdate",
+    response.data.initiativeUpdateUpdate as { success?: boolean } & Record<string, unknown>,
+    "initiativeUpdate",
+  );
+  return {
+    id: u.id,
+    body: u.body,
+    health: u.health,
+    created_at: u.createdAt,
+    user: u.user,
+  };
+}
+
+// Linear exposes archive (soft-delete), not initiativeUpdateDelete.
+const DELETE_INITIATIVE_UPDATE_MUTATION = /* GraphQL */ `
+  mutation ArchiveInitiativeUpdate($id: String!) {
+    initiativeUpdateArchive(id: $id) { success }
+  }
+`;
+
+/**
+ * Soft-delete an initiative status update (Linear `initiativeUpdateArchive`).
+ * Throws {@link NotFoundError} when already absent so surface
+ * `tryIdempotentDelete` can emit `{status: "already-absent"}`.
+ */
+export async function deleteInitiativeUpdateEntry(id: string): Promise<boolean> {
+  const PREFLIGHT = /* GraphQL */ `
+    query LebopInitiativeUpdatePreflight($id: String!) {
+      initiativeUpdate(id: $id) {
+        id
+        archivedAt
+      }
+    }
+  `;
+  let row: { id: string; archivedAt: string | null } | null;
+  try {
+    const pre = (await withClient((c) => c.client.rawRequest(PREFLIGHT, { id }))) as {
+      data: { initiativeUpdate: { id: string; archivedAt: string | null } | null };
+    };
+    row = pre.data.initiativeUpdate;
+  } catch (err) {
+    throw mapSdkError(err);
+  }
+  if (!row || row.archivedAt !== null) {
+    throw new NotFoundError(
+      `initiative update not found: ${id}`,
+      "the update may have already been deleted",
+    );
+  }
+  const client = await linear();
+  const response = (await client.client.rawRequest(DELETE_INITIATIVE_UPDATE_MUTATION, { id })) as {
+    data: { initiativeUpdateArchive: { success: boolean } };
+  };
+  requireMutationSuccess("initiativeUpdateArchive", response.data.initiativeUpdateArchive);
+  return true;
+}
+
 /**
  * Resolve an initiative name or UUID to a UUID. Unlike projects, initiative
  * filtering by name uses `name: { eq }`.

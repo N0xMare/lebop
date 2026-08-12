@@ -1,18 +1,27 @@
 import type { Command } from "commander";
-import { envelope } from "../lib/envelope.ts";
+import { wantsMachineOutput } from "../lib/encode.ts";
+import { addMachineOutputOptions, writeMachineEnvelope } from "../lib/output.ts";
 import { buildTeamListInputFromCli, executeTeamList, teamListPayload } from "../surface/teams.ts";
 
 export function registerTeams(program: Command): void {
-  program
-    .command("teams")
-    .description("list teams in the workspace")
-    .option("--json", "emit structured team records")
-    .action(async (opts: { json?: boolean }) => {
+  const cmd = program.command("teams").description("list teams in the workspace");
+  addMachineOutputOptions(cmd);
+  cmd.action(async (opts: { json?: boolean; format?: string; pretty?: boolean }) => {
       const result = await executeTeamList(buildTeamListInputFromCli());
       const records = result.teams;
 
-      if (opts.json) {
-        process.stdout.write(`${JSON.stringify(envelope(teamListPayload(result)), null, 2)}\n`);
+      if (wantsMachineOutput(opts)) {
+        writeMachineEnvelope(
+          {
+            ...teamListPayload(result),
+            next: ["team members", "team view <key>", "list --team <key>"],
+          } as Record<string, unknown>,
+          {
+            json: true,
+            format: opts.format,
+            pretty: opts.pretty,
+          },
+        );
         return;
       }
 

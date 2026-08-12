@@ -2,7 +2,7 @@ import { lstat, mkdir, readdir, readFile, rm } from "node:fs/promises";
 import { basename, dirname, join, relative, resolve as resolvePath, sep } from "node:path";
 import { writeAtomic } from "./cache.ts";
 import { ValidationError } from "./errors.ts";
-import { CONTEXT_ROOT } from "./paths.ts";
+import { resolveWorkspaceSlugForState, workspaceContextRoot } from "./paths.ts";
 import { safeSegment } from "./workspacePaths.ts";
 
 export interface ContextFile {
@@ -28,11 +28,13 @@ export async function writeWorkspaceContext(input: {
   files: ContextFile[];
   recommendedReads?: string[];
   to?: string;
+  /** Linear workspace slug; defaults to request/env/`_unset`. */
+  workspaceSlug?: string | null;
 }): Promise<WrittenContext> {
   const root = input.to
     ? resolvePath(input.to)
     : join(
-        CONTEXT_ROOT,
+        workspaceContextRoot(input.workspaceSlug ?? resolveWorkspaceSlugForState()),
         input.repoHash,
         `${new Date().toISOString().replace(/[:.]/g, "-")}-${safeSegment(input.kind)}-${safeSegment(
           input.target,

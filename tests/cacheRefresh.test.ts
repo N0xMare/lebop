@@ -80,7 +80,7 @@ describe("cache refresh guarded writeback", () => {
     const initialCache = buildIssueMetadata(initial);
     await writeIssue("_global", initialCache.metadata, initialCache.description);
 
-    const result = await refreshCachedIssueByIdentifier("NOX-1", {
+    const result = await refreshCachedIssueByIdentifier("TEAM-1", {
       repoHash: "_global",
       repoRoot: null,
       freshIssue: fresh,
@@ -93,7 +93,7 @@ describe("cache refresh guarded writeback", () => {
       dirty: { fields: ["description"] },
       error: { code: "cache_dirty" },
     });
-    await expect(readIssue("_global", "NOX-1")).resolves.toMatchObject({
+    await expect(readIssue("_global", "TEAM-1")).resolves.toMatchObject({
       description: "local issue draft",
     });
   });
@@ -145,12 +145,12 @@ describe("cache refresh guarded writeback", () => {
 function fetchedIssue(overrides: Partial<FetchedIssue> = {}): FetchedIssue {
   return {
     id: "issue-uuid-1",
-    identifier: "NOX-1",
+    identifier: "TEAM-1",
     title: "Issue title",
     description: "server body",
     priority: 0,
     estimate: null,
-    url: "https://linear.app/noxor/issue/NOX-1/issue-title",
+    url: "https://linear.app/example/issue/TEAM-1/issue-title",
     updatedAt: "2026-06-01T00:00:00Z",
     state: { id: "state-1", name: "Backlog", type: "backlog" },
     labels: { nodes: [] },
@@ -173,7 +173,7 @@ function fetchedProject(overrides: Partial<FetchedProject> = {}): FetchedProject
     state: "started",
     startDate: null,
     targetDate: null,
-    url: "https://linear.app/noxor/project/project-title",
+    url: "https://linear.app/example/project/project-title",
     updatedAt: "2026-06-01T00:00:00Z",
     issues: { nodes: [] },
     ...overrides,

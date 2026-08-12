@@ -1,7 +1,8 @@
 /**
- * Agent sessions — Linear's first-class concept for AI/agent activity on
- * issues. Read-only via lebop; sessions are created/managed by the agents
- * themselves.
+ * Agent sessions — **read-only** research of Linear agent sessions created by
+ * other systems (Cursor, Linear Agent, third-party apps). lebop is a Linear
+ * control plane for external harnesses; it does not host app-actor agents or
+ * emit Agent Activities.
  *
  * Linear removed the `AgentSessionFilter` input type and the `filter` arg on
  * `Query.agentSessions` in 2026, and issue-scoped lookups are not exposed as
@@ -14,6 +15,14 @@ import { type ConnectionPage, resolveSafetyCap } from "./paginate.ts";
 import { withRetry } from "./retry.ts";
 import { linear, withClient } from "./sdk.ts";
 
+export interface ListedAgentActivity {
+  id: string;
+  created_at: string;
+  updated_at?: string | null;
+  content: Record<string, unknown>;
+  ephemeral?: boolean | null;
+}
+
 export interface ListedAgentSession {
   id: string;
   status: string | null;
@@ -23,6 +32,10 @@ export interface ListedAgentSession {
   ended_at: string | null;
   issue: { id: string; identifier: string; title: string } | null;
   creator: { id: string; name: string; email: string } | null;
+  /** Present when fetched with includeActivities. */
+  activities?: ListedAgentActivity[];
+  plan?: unknown;
+  external_urls?: { label?: string; url: string }[] | null;
 }
 
 const LIST_ALL_AGENT_SESSIONS_QUERY = /* GraphQL */ `
@@ -255,19 +268,82 @@ const GET_AGENT_SESSION_QUERY = /* GraphQL */ `
       endedAt
       issue { id identifier title }
       creator { id name email }
+      plan
+      externalLinks
+      activities(first: 50) {
+        nodes {
+          id
+          createdAt
+          updatedAt
+          ephemeral
+          content
+        }
+      }
     }
   }
 `;
 
-export async function getAgentSession(id: string): Promise<ListedAgentSession | null> {
+interface AgentSessionDetailNode extends AgentSessionNode {
+  plan?: unknown;
+  externalLinks?: unknown;
+  externalUrls?: { label?: string; url: string }[] | null;
+  activities?: {
+    nodes: {
+      id: string;
+      createdAt: string;
+      updatedAt?: string | null;
+      ephemeral?: boolean | null;
+      content: Record<string, unknown>;
+    }[];
+  };
+}
+
+export async function getAgentSession(
+  id: string,
+  opts?: { includeActivities?: boolean },
+): Promise<ListedAgentSession | null> {
   // `tryMapToNull` preserves the documented "missing → null" contract while
   // propagating other LebopError subtypes unchanged.
-  type Resp = { data: { agentSession: AgentSessionNode | null } };
+  type Resp = { data: { agentSession: AgentSessionDetailNode | null } };
   const response = await tryMapToNull<Resp>(
     () => withClient((c) => c.client.rawRequest(GET_AGENT_SESSION_QUERY, { id })) as Promise<Resp>,
   );
-  if (!response) return null;
-  return response.data.agentSession ? shape(response.data.agentSession) : null;
+  if (!response?.data.agentSession) return null;
+  const node = response.data.agentSession;
+  const base = shape(node);
+  const activities =
+    opts?.includeActivities === false
+      ? undefined
+      : (node.activities?.nodes ?? []).map((a) => ({
+          id: a.id,
+          created_at: a.createdAt,
+          updated_at: a.updatedAt ?? null,
+          content: a.content ?? {},
+          ephemeral: a.ephemeral ?? null,
+        }));
+  return {
+    ...base,
+    plan: node.plan ?? undefined,
+    external_urls: normalizeExternalLinks(node.externalLinks ?? node.externalUrls),
+    ...(activities ? { activities } : {}),
+  };
+}
+
+function normalizeExternalLinks(value: unknown): { label?: string; url: string }[] | null {
+  if (!Array.isArray(value)) return value == null ? null : null;
+  const out: { label?: string; url: string }[] = [];
+  for (const item of value) {
+    if (typeof item === "string" && item) out.push({ url: item });
+    else if (
+      item &&
+      typeof item === "object" &&
+      typeof (item as { url?: string }).url === "string"
+    ) {
+      const rec = item as { url: string; label?: string };
+      out.push({ url: rec.url, ...(rec.label ? { label: rec.label } : {}) });
+    }
+  }
+  return out;
 }
 
 function agentSessionMatches(session: ListedAgentSession, query: string): boolean {

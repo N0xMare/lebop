@@ -4,7 +4,7 @@
  * `lebop project-update ...`, and the MCP equivalents.
  */
 
-import { NotFoundError, tryMapToNull, ValidationError } from "./errors.ts";
+import { mapSdkError, NotFoundError, tryMapToNull, ValidationError } from "./errors.ts";
 import { assertIconNotEmoji } from "./icons.ts";
 import { requireMutationEntity, requireMutationSuccess } from "./mutationResult.ts";
 import {
@@ -588,4 +588,106 @@ export async function createProjectUpdate(
     created_at: u.createdAt,
     user: u.user,
   };
+}
+
+const UPDATE_PROJECT_UPDATE_MUTATION = /* GraphQL */ `
+  mutation UpdateProjectUpdate($id: String!, $input: ProjectUpdateUpdateInput!) {
+    projectUpdateUpdate(id: $id, input: $input) {
+      success
+      projectUpdate {
+        id body health createdAt
+        user { id name email }
+      }
+    }
+  }
+`;
+
+/** Edit an existing project update (body/health). */
+export async function updateProjectUpdateEntry(
+  id: string,
+  input: { body?: string; health?: ProjectHealth },
+): Promise<ListedProjectUpdate> {
+  if (input.body !== undefined) assertProjectUpdateBody(input.body);
+  const payload: Record<string, unknown> = {};
+  if (input.body !== undefined) payload.body = input.body;
+  if (input.health !== undefined) payload.health = input.health;
+  const response = (await withClient((c) =>
+    c.client.rawRequest(UPDATE_PROJECT_UPDATE_MUTATION, { id, input: payload }),
+  )) as {
+    data: {
+      projectUpdateUpdate: {
+        success: boolean;
+        projectUpdate: {
+          id: string;
+          body: string;
+          health: ProjectHealth | null;
+          createdAt: string;
+          user: { id: string; name: string; email: string } | null;
+        };
+      };
+    };
+  };
+  const u = requireMutationEntity(
+    "projectUpdateUpdate",
+    response.data.projectUpdateUpdate as { success?: boolean } & Record<string, unknown>,
+    "projectUpdate",
+  ) as {
+    id: string;
+    body: string;
+    health: ProjectHealth | null;
+    createdAt: string;
+    user: { id: string; name: string; email: string } | null;
+  };
+  return {
+    id: u.id,
+    body: u.body,
+    health: u.health,
+    created_at: u.createdAt,
+    user: u.user,
+  };
+}
+
+// Linear soft-deletes status updates via archive (no projectUpdateDelete on schema).
+const DELETE_PROJECT_UPDATE_MUTATION = /* GraphQL */ `
+  mutation ArchiveProjectUpdate($id: String!) {
+    projectUpdateArchive(id: $id) { success }
+  }
+`;
+
+/**
+ * Soft-delete a project status update (Linear `projectUpdateArchive`).
+ * Throws {@link NotFoundError} when the update is already absent so
+ * surface `tryIdempotentDelete` can emit `{status: "already-absent"}`.
+ */
+export async function deleteProjectUpdateEntry(id: string): Promise<boolean> {
+  // Pre-flight: archive is soft and may return success on re-runs.
+  const PREFLIGHT = /* GraphQL */ `
+    query LebopProjectUpdatePreflight($id: String!) {
+      projectUpdate(id: $id) {
+        id
+        archivedAt
+      }
+    }
+  `;
+  let row: { id: string; archivedAt: string | null } | null;
+  try {
+    const pre = (await withClient((c) => c.client.rawRequest(PREFLIGHT, { id }))) as {
+      data: { projectUpdate: { id: string; archivedAt: string | null } | null };
+    };
+    row = pre.data.projectUpdate;
+  } catch (err) {
+    throw mapSdkError(err);
+  }
+  if (!row || row.archivedAt !== null) {
+    throw new NotFoundError(
+      `project update not found: ${id}`,
+      "the update may have already been deleted",
+    );
+  }
+  const client = await linear();
+  const response = (await client.client.rawRequest(DELETE_PROJECT_UPDATE_MUTATION, { id })) as {
+    data: { projectUpdateArchive: { success: boolean } };
+  };
+  requireMutationSuccess("projectUpdateArchive", response.data.projectUpdateArchive);
+  return true;
 }

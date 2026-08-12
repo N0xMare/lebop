@@ -4,7 +4,7 @@ import { mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { LinearClient } from "@linear/sdk";
 import { AuthError, LebopError, mapSdkError, ValidationError } from "./errors.ts";
-import { AUTH_FILE, LEBOP_HOME } from "./paths.ts";
+import { getAuthFilePath, getLebopHome } from "./paths.ts";
 import { activeWorkspaceOverride } from "./requestContext.ts";
 import { withRetry } from "./retry.ts";
 import { authStateSafetyError, ensureLebopHomeForWrite } from "./stateSafety.ts";
@@ -18,7 +18,8 @@ const AUTH_SCHEMA_VERSION = 2 as const;
  * first read and writes the migrated form back to disk.
  */
 export async function loadAuth(): Promise<AuthFile | null> {
-  const file = Bun.file(AUTH_FILE);
+  const authFile = getAuthFilePath();
+  const file = Bun.file(authFile);
   if (!(await file.exists())) return null;
   secureExistingAuthForRead();
   let data: unknown;
@@ -26,7 +27,7 @@ export async function loadAuth(): Promise<AuthFile | null> {
     data = await file.json();
   } catch (err) {
     throw new AuthError(
-      `failed to read ${AUTH_FILE}: ${(err as Error).message}`,
+      `failed to read ${authFile}: ${(err as Error).message}`,
       "the file may be corrupted; run `lebop auth login` to recreate",
     );
   }
@@ -39,38 +40,59 @@ export async function loadAuth(): Promise<AuthFile | null> {
     await writeAuth(migrated);
     return migrated;
   }
-  if (isAuthFileV2(data)) return data;
+  if (isAuthFileV2(data)) {
+    // Drop deprecated Mode B `app` blocks if present (no longer supported).
+    if (stripDeprecatedAppAuth(data)) {
+      // Persist strip so orphaned app tokens do not remain on disk.
+      await writeAuth(data);
+    }
+    return data;
+  }
 
   throw new AuthError(
-    `auth file at ${AUTH_FILE} has unexpected shape`,
+    `auth file at ${authFile} has unexpected shape`,
     "run `lebop auth login` to recreate",
   );
 }
 
+/** Remove orphaned OAuth app-actor credentials (Mode B removed). Returns true if anything stripped. */
+function stripDeprecatedAppAuth(auth: AuthFile): boolean {
+  let stripped = false;
+  for (const ws of Object.values(auth.workspaces)) {
+    if (ws && typeof ws === "object" && "app" in ws) {
+      delete (ws as { app?: unknown }).app;
+      stripped = true;
+    }
+  }
+  return stripped;
+}
+
 function secureExistingAuthForRead(): void {
+  const lebopHome = getLebopHome();
+  const authFile = getAuthFilePath();
   try {
-    const homeStat = lstatSync(LEBOP_HOME);
+    const homeStat = lstatSync(lebopHome);
     if (homeStat.isSymbolicLink() || !homeStat.isDirectory()) {
       throw new AuthError(
-        `refusing to read auth from unsafe directory: ${LEBOP_HOME}`,
+        `refusing to read auth from unsafe directory: ${lebopHome}`,
         "replace it with a normal directory owned by the current user",
       );
     }
-    chmodSync(LEBOP_HOME, 0o700);
+    chmodSync(lebopHome, 0o700);
 
-    const authStat = lstatSync(AUTH_FILE);
+    const authStat = lstatSync(authFile);
     if (authStat.isSymbolicLink() || !authStat.isFile()) {
       throw new AuthError(
-        `refusing to read auth from unsafe file: ${AUTH_FILE}`,
+        `refusing to read auth from unsafe file: ${authFile}`,
         "replace it with a normal file, then run `lebop auth login` if needed",
       );
     }
-    chmodSync(AUTH_FILE, 0o600);
+    chmodSync(authFile, 0o600);
   } catch (err) {
     if (err instanceof AuthError) throw err;
     throw new AuthError(
       `failed to secure auth file permissions: ${(err as Error).message}`,
-      `set ${LEBOP_HOME} to mode 0700 and ${AUTH_FILE} to mode 0600, then retry`,
+      `set ${lebopHome} to mode 0700 and ${authFile} to mode 0600, then retry`,
     );
   }
 }
@@ -127,6 +149,7 @@ export async function loadAuthForWorkspace(slug?: string): Promise<WorkspaceAuth
  * if no default is currently set.
  */
 export async function addWorkspace(token: string): Promise<WorkspaceAuth> {
+  assertPersonalApiKey(token);
   const probe = await probeToken(token);
   const ws: WorkspaceAuth = {
     slug: probe.urlKey,
@@ -159,16 +182,17 @@ export async function removeWorkspace(slug?: string): Promise<boolean> {
   const auth = await loadAuth();
   if (!auth) return false;
   const slugs = Object.keys(auth.workspaces);
+  const authFile = getAuthFilePath();
 
   if (!slug) {
     if (slugs.length === 0) {
       // No workspaces but file exists — nuke the file.
-      if (existsSync(AUTH_FILE)) unlinkSync(AUTH_FILE);
-      return !existsSync(AUTH_FILE);
+      if (existsSync(authFile)) unlinkSync(authFile);
+      return !existsSync(authFile);
     }
     if (slugs.length === 1) {
       // Legacy single-workspace logout: clear the file entirely.
-      unlinkSync(AUTH_FILE);
+      unlinkSync(authFile);
       return true;
     }
     throw new AuthError(
@@ -184,7 +208,7 @@ export async function removeWorkspace(slug?: string): Promise<boolean> {
     auth.default = remaining[0];
   }
   if (Object.keys(auth.workspaces).length === 0) {
-    unlinkSync(AUTH_FILE);
+    unlinkSync(authFile);
   } else {
     await writeAuth(auth);
   }
@@ -209,11 +233,26 @@ export async function setDefaultWorkspace(slug: string): Promise<void> {
   await writeAuth(auth);
 }
 
+/**
+ * Mode A: personal API keys only (`lin_api_…`). Reject other token shapes at login.
+ */
+export function assertPersonalApiKey(token: string): void {
+  const t = token.trim();
+  if (!t.startsWith("lin_api_")) {
+    throw new AuthError(
+      "Mode A requires a Linear personal API key (lin_api_…)",
+      "create a personal API key under Linear Settings → API and pass it to `lebop auth login`",
+    );
+  }
+}
+
 export function linearClientFromToken(token: string): LinearClient {
   // PAKs start with `lin_api_` and go in Authorization header as-is.
   // OAuth bearer tokens need the `Bearer ` prefix, which @linear/sdk adds for `accessToken`.
   // `LEBOP_API_URL` env var overrides the default Linear endpoint — used by
   // integration tests pointing at a local mock server.
+  // Login is PAK-only (assertPersonalApiKey); runtime still routes by prefix for
+  // any legacy stored token until re-login.
   const apiUrl = resolveLinearApiUrlOverride();
   return token.startsWith("lin_api_")
     ? new LinearClient(apiUrl ? { apiKey: token, apiUrl } : { apiKey: token })
@@ -375,28 +414,28 @@ async function writeAuth(auth: AuthFile): Promise<void> {
   // file in it. mkdir's mode is ignored for an existing directory, so chmod
   // first and fail closed if the directory cannot be secured.
   ensureLebopHomeForWrite({ errorFactory: authStateSafetyError });
-  await mkdir(dirname(AUTH_FILE), { recursive: true, mode: 0o700 });
+  const lebopHome = getLebopHome();
+  const authFile = getAuthFilePath();
+  await mkdir(dirname(authFile), { recursive: true, mode: 0o700 });
   try {
-    chmodSync(LEBOP_HOME, 0o700);
+    chmodSync(lebopHome, 0o700);
   } catch (err) {
     throw new AuthError(
       `failed to secure auth directory permissions: ${(err as Error).message}`,
-      `set ${LEBOP_HOME} to mode 0700, then retry`,
+      `set ${lebopHome} to mode 0700, then retry`,
     );
   }
 
-  const tmp = `${AUTH_FILE}.tmp-${process.pid}-${Date.now()}-${Math.random()
-    .toString(16)
-    .slice(2)}`;
+  const tmp = `${authFile}.tmp-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
   try {
     await writeFile(tmp, `${JSON.stringify(auth, null, 2)}\n`, { flag: "wx", mode: 0o600 });
-    await rename(tmp, AUTH_FILE);
-    chmodSync(AUTH_FILE, 0o600);
+    await rename(tmp, authFile);
+    chmodSync(authFile, 0o600);
   } catch (err) {
     await rm(tmp, { force: true }).catch(() => {});
     throw new AuthError(
       `failed to write auth file securely: ${(err as Error).message}`,
-      `set ${LEBOP_HOME} to mode 0700 and ${AUTH_FILE} to mode 0600, then retry`,
+      `set ${lebopHome} to mode 0700 and ${authFile} to mode 0600, then retry`,
     );
   }
 }
@@ -442,6 +481,7 @@ function isViewerRecord(value: unknown): value is Viewer {
 
 function isWorkspaceAuthRecord(value: unknown): value is WorkspaceAuth {
   if (!isPlainRecord(value)) return false;
+  // Tolerate deprecated `app` key on disk; stripped in loadAuth.
   return (
     typeof value.slug === "string" &&
     typeof value.name === "string" &&

@@ -218,11 +218,11 @@ describe("deriveTeamFromIdentifiers", () => {
   });
 
   it("returns the prefix when all share one team", () => {
-    expect(deriveTeamFromIdentifiers(["NOX-1", "NOX-22", "NOX-300"])).toBe("NOX");
+    expect(deriveTeamFromIdentifiers(["TEAM-1", "TEAM-22", "TEAM-300"])).toBe("TEAM");
   });
 
   it("is case-insensitive on input but returns upper-case", () => {
-    expect(deriveTeamFromIdentifiers(["nox-1", "Nox-2"])).toBe("NOX");
+    expect(deriveTeamFromIdentifiers(["team-1", "team-2"])).toBe("TEAM");
   });
 
   it("accepts digit-bearing team keys", () => {
@@ -235,16 +235,16 @@ describe("deriveTeamFromIdentifiers", () => {
       teamKey: "A1",
       number: 42,
     });
-    expect(normalizeIssueIdentifier("nox-34")).toBe("NOX-34");
+    expect(normalizeIssueIdentifier("team-34")).toBe("TEAM-34");
   });
 
   it("throws ValidationError on mixed teams", () => {
-    expect(() => deriveTeamFromIdentifiers(["NOX-1", "UE-2"])).toThrow(ValidationError);
-    expect(() => deriveTeamFromIdentifiers(["NOX-1", "UE-2"])).toThrow(/span multiple teams/);
+    expect(() => deriveTeamFromIdentifiers(["TEAM-1", "UE-2"])).toThrow(ValidationError);
+    expect(() => deriveTeamFromIdentifiers(["TEAM-1", "UE-2"])).toThrow(/span multiple teams/);
   });
 
   it("throws ValidationError on malformed identifier", () => {
-    expect(() => deriveTeamFromIdentifiers(["NOX1"])).toThrow(ValidationError);
+    expect(() => deriveTeamFromIdentifiers(["TEAM1"])).toThrow(ValidationError);
     expect(() => deriveTeamFromIdentifiers([""])).toThrow(ValidationError);
     expect(() => deriveTeamFromIdentifiers(["UE_X1-7"])).toThrow(ValidationError);
   });
@@ -256,7 +256,7 @@ describe("resolveProjectIdByName", () => {
       data: {
         projects: {
           nodes: [
-            { id: "project-nox", name: "Shared Name", teams: { nodes: [{ key: "NOX" }] } },
+            { id: "project-team", name: "Shared Name", teams: { nodes: [{ key: "TEAM" }] } },
             { id: "project-eng", name: "Shared Name", teams: { nodes: [{ key: "ENG" }] } },
           ],
         },
@@ -271,11 +271,11 @@ describe("resolveProjectIdByName", () => {
   it("honors explicit team scope and reports a team-scoped miss", async () => {
     sdkMock.rawResponses.push({ data: { projects: { nodes: [] } } });
 
-    await expect(resolveProjectIdByName("Shared Name", { teamKey: "NOX" })).rejects.toThrow(
-      /project not found: Shared Name \(team NOX\)/,
+    await expect(resolveProjectIdByName("Shared Name", { teamKey: "TEAM" })).rejects.toThrow(
+      /project not found: Shared Name \(team TEAM\)/,
     );
     expect(sdkMock.calls[0]?.query).toContain("accessibleTeams");
-    expect(sdkMock.calls[0]?.variables).toEqual({ name: "Shared Name", teamKey: "NOX" });
+    expect(sdkMock.calls[0]?.variables).toEqual({ name: "Shared Name", teamKey: "TEAM" });
   });
 });
 

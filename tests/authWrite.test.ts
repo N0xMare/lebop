@@ -17,7 +17,7 @@ let viewerImpl: () => Promise<unknown> = async () => ({
   id: "u1",
   email: "viewer@example.com",
   name: "Viewer",
-  organization: Promise.resolve({ urlKey: "noxor", name: "Noxor" }),
+  organization: Promise.resolve({ urlKey: "acme", name: "Example" }),
 });
 
 vi.mock("@linear/sdk", () => ({
@@ -60,7 +60,7 @@ describe("auth secure writes", () => {
       id: "u1",
       email: "viewer@example.com",
       name: "Viewer",
-      organization: Promise.resolve({ urlKey: "noxor", name: "Noxor" }),
+      organization: Promise.resolve({ urlKey: "acme", name: "Example" }),
     });
   });
 
@@ -116,16 +116,16 @@ describe("auth secure writes", () => {
       JSON.stringify({
         schema_version: 2,
         workspaces: {
-          noxor: {
-            slug: "noxor",
+          acme: {
+            slug: "acme",
             token: "lin_api_existing",
-            url_key: "noxor",
-            name: "Noxor",
+            url_key: "acme",
+            name: "Example",
             viewer: { id: "u1", email: "viewer@example.com", name: "Viewer" },
             created_at: "2026-06-01T00:00:00.000Z",
           },
         },
-        default: "noxor",
+        default: "acme",
       }),
     );
     chmodSync(home, 0o755);
@@ -133,7 +133,7 @@ describe("auth secure writes", () => {
     vi.resetModules();
     const { loadAuth } = await import("../src/lib/auth.ts");
 
-    await expect(loadAuth()).resolves.toMatchObject({ default: "noxor" });
+    await expect(loadAuth()).resolves.toMatchObject({ default: "acme" });
     expect(mode(home)).toBe(0o700);
     expect(mode(authPath)).toBe(0o600);
   });

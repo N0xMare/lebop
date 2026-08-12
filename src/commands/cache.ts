@@ -1,7 +1,8 @@
 import chalk from "chalk";
 import type { Command } from "commander";
 import type { GcCandidate, GcResult } from "../lib/cache.ts";
-import { envelope } from "../lib/envelope.ts";
+import { wantsMachineOutput } from "../lib/encode.ts";
+import { writeMachineEnvelope } from "../lib/output.ts";
 import { buildCacheGcInputFromCli, cacheGcPayload, executeCacheGc } from "../surface/cache.ts";
 import { statusAction } from "./status.ts";
 
@@ -77,7 +78,10 @@ export function registerCache(program: Command): void {
     )
     .option("--team <key>", "override the resolved team")
     .option("--no-remote", "skip the remote-staleness check (faster, no Linear API calls)")
-    .option("--json", "emit structured status")
+    .option("--json", "machine output (default; TOON)")
+    .option("--format <fmt>", "toon | json | pretty")
+    .option("--pretty", "pretty-printed JSON")
+    .option("--human", "maintainer/dev chalk tables (opt-in; not agent path; bodies uncapped)")
     .action(statusAction);
 
   cache
@@ -98,7 +102,10 @@ export function registerCache(program: Command): void {
       "allow eviction of the current repo's cache (default preserves it)",
     )
     .option("--yes", "confirm deletion when --no-dry-run is set")
-    .option("--json", "emit structured result")
+    .option("--json", "machine output (default; TOON)")
+    .option("--format <fmt>", "toon | json | pretty")
+    .option("--pretty", "pretty-printed JSON")
+    .option("--human", "maintainer/dev chalk tables (opt-in; not agent path; bodies uncapped)")
     .action(
       async (opts: {
         maxAge?: string;
@@ -108,11 +115,17 @@ export function registerCache(program: Command): void {
         preserveCwd?: boolean;
         yes?: boolean;
         json?: boolean;
+        format?: string;
+        pretty?: boolean;
       }) => {
         const executed = await executeCacheGc(buildCacheGcInputFromCli({ opts }));
 
-        if (opts.json) {
-          process.stdout.write(`${JSON.stringify(envelope(cacheGcPayload(executed)), null, 2)}\n`);
+        if (wantsMachineOutput(opts)) {
+          writeMachineEnvelope(cacheGcPayload(executed) as Record<string, unknown>, {
+            json: true,
+            format: opts.format,
+            pretty: opts.pretty,
+          });
           return;
         }
 

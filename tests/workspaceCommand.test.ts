@@ -41,7 +41,7 @@ describe("workspace command adapter", () => {
     const program = new Command();
     registerWorkspace(program);
 
-    await runWithRequestContext({ team: "NOX" }, () =>
+    await runWithRequestContext({ team: "TEAM" }, () =>
       program.parseAsync(["workspace", "fetch", "/projects/project-1", "--json"], { from: "user" }),
     );
 
@@ -59,7 +59,7 @@ describe("workspace command adapter", () => {
     registerWorkspace(program);
 
     await expect(
-      runWithRequestContext({ team: "NOX" }, () =>
+      runWithRequestContext({ team: "TEAM" }, () =>
         program.parseAsync(
           ["workspace", "fetch", "/projects/project-1", "--team", "ENG", "--json"],
           {

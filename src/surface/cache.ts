@@ -145,6 +145,8 @@ export interface CachePushInput {
   repoRoot?: string;
   dryRun?: boolean;
   force?: boolean;
+  /** True when CLI --yes/--confirm or MCP confirm:true was provided. */
+  confirmed?: boolean;
   strict?: boolean;
   requireGitRoot?: boolean;
   deriveTeamFromIdentifiers?: boolean;
@@ -230,6 +232,7 @@ const cachePushCanonicalSchema = z
     repoRoot: repoRootArg,
     dryRun: z.boolean().optional(),
     force: z.boolean().optional(),
+    confirmed: z.boolean().optional(),
     strict: z.boolean().optional(),
     requireGitRoot: z.boolean().optional(),
     deriveTeamFromIdentifiers: z.boolean().optional(),
@@ -360,7 +363,8 @@ export function buildCacheDiffProjectInputFromMcp(
 
 export function buildCachePushInputFromCli(input: CachePushCliInput): CachePushInput {
   const dryRun = input.opts.dryRun === true;
-  if (input.opts.force === true && !dryRun && !isPushConfirmed(input.opts)) {
+  const confirmed = isPushConfirmed(input.opts);
+  if (input.opts.force === true && !dryRun && !confirmed) {
     throw new ValidationError(
       "refusing to push with --force without --yes/--confirm",
       "run with --dry-run to preview, or pass --yes/--confirm after verifying stale-guard bypass is intended",
@@ -372,18 +376,29 @@ export function buildCachePushInputFromCli(input: CachePushCliInput): CachePushI
     team: input.opts.team,
     dryRun,
     force: input.opts.force === true,
+    confirmed: confirmed || undefined,
     strict: input.opts.strict === true,
   });
 }
 
 export function buildCachePushInputFromMcp(input: CachePushMcpInput): CachePushInput {
+  const dryRun = input.dry_run === true;
+  const force = input.force === true;
+  const confirmed = input.confirm === true;
+  if (force && !dryRun && !confirmed) {
+    throw new ValidationError(
+      "refusing to push with force without confirm:true",
+      "pass confirm:true after verifying stale-guard bypass is intended, or dry_run:true to preview",
+    );
+  }
   return parseSurfaceInput("cache.push", cachePushCanonicalSchema, {
     identifiers: input.identifiers,
     projectIds: input.project_ids,
     team: input.team,
     repoRoot: input.repo_root,
-    dryRun: input.dry_run === true,
-    force: input.force === true,
+    dryRun,
+    force,
+    confirmed: confirmed || undefined,
     strict: input.strict === true,
     requireGitRoot: Boolean(input.repo_root),
     deriveTeamFromIdentifiers: true,
@@ -460,6 +475,14 @@ export async function executeCacheDiffProject(
 }
 
 export async function executeCachePush(input: CachePushInput): Promise<CachePushExecutionResult> {
+  const dryRun = input.dryRun === true;
+  const force = input.force === true;
+  if (force && !dryRun && input.confirmed !== true) {
+    throw new ValidationError(
+      "refusing to push with force without confirm",
+      "pass confirm/yes after verifying stale-guard bypass is intended, or dry_run to preview",
+    );
+  }
   const requested = input.identifiers;
   const requestedProjects = input.projectIds;
   const teamOverride =
@@ -472,8 +495,6 @@ export async function executeCachePush(input: CachePushInput): Promise<CachePush
     teamOverride,
     requireGitRoot: input.requireGitRoot === true,
   });
-  const dryRun = input.dryRun === true;
-  const force = input.force === true;
   const strict = input.strict === true;
   const lintCtx = {
     repoConfig: config.repoConfig,
@@ -627,6 +648,7 @@ export const cacheStatusOperation = {
   },
   mcp: {
     tool: "cache_status",
+      profile: "core",
     title: cacheStatusTitle,
     description: cacheStatusDescription,
     annotations: {
@@ -635,7 +657,6 @@ export const cacheStatusOperation = {
       idempotentHint: true,
       openWorldHint: true,
     },
-    inputSchemaKeys: ["repo_root", "team", "check_remote", "workspace"],
   },
   safety: { readOnly: true, destructive: false, idempotent: true, openWorld: true },
   fromCli: buildCacheStatusInputFromCli,
@@ -662,6 +683,7 @@ export const cacheStatusAliasOperation = {
   },
   mcp: {
     tool: "cache_status",
+      profile: "core",
     title: cacheStatusTitle,
     description: cacheStatusDescription,
     annotations: {
@@ -670,7 +692,6 @@ export const cacheStatusAliasOperation = {
       idempotentHint: true,
       openWorldHint: true,
     },
-    inputSchemaKeys: ["repo_root", "team", "check_remote", "workspace"],
   },
   safety: { readOnly: true, destructive: false, idempotent: true, openWorld: true },
   fromCli: buildCacheStatusInputFromCli,
@@ -708,7 +729,6 @@ export const cacheDiffIssueOperation = {
       idempotentHint: true,
       openWorldHint: true,
     },
-    inputSchemaKeys: ["identifier", "repo_root", "team", "workspace"],
   },
   safety: { readOnly: true, destructive: false, idempotent: true, openWorld: true },
   fromCli: buildCacheDiffIssueInputFromCli,
@@ -745,7 +765,6 @@ export const cacheDiffProjectOperation = {
       idempotentHint: true,
       openWorldHint: true,
     },
-    inputSchemaKeys: ["project_id", "repo_root", "team", "workspace"],
   },
   safety: { readOnly: true, destructive: false, idempotent: true, openWorld: true },
   notes:
@@ -786,17 +805,6 @@ export const cachePushOperation = {
       idempotentHint: true,
       openWorldHint: true,
     },
-    inputSchemaKeys: [
-      "identifiers",
-      "project_ids",
-      "repo_root",
-      "team",
-      "dry_run",
-      "force",
-      "confirm",
-      "strict",
-      "workspace",
-    ],
   },
   safety: {
     readOnly: false,
@@ -843,14 +851,6 @@ export const cacheGcOperation = {
       idempotentHint: false,
       openWorldHint: false,
     },
-    inputSchemaKeys: [
-      "max_age_days",
-      "max_size_mb",
-      "hash",
-      "dry_run",
-      "confirm",
-      "preserve_cwd_repo",
-    ],
   },
   safety: {
     readOnly: false,

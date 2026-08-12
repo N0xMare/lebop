@@ -166,6 +166,35 @@ export async function deleteLabel(id: string): Promise<boolean> {
   return true;
 }
 
+const UPDATE_LABEL_MUTATION = /* GraphQL */ `
+  mutation UpdateLabel($id: String!, $input: IssueLabelUpdateInput!) {
+    issueLabelUpdate(id: $id, input: $input) {
+      success
+      issueLabel { id name color description team { id key name } }
+    }
+  }
+`;
+
+export async function updateLabel(
+  id: string,
+  input: { name?: string; color?: string; description?: string | null },
+): Promise<ListedLabel> {
+  const payload: Record<string, unknown> = {};
+  if (input.name !== undefined) payload.name = input.name;
+  if (input.color !== undefined) payload.color = input.color;
+  if (input.description !== undefined) payload.description = input.description;
+  const response = (await withClient((c) =>
+    c.client.rawRequest(UPDATE_LABEL_MUTATION, { id, input: payload }),
+  )) as {
+    data: { issueLabelUpdate: { success: boolean; issueLabel: ListedLabel } };
+  };
+  return requireMutationEntity<ListedLabel>(
+    "issueLabelUpdate",
+    response.data.issueLabelUpdate,
+    "issueLabel",
+  );
+}
+
 /**
  * Resolve a label by name (within an optional team scope) to its UUID.
  * Returns null if no exact-name match. Used by `lebop label delete`.

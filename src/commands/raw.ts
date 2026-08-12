@@ -105,7 +105,7 @@ async function resolveVariables(path: string | undefined): Promise<Record<string
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
     throw new ValidationError(
       "--variables-json must contain a JSON object",
-      'provide a JSON object such as {"id":"NOX-1"}',
+      'provide a JSON object such as {"id":"TEAM-1"}',
     );
   }
   return parsed as Record<string, unknown>;

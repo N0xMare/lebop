@@ -1,6 +1,14 @@
 import chalk from "chalk";
 import type { Command } from "commander";
-import { envelope } from "../lib/envelope.ts";
+import { wantsMachineOutput } from "../lib/encode.ts";
+import {
+  planApplyNext,
+  planDiffNext,
+  planLintNext,
+  planPullNext,
+  planValidateNext,
+} from "../lib/nextStubs.ts";
+import { writeMachineEnvelope } from "../lib/output.ts";
 import type { ApplyResult } from "../lib/planApply.ts";
 import type { PlanDiffResult } from "../lib/planDiff.ts";
 import type { PullResult } from "../lib/planPull.ts";
@@ -29,6 +37,8 @@ import {
 interface CommonOpts {
   team?: string;
   json?: boolean;
+  format?: string;
+  pretty?: boolean;
 }
 
 interface ApplyCmdOpts extends CommonOpts {
@@ -51,6 +61,10 @@ interface PlanLintOpts extends CommonOpts {
   strict?: boolean;
 }
 
+function isMachine(opts: CommonOpts): boolean {
+  return wantsMachineOutput(opts);
+}
+
 export function registerPlan(program: Command): void {
   const plan = program
     .command("plan")
@@ -60,13 +74,24 @@ export function registerPlan(program: Command): void {
     .command("validate <dir>")
     .description("parse and validate a plan directory without writing to Linear")
     .option("--team <key>", "override the resolved team")
-    .option("--json", "emit structured result")
+    .option("--json", "machine output (default; TOON)")
+    .option("--format <fmt>", "toon | json | pretty")
+    .option("--pretty", "pretty-printed JSON")
+    .option("--human", "maintainer/dev chalk tables (opt-in; not agent path; bodies uncapped)")
     .action(async (dir: string, opts: CommonOpts) => {
       const result = await executePlanValidate(buildPlanValidateInputFromCli({ dir, opts }));
 
-      if (opts.json) {
-        process.stdout.write(
-          `${JSON.stringify(envelope(planValidateCliPayload(result)), null, 2)}\n`,
+      if (isMachine(opts)) {
+        writeMachineEnvelope(
+          { ...planValidateCliPayload(result), next: planValidateNext() } as Record<
+            string,
+            unknown
+          >,
+          {
+            json: true,
+            format: opts.format,
+            pretty: opts.pretty,
+          },
         );
       } else {
         printValidate(result.parsed, result.validation);
@@ -86,14 +111,22 @@ export function registerPlan(program: Command): void {
     .option("--yes", "confirm --force when applying mutations")
     .option("--confirm", "alias for --yes")
     .option("--strict", "block any issue whose body has lint warnings")
-    .option("--json", "emit structured result")
+    .option("--json", "machine output (default; TOON)")
+    .option("--format <fmt>", "toon | json | pretty")
+    .option("--pretty", "pretty-printed JSON")
+    .option("--human", "maintainer/dev chalk tables (opt-in; not agent path; bodies uncapped)")
     .action(async (dir: string, opts: ApplyCmdOpts) => {
       const outcome = await executePlanApply(buildPlanApplyInputFromCli({ dir, opts }));
 
       if (outcome.kind === "validation_failed") {
-        if (opts.json) {
-          process.stdout.write(
-            `${JSON.stringify(envelope(planApplyCliPayload(outcome)), null, 2)}\n`,
+        if (isMachine(opts)) {
+          writeMachineEnvelope(
+            { ...planApplyCliPayload(outcome), next: planApplyNext() } as Record<string, unknown>,
+            {
+              json: true,
+              format: opts.format,
+              pretty: opts.pretty,
+            },
           );
         } else {
           printValidate(outcome.parsed, outcome.validation);
@@ -102,14 +135,19 @@ export function registerPlan(program: Command): void {
         return;
       }
 
-      if (outcome.warnings.length > 0 && !opts.json) {
+      if (outcome.warnings.length > 0 && !isMachine(opts)) {
         printWarnings(outcome.warnings);
       }
 
       if (outcome.kind === "preflight_failed") {
-        if (opts.json) {
-          process.stdout.write(
-            `${JSON.stringify(envelope(planApplyCliPayload(outcome)), null, 2)}\n`,
+        if (isMachine(opts)) {
+          writeMachineEnvelope(
+            { ...planApplyCliPayload(outcome), next: planApplyNext() } as Record<string, unknown>,
+            {
+              json: true,
+              format: opts.format,
+              pretty: opts.pretty,
+            },
           );
         } else {
           const label = outcome.dryRun ? "refusing dry-run preview:" : "refusing to apply:";
@@ -122,9 +160,14 @@ export function registerPlan(program: Command): void {
         return;
       }
 
-      if (opts.json) {
-        process.stdout.write(
-          `${JSON.stringify(envelope(planApplyCliPayload(outcome)), null, 2)}\n`,
+      if (isMachine(opts)) {
+        writeMachineEnvelope(
+          { ...planApplyCliPayload(outcome), next: planApplyNext() } as Record<string, unknown>,
+          {
+            json: true,
+            format: opts.format,
+            pretty: opts.pretty,
+          },
         );
       } else {
         printApply(outcome.result, outcome.dryRun);
@@ -137,12 +180,22 @@ export function registerPlan(program: Command): void {
     .command("diff <dir>")
     .description("show drift between plan files and live Linear")
     .option("--team <key>", "override the resolved team")
-    .option("--json", "emit structured result")
+    .option("--json", "machine output (default; TOON)")
+    .option("--format <fmt>", "toon | json | pretty")
+    .option("--pretty", "pretty-printed JSON")
+    .option("--human", "maintainer/dev chalk tables (opt-in; not agent path; bodies uncapped)")
     .action(async (dir: string, opts: CommonOpts) => {
       const outcome = await executePlanDiff(buildPlanDiffInputFromCli({ dir, opts }));
 
-      if (opts.json) {
-        process.stdout.write(`${JSON.stringify(envelope(planDiffCliPayload(outcome)), null, 2)}\n`);
+      if (isMachine(opts)) {
+        writeMachineEnvelope(
+          { ...planDiffCliPayload(outcome), next: planDiffNext() } as Record<string, unknown>,
+          {
+            json: true,
+            format: opts.format,
+            pretty: opts.pretty,
+          },
+        );
       } else {
         printDiff(outcome.result);
       }
@@ -155,12 +208,22 @@ export function registerPlan(program: Command): void {
     .option("--team <key>", "override the resolved team")
     .option("--fix", "apply safe autofixes in-place (writes back to the .md files)")
     .option("--strict", "exit non-zero when any warning remains")
-    .option("--json", "emit structured result")
+    .option("--json", "machine output (default; TOON)")
+    .option("--format <fmt>", "toon | json | pretty")
+    .option("--pretty", "pretty-printed JSON")
+    .option("--human", "maintainer/dev chalk tables (opt-in; not agent path; bodies uncapped)")
     .action(async (dir: string, opts: PlanLintOpts) => {
       const result = await executePlanLint(buildPlanLintInputFromCli({ dir, opts }));
 
-      if (opts.json) {
-        process.stdout.write(`${JSON.stringify(envelope(planLintCliPayload(result)), null, 2)}\n`);
+      if (isMachine(opts)) {
+        writeMachineEnvelope(
+          { ...planLintCliPayload(result), next: planLintNext() } as Record<string, unknown>,
+          {
+            json: true,
+            format: opts.format,
+            pretty: opts.pretty,
+          },
+        );
       } else {
         let total = 0;
         let fixed = 0;
@@ -204,22 +267,23 @@ export function registerPlan(program: Command): void {
     .option("--yes", "confirm --force overwrite behavior")
     .option("--confirm", "alias for --yes")
     .option("--include-new", "also import issues that exist on remote but not in the plan")
-    .option("--json", "emit structured result")
+    .option("--json", "machine output (default; TOON)")
+    .option("--format <fmt>", "toon | json | pretty")
+    .option("--pretty", "pretty-printed JSON")
+    .option("--human", "maintainer/dev chalk tables (opt-in; not agent path; bodies uncapped)")
     .action(async (dir: string, opts: PullCmdOpts) => {
       const outcome = await executePlanPull(buildPlanPullInputFromCli({ dir, opts }));
 
       if (outcome.kind === "refused") {
-        if (opts.json) {
-          process.stdout.write(
-            `${JSON.stringify(
-              envelope({
-                refused: outcome.refused,
-                hint: outcome.cliHint,
-                diff: outcome.diff,
-              }),
-              null,
-              2,
-            )}\n`,
+        if (isMachine(opts)) {
+          writeMachineEnvelope(
+            {
+              refused: outcome.refused,
+              hint: outcome.cliHint,
+              diff: outcome.diff,
+              next: planPullNext(),
+            } as Record<string, unknown>,
+            { json: true, format: opts.format, pretty: opts.pretty },
           );
         } else if (outcome.diff.has_incomplete_scan) {
           process.stderr.write(
@@ -234,8 +298,15 @@ export function registerPlan(program: Command): void {
         return;
       }
 
-      if (opts.json) {
-        process.stdout.write(`${JSON.stringify(envelope(planPullCliPayload(outcome)), null, 2)}\n`);
+      if (isMachine(opts)) {
+        writeMachineEnvelope(
+          { ...planPullCliPayload(outcome), next: planPullNext() } as Record<string, unknown>,
+          {
+            json: true,
+            format: opts.format,
+            pretty: opts.pretty,
+          },
+        );
       } else {
         printPull(outcome.result);
       }

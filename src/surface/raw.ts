@@ -159,7 +159,7 @@ export function rawGraphqlMcpPayload(result: RawGraphqlResult) {
 // ---------------------------------------------------------------------------
 
 const rawGraphqlDescription =
-  "Executes arbitrary Linear GraphQL. Use only when no first-class tool covers the operation. Queries run directly; mutations require allow_mutation=true and confirm=true and are never retry-wrapped. Returns `{schema_version, data}` (the standard MCP envelope wrapping Linear's raw response.data). Pass paginate=true to walk a top-level connection. The matching CLI tool `lebop raw` intentionally emits unwrapped `data` (no envelope) for jq-pipe ergonomics; see docs/spec.md §15.6.";
+  "Escape-hatch GraphQL. Prefer first-class tools. Mutations need allow_mutation+confirm (no retry). Returns envelope {data}; CLI raw emits unwrapped data. paginate walks top-level connections.";
 
 export function buildRawGraphqlMcpInputSchema(workspaceDescription: string) {
   return {
@@ -201,6 +201,7 @@ export const rawGraphqlOperation = {
   },
   mcp: {
     tool: "raw_graphql",
+      profile: "core",
     title: "GraphQL escape hatch — execute an arbitrary query/mutation",
     description: rawGraphqlDescription,
     annotations: {
@@ -210,7 +211,6 @@ export const rawGraphqlOperation = {
       idempotentHint: false,
       openWorldHint: true,
     },
-    inputSchemaKeys: ["query", "variables", "paginate", "allow_mutation", "confirm", "workspace"],
   },
   safety: {
     readOnly: false,

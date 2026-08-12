@@ -33,14 +33,14 @@ describe("lookupStateByName", () => {
         },
       },
     });
-    const s = await lookupStateByName("nox", "In Progress");
+    const s = await lookupStateByName("team", "In Progress");
     expect(s?.id).toBe("state-1");
-    expect((calls[0]?.variables as { teamKey: string }).teamKey).toBe("NOX");
+    expect((calls[0]?.variables as { teamKey: string }).teamKey).toBe("TEAM");
   });
 
   it("returns null when no state matches", async () => {
     mockRawResponses.push({ data: { workflowStates: { nodes: [] } } });
-    const s = await lookupStateByName("NOX", "Bogus");
+    const s = await lookupStateByName("TEAM", "Bogus");
     expect(s).toBeNull();
   });
 });

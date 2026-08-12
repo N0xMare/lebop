@@ -4,7 +4,7 @@ import { lstat, open, readFile, rename, rm } from "node:fs/promises";
 import { relative, resolve } from "node:path";
 import { sha256, writeAtomic } from "./cache.ts";
 import { NotFoundError, ValidationError } from "./errors.ts";
-import { PUBLISH_REVIEW_ROOT } from "./paths.ts";
+import { getPublishReviewRoot } from "./paths.ts";
 import { parsePlan } from "./planParse.ts";
 import { ensureStateDirectoryForWrite } from "./stateSafety.ts";
 
@@ -220,7 +220,7 @@ export async function markPublishReviewBlocked(
 
 export function reviewPath(reviewId: string): string {
   validateReviewId(reviewId);
-  const root = resolve(PUBLISH_REVIEW_ROOT);
+  const root = resolve(getPublishReviewRoot());
   const file = resolve(root, `${reviewId}.json`);
   const rel = relative(root, file);
   if (rel.startsWith("..") || rel === ".." || rel.includes("..")) {
@@ -342,7 +342,7 @@ async function removeStalePublishReviewReclaimLock(
 }
 
 function ensurePublishReviewRootForWrite(): void {
-  ensureStateDirectoryForWrite(PUBLISH_REVIEW_ROOT, { label: "publish review store" });
+  ensureStateDirectoryForWrite(getPublishReviewRoot(), { label: "publish review store" });
 }
 
 function sleep(ms: number): Promise<void> {

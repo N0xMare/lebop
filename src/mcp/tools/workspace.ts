@@ -33,7 +33,17 @@ export function buildWorkspaceToolSpecs(deps: WorkspaceToolDeps): McpToolSpec[] 
         const { value, telemetry } = await collectLinearRateLimitTelemetry(() =>
           executeExploreWorkspace(input),
         );
-        return text(envelope({ ...value }, linearApiEnvelopeMeta(telemetry)));
+        return text(
+          envelope(
+            {
+              ...value,
+              next: value.next_cursor
+                ? [`explore_linear_workspace cursor=${value.next_cursor}`]
+                : ["fetch_linear_workspace", "list_issues", "search_linear"],
+            },
+            linearApiEnvelopeMeta(telemetry),
+          ),
+        );
       },
     },
     {
@@ -47,7 +57,15 @@ export function buildWorkspaceToolSpecs(deps: WorkspaceToolDeps): McpToolSpec[] 
         const { value, telemetry } = await collectLinearRateLimitTelemetry(() =>
           executeFetchWorkspace(input),
         );
-        return text(envelope({ ...value }, linearApiEnvelopeMeta(telemetry)));
+        return text(
+          envelope(
+            {
+              ...value,
+              next: ["explore_linear_workspace", "get_issue", "list_comments"],
+            },
+            linearApiEnvelopeMeta(telemetry),
+          ),
+        );
       },
     },
   ];

@@ -10,7 +10,7 @@ import {
 
 describe("pull surface contracts", () => {
   it("reports MCP refresh recovery with the required confirm flag", () => {
-    const err = new PullOverwriteConflictError(["NOX-1"]);
+    const err = new PullOverwriteConflictError(["TEAM-1"]);
 
     expect(err.hint).toContain("refresh=true");
     expect(err.hint).toContain("confirm=true");
@@ -19,17 +19,17 @@ describe("pull surface contracts", () => {
   it("normalizes CLI issue pulls without MCP cache-path or repo-root behavior", () => {
     expect(
       buildPullIssuesInputFromCli({
-        ids: ["NOX-1", "NOX-2"],
+        ids: ["TEAM-1", "TEAM-2"],
         opts: {
-          team: "NOX",
+          team: "TEAM",
           refresh: true,
           comments: false,
           to: "out",
         },
       }),
     ).toEqual({
-      identifiers: ["NOX-1", "NOX-2"],
-      team: "NOX",
+      identifiers: ["TEAM-1", "TEAM-2"],
+      team: "TEAM",
       refresh: true,
       includeComments: false,
       to: "out",
@@ -44,7 +44,7 @@ describe("pull surface contracts", () => {
       refresh: true,
       include_comments: false,
       to: "out",
-      workspace: "noxor",
+      workspace: "acme",
     });
 
     expect(input).toEqual({
@@ -68,9 +68,9 @@ describe("pull surface contracts", () => {
   it("normalizes CLI project pulls with strict selector handling", () => {
     expect(
       buildPullProjectInputFromCli({
-        ids: ["NOX-5"],
+        ids: ["TEAM-5"],
         opts: {
-          team: "NOX",
+          team: "TEAM",
           project: "Ignored When Project ID Is Present",
           projectId: "11111111-2222-4333-8444-555555555555",
           comments: true,
@@ -79,8 +79,8 @@ describe("pull surface contracts", () => {
     ).toEqual({
       project: "Ignored When Project ID Is Present",
       projectId: "11111111-2222-4333-8444-555555555555",
-      extraIdentifiers: ["NOX-5"],
-      team: "NOX",
+      extraIdentifiers: ["TEAM-5"],
+      team: "TEAM",
       refresh: false,
       includeComments: true,
       to: undefined,
@@ -98,7 +98,7 @@ describe("pull surface contracts", () => {
         team: "UE",
         extra_identifiers: ["UE-20..UE-21"],
         include_comments: false,
-        workspace: "noxor",
+        workspace: "acme",
       }),
     ).toEqual({
       project: "Target Project",

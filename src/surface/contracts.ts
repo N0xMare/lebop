@@ -21,6 +21,11 @@ export type SurfaceDomain =
   | "lint"
   | "raw"
   | "link"
+  | "search"
+  | "history"
+  | "views"
+  | "custom_fields"
+  | "notifications"
   | "other";
 
 export type SurfaceOperationAction =
@@ -31,6 +36,8 @@ export type SurfaceOperationAction =
   | "create"
   | "update"
   | "delete"
+  | "soft_delete"
+  | "archive"
   | "publish"
   | "review"
   | "other";
@@ -73,8 +80,13 @@ export type SurfaceMcpMapping = {
   title?: string;
   description?: string;
   annotations?: SurfaceMcpAnnotationHints;
-  inputSchemaKeys?: readonly string[];
   liveSemantics?: "required" | "optional";
+  /**
+   * Progressive MCP profile membership (0.0.6+).
+   * - `core` — included in default MCP profile (derived `MCP_CORE_TOOLS`)
+   * - omit / `full` — full profile only
+   */
+  profile?: "core" | "full";
 };
 
 export interface SurfaceOperationContract<

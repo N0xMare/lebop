@@ -1,7 +1,9 @@
 import chalk from "chalk";
 import type { Command } from "commander";
 import type { CachePushResult } from "../lib/cachePush.ts";
-import { envelope } from "../lib/envelope.ts";
+import { wantsMachineOutput } from "../lib/encode.ts";
+import { pushNext } from "../lib/nextStubs.ts";
+import { writeMachineEnvelope } from "../lib/output.ts";
 import {
   buildCachePushInputFromCli,
   cachePushPayload,
@@ -17,6 +19,8 @@ interface PushOpts {
   strict?: boolean;
   projectId?: string[];
   json?: boolean;
+  format?: string;
+  pretty?: boolean;
 }
 
 export function registerPush(program: Command): void {
@@ -35,26 +39,31 @@ export function registerPush(program: Command): void {
       collect,
       [],
     )
-    .option("--json", "emit structured per-entity result records")
+    .option("--json", "machine output (default; TOON)")
+    .option("--format <fmt>", "toon | json | pretty")
+    .option("--pretty", "pretty-printed JSON")
+    .option("--human", "maintainer/dev chalk tables (opt-in; not agent path; bodies uncapped)")
     .action(async (ids: string[], opts: PushOpts) => {
       const result = await executeCachePush(buildCachePushInputFromCli({ ids, opts }));
       const dryRun = result.dryRun;
 
       if (result.results.length === 0) {
-        if (opts.json) {
-          process.stdout.write(
-            `${JSON.stringify(
-              envelope({
-                team: result.team,
-                repo_hash: result.repoHash,
-                mode: "cache" as const,
-                results: [],
-                summary: { applied: 0, skipped: 0, failed: 0, total: 0 },
-                notes: dryRun ? "dry-run: nothing was written" : undefined,
-              }),
-              null,
-              2,
-            )}\n`,
+        if (wantsMachineOutput(opts)) {
+          writeMachineEnvelope(
+            {
+              team: result.team,
+              repo_hash: result.repoHash,
+              mode: "cache" as const,
+              results: [],
+              summary: { applied: 0, skipped: 0, failed: 0, total: 0 },
+              notes: dryRun ? "dry-run: nothing was written" : undefined,
+              next: pushNext(),
+            },
+            {
+              json: true,
+              format: opts.format,
+              pretty: opts.pretty,
+            },
           );
         } else {
           process.stdout.write("nothing to push — cache is clean\n");
@@ -62,8 +71,15 @@ export function registerPush(program: Command): void {
         return;
       }
 
-      if (opts.json) {
-        process.stdout.write(`${JSON.stringify(envelope(cachePushPayload(result)), null, 2)}\n`);
+      if (wantsMachineOutput(opts)) {
+        writeMachineEnvelope(
+          { ...cachePushPayload(result), next: pushNext() } as Record<string, unknown>,
+          {
+            json: true,
+            format: opts.format,
+            pretty: opts.pretty,
+          },
+        );
       } else {
         printSummary(result.results, dryRun);
       }

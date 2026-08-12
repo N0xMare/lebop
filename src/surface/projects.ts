@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { ProjectCacheRefreshResult } from "../lib/cacheRefresh.ts";
 import { parseCliLimit } from "../lib/cliOptions.ts";
 import { NotFoundError, tryIdempotentDelete, ValidationError } from "../lib/errors.ts";
+import { applyEntityTextField } from "../lib/contentSize.ts";
 import {
   createProject,
   deleteProject,
@@ -48,6 +49,15 @@ export type ProjectListMcpInput = Record<string, unknown> & {
 
 export interface ProjectGetInput {
   id: string;
+  fullContent?: boolean;
+  contentFile?: string;
+}
+
+/** Project get after agent content-size policy (64 KiB / content_file / full_content). */
+export interface ProjectGetExecutionResult {
+  project: FullProject;
+  content: Record<string, unknown>;
+  truncated: boolean;
 }
 
 export interface ProjectCreateInput {
@@ -123,6 +133,7 @@ export type ProjectUpdateMcpInput = Record<string, unknown> & {
 
 export interface ProjectDeleteInput {
   id: string;
+  confirmed?: boolean;
 }
 
 export interface ProjectDeleteCliInput {
@@ -196,7 +207,13 @@ const projectListCanonicalSchema = z
   })
   .strict();
 
-const projectGetCanonicalSchema = z.object({ id: z.string() }).strict();
+const projectGetCanonicalSchema = z
+  .object({
+    id: z.string(),
+    fullContent: z.boolean().optional(),
+    contentFile: z.string().optional(),
+  })
+  .strict();
 
 const projectCreateCanonicalSchema = z
   .object({
@@ -220,7 +237,7 @@ const projectUpdateCanonicalSchema = z
   })
   .strict();
 
-const projectDeleteCanonicalSchema = z.object({ id: z.string() }).strict();
+const projectDeleteCanonicalSchema = z.object({ id: z.string(), confirmed: z.boolean().optional() }).strict();
 
 export function buildProjectListInputFromCli(input: ProjectListCliInput): ProjectListInput {
   return validateProjectListInput(
@@ -249,8 +266,18 @@ export function buildProjectListInputFromMcp(input: ProjectListMcpInput): Projec
   );
 }
 
-export function buildProjectGetInput(id: string): ProjectGetInput {
-  return parseSurfaceInput("projects.get", projectGetCanonicalSchema, { id });
+export function buildProjectGetInput(
+  id: string,
+  opts?: { fullContent?: boolean; contentFile?: string },
+): ProjectGetInput {
+  return parseSurfaceInput("projects.get", projectGetCanonicalSchema, {
+    id,
+    fullContent: opts?.fullContent === true ? true : undefined,
+    contentFile:
+      typeof opts?.contentFile === "string" && opts.contentFile.trim()
+        ? opts.contentFile.trim()
+        : undefined,
+  });
 }
 
 export function buildProjectCreateInputFromCli(input: ProjectCreateCliInput): ProjectCreateInput {
@@ -328,15 +355,27 @@ export function buildProjectUpdateInputFromMcp(
 export function buildProjectDeleteInputFromCli(input: ProjectDeleteCliInput): ProjectDeleteInput {
   if (!input.opts.yes) {
     throw new ValidationError(
-      `refusing to delete project ${input.id} without --yes`,
-      "re-run with --yes to confirm. This operation is irreversible.",
+      `refusing to soft-delete project ${input.id} without --yes`,
+      "re-run with --yes to confirm. Soft-deletes (archived_at); not restored by lebop unarchive.",
     );
   }
-  return parseSurfaceInput("projects.delete", projectDeleteCanonicalSchema, { id: input.id });
+  return parseSurfaceInput("projects.soft_delete", projectDeleteCanonicalSchema, {
+    id: input.id,
+    confirmed: true,
+  });
 }
 
 export function buildProjectDeleteInputFromMcp(input: ProjectDeleteMcpInput): ProjectDeleteInput {
-  return parseSurfaceInput("projects.delete", projectDeleteCanonicalSchema, { id: input.id });
+  if (input.confirm !== true) {
+    throw new ValidationError(
+      "soft_delete_project requires confirm:true for destructive execution",
+      "pass confirm:true after verifying the soft-delete is intended",
+    );
+  }
+  return parseSurfaceInput("projects.soft_delete", projectDeleteCanonicalSchema, {
+    id: input.id,
+    confirmed: true,
+  });
 }
 
 export async function executeProjectList(
@@ -450,12 +489,26 @@ export function projectListPayload(result: ProjectListExecutionResult) {
 export async function executeProjectGet(
   input: ProjectGetInput,
   hint: string,
-): Promise<FullProject> {
+): Promise<ProjectGetExecutionResult> {
   const project = await getProject(input.id);
   if (!project) {
     throw new NotFoundError(`project not found: ${input.id}`, hint);
   }
-  return project;
+  const primaryField =
+    typeof project.content === "string" && project.content.length > 0 ? "content" : "description";
+  const applied = await applyEntityTextField(
+    project as unknown as Record<string, unknown>,
+    primaryField,
+    {
+      fullContent: input.fullContent === true,
+      contentFile: input.contentFile,
+    },
+  );
+  return {
+    project: applied.entity as unknown as FullProject,
+    content: applied.content,
+    truncated: applied.truncated,
+  };
 }
 
 export async function resolveProjectCreateTeamIds(
@@ -524,6 +577,12 @@ export async function executeProjectUpdate(
 export async function executeProjectDelete(
   input: ProjectDeleteInput,
 ): Promise<ProjectDeleteExecutionResult> {
+  if (input.confirmed !== true) {
+    throw new ValidationError(
+      "refusing to soft-delete project without confirm",
+      "pass --yes (CLI) or confirm:true (MCP) after verifying the soft-delete is intended",
+    );
+  }
   const result = await tryIdempotentDelete(() => deleteProject(input.id));
   return {
     id: input.id,
@@ -542,6 +601,7 @@ export const projectListOperation = {
   cli: { command: "project list", liveSteps: ["cli:project list --json"] },
   mcp: {
     tool: "list_projects",
+      profile: "core",
     title: "List Linear projects",
     description: "List projects scoped to a team (default) or workspace-wide.",
     annotations: {
@@ -572,6 +632,7 @@ export const projectListAliasOperation = {
   cli: { command: "projects", liveSteps: ["cli:projects alias --json"] },
   mcp: {
     tool: "list_projects",
+      profile: "core",
     title: "List Linear projects",
     description: "List projects scoped to a team (default) or workspace-wide.",
     annotations: {
@@ -598,22 +659,27 @@ export const projectGetOperation = {
   action: "get",
   title: "Get one project by UUID",
   description:
-    "Returns one project (with content + lead + teams). Missing ids surface as structured not_found errors, matching `lebop project view --json`.",
+    "Returns one project (with content + lead + teams). Dense content (64 KiB default); prefer content_file for large bodies. Missing ids → not_found.",
   cli: { command: "project view", liveSteps: ["cli:project view --json"] },
   mcp: {
     tool: "get_project",
+    profile: "core",
     title: "Get one project by UUID",
     description:
-      "Returns one project (with content + lead + teams). Missing ids surface as structured not_found errors, matching `lebop project view --json`.",
+      "Returns one project (with content + lead + teams). Dense content (64 KiB default); prefer content_file for large bodies. content_file writes host FS.",
     annotations: {
       title: "Get one project by UUID",
-      readOnlyHint: true,
+      readOnlyHint: false,
       idempotentHint: true,
       openWorldHint: true,
     },
   },
-  safety: { readOnly: true, destructive: false, idempotent: true, openWorld: true },
-} satisfies SurfaceOperationContract<ProjectGetInput, FullProject>;
+  safety: { readOnly: false, destructive: false, idempotent: true, openWorld: true },
+  notes:
+    "content_file writes host FS. Content size policy applied in execute (not adapters).",
+  execute: (input) =>
+    executeProjectGet(input, "verify the project UUID; run list_projects to discover ids"),
+} satisfies SurfaceOperationContract<ProjectGetInput, ProjectGetExecutionResult>;
 
 export const projectCreateOperation = {
   id: "projects.create",
@@ -678,21 +744,21 @@ export const projectUpdateOperation = {
 >;
 
 export const projectDeleteOperation = {
-  id: "projects.delete",
+  id: "projects.soft_delete",
   domain: "projects",
   resource: "project",
-  action: "delete",
-  title: "Delete a project",
+  action: "soft_delete",
+  title: "Soft-delete a project",
   description:
-    "Delete a project by UUID. Soft delete server-side (sets `archived_at`); not user-restorable via Linear's standard UI flows. Idempotent — re-deleting an already-soft-deleted project returns `{status: 'already-absent'}`.",
-  cli: { command: "project delete", liveSteps: ["cli:project delete --json"] },
+    "Delete a project by UUID. Soft delete server-side (sets `archived_at`); not restored by unarchive; soft-delete via archived_at. Idempotent — re-deleting an already-soft-deleted project returns `{status: 'already-absent'}`.",
+  cli: { command: "project soft-delete", liveSteps: ["cli:project soft-delete --json"] },
   mcp: {
-    tool: "delete_project",
-    title: "Delete a project",
+    tool: "soft_delete_project",
+    title: "Soft-delete a project",
     description:
-      "Delete a project by UUID. Soft delete server-side (sets `archived_at`); not user-restorable via Linear's standard UI flows. Idempotent — re-deleting an already-soft-deleted project returns `{status: 'already-absent'}`.",
+      "Delete a project by UUID. Soft delete server-side (sets `archived_at`); not restored by unarchive; soft-delete via archived_at. Idempotent — re-deleting an already-soft-deleted project returns `{status: 'already-absent'}`.",
     annotations: {
-      title: "Delete a project",
+      title: "Soft-delete a project",
       readOnlyHint: false,
       destructiveHint: true,
       idempotentHint: true,
@@ -708,6 +774,7 @@ export const projectDeleteOperation = {
   },
   fromCli: buildProjectDeleteInputFromCli,
   fromMcp: buildProjectDeleteInputFromMcp,
+  execute: executeProjectDelete,
 } satisfies SurfaceOperationContract<
   ProjectDeleteInput,
   ProjectDeleteExecutionResult,
@@ -742,6 +809,16 @@ export function buildProjectListMcpInputSchema(workspaceDescription: string) {
 export function buildProjectGetMcpInputSchema(workspaceDescription: string) {
   return {
     id: z.string(),
+    full_content: z
+      .boolean()
+      .optional()
+      .describe("Full project content/description on the wire (bypass 64 KiB agent size cap)."),
+    content_file: z
+      .string()
+      .optional()
+      .describe(
+        "Write full project body to this host path; wire stays dense. Prefer for large bodies. Side-effect: writes disk.",
+      ),
     workspace: workspaceArg.describe(workspaceDescription),
   };
 }
@@ -750,7 +827,7 @@ export function buildProjectCreateMcpInputSchema(workspaceDescription: string) {
   return {
     name: z.string(),
     team_ids: z.array(z.string()).optional().describe("Team UUIDs."),
-    team_keys: z.array(z.string()).optional().describe("Team keys, e.g. ['NOX', 'ENG']."),
+    team_keys: z.array(z.string()).optional().describe("Team keys, e.g. ['TEAM', 'ENG']."),
     team: teamArg.describe("Single team key convenience selector."),
     description: z.string().optional(),
     content: z.string().optional(),

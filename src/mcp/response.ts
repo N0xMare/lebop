@@ -1,10 +1,13 @@
+import { encodeErrorEnvelope, encodeForAgent } from "../lib/encode.ts";
 import { SCHEMA_VERSION } from "../lib/envelope.ts";
 import { InvalidArgumentsError, LebopError } from "../lib/errors.ts";
+import { encodeMcpPayload } from "../lib/output.ts";
 import type { ToolHandlerResult } from "./types.ts";
 
+/** MCP text content: dense TOON/compact JSON (no pretty by default). */
 export function text(payload: unknown): { content: { type: "text"; text: string }[] } {
   return {
-    content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
+    content: [{ type: "text", text: encodeMcpPayload(payload) }],
   };
 }
 
@@ -13,14 +16,7 @@ export function envelopeError(code: string, message: string, hint?: string): Too
     content: [
       {
         type: "text",
-        text: JSON.stringify(
-          {
-            schema_version: SCHEMA_VERSION,
-            error: { code, message, ...(hint ? { hint } : {}) },
-          },
-          null,
-          2,
-        ),
+        text: encodeErrorEnvelope({ code, message, ...(hint ? { hint } : {}) }, { format: "json" }),
       },
     ],
     isError: true,
@@ -31,7 +27,7 @@ export function formatToolError(err: unknown): string {
   if (err instanceof LebopError) {
     const issues =
       err instanceof InvalidArgumentsError && err.issues.length > 0 ? err.issues : undefined;
-    return JSON.stringify(
+    return encodeForAgent(
       {
         schema_version: SCHEMA_VERSION,
         error: {
@@ -42,16 +38,14 @@ export function formatToolError(err: unknown): string {
           ...(issues ? { issues } : {}),
         },
       },
-      null,
-      2,
+      { format: "json", shape: "nested" },
     );
   }
-  return JSON.stringify(
+  return encodeErrorEnvelope(
     {
-      schema_version: SCHEMA_VERSION,
-      error: { code: "unknown", message: (err as Error).message ?? String(err) },
+      code: "unknown",
+      message: (err as Error).message ?? String(err),
     },
-    null,
-    2,
+    { format: "json" },
   );
 }

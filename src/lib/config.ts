@@ -4,9 +4,9 @@ import { dirname, join, resolve } from "node:path";
 import { parse as parseYaml } from "yaml";
 import { loadAuth } from "./auth.ts";
 import { ConfigError, ValidationError } from "./errors.ts";
-import { CONFIG_FILE } from "./paths.ts";
 import { activeTeamOverride, activeWorkspaceOverride } from "./requestContext.ts";
 import type { RepoConfig, UserConfig } from "./types.ts";
+import { getConfigFilePath } from "./paths.ts";
 
 export interface ResolvedConfig {
   userConfig: UserConfig;
@@ -20,14 +20,15 @@ export interface ResolvedConfig {
 const GLOBAL_REPO_ROOT = "_global";
 
 export async function loadUserConfig(): Promise<UserConfig> {
-  const file = Bun.file(CONFIG_FILE);
+  const configFile = getConfigFilePath();
+  const file = Bun.file(configFile);
   if (!(await file.exists())) return {};
   const text = await file.text();
   const parsed = parseYaml(text) as unknown;
   if (parsed === null || parsed === undefined) return {};
   if (!isPlainRecord(parsed)) {
     throw new ConfigError(
-      `${CONFIG_FILE}: expected a YAML object at top level`,
+      `${configFile}: expected a YAML object at top level`,
       "the config file must start with `key: value` pairs, not a bare scalar or list",
     );
   }
@@ -143,7 +144,7 @@ function expectOptionalNumber(record: Record<string, unknown>, key: string, pare
 
 function throwConfigShape(path: string, message: string): never {
   throw new ConfigError(
-    `${CONFIG_FILE}: invalid ${path}: ${message}`,
+    `${getConfigFilePath()}: invalid ${path}: ${message}`,
     "fix ~/.lebop/config.yaml so known fields use the documented object and scalar types",
   );
 }

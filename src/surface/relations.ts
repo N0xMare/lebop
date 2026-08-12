@@ -889,7 +889,6 @@ export const relationListOperation = {
       idempotentHint: true,
       openWorldHint: true,
     },
-    inputSchemaKeys: ["identifier", "workspace"],
   },
   safety: { readOnly: true, destructive: false, idempotent: true, openWorld: true },
   fromCli: buildRelationListInputFromCli,
@@ -924,7 +923,6 @@ export const relationAddOperation = {
       idempotentHint: true,
       openWorldHint: true,
     },
-    inputSchemaKeys: ["from", "kind", "to", "confirm", "repo_root", "workspace"],
   },
   safety: {
     readOnly: false,
@@ -967,7 +965,6 @@ export const relationDeleteOperation = {
       idempotentHint: true,
       openWorldHint: true,
     },
-    inputSchemaKeys: ["from", "kind", "to", "confirm", "repo_root", "workspace"],
   },
   safety: {
     readOnly: false,
@@ -1011,7 +1008,6 @@ export const relationUpdateOperation = {
       idempotentHint: true,
       openWorldHint: true,
     },
-    inputSchemaKeys: ["from", "deltas", "confirm", "repo_root", "workspace"],
   },
   safety: {
     readOnly: false,
@@ -1021,7 +1017,7 @@ export const relationUpdateOperation = {
     confirm: "required_when_mutating",
   },
   notes:
-    "Intentional asymmetry: CLI batch is `set links` (token UX under multi-field set) vs MCP multi-delta update_relations; both share executeRelationUpdate. CLI JSON uses simplified cache_writeback + target/relationId; MCP uses cache + to/relation_id. Parallel metadata stub issues.relations_update remains until issues domain cleanup.",
+    "Intentional asymmetry: CLI batch is `set links` (token UX under multi-field set) vs MCP multi-delta update_relations; both share executeRelationUpdate. CLI JSON uses simplified cache_writeback + target/relationId; MCP uses cache + to/relation_id. Sole L2 authority for update_relations (issues.relations_update stub removed).",
   fromCli: buildRelationUpdateInputFromCli,
   fromMcp: (input: RelationUpdateMcpInput) => buildRelationUpdateInputFromMcp(input),
   execute: executeRelationUpdate,

@@ -52,6 +52,8 @@ export interface BulkUpdateInput {
   /** Override the derived team for state/labels/assignee resolution. */
   team?: string;
   dryRun?: boolean;
+  /** True when CLI --yes/--confirm or MCP confirm:true was provided. */
+  confirmed?: boolean;
   repoHash?: string;
   repoRoot?: string | null;
 }

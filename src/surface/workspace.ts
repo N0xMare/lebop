@@ -151,7 +151,8 @@ export function buildFetchWorkspaceInputFromCli(
   return parseSurfaceInput("workspace.fetch", fetchWorkspaceCanonicalSchema, {
     target: input.target,
     include: parseCliIncludeList(input.opts.include),
-    depth: input.opts.depth,
+    // 0.0.6 agent-dense default at the adapter boundary.
+    depth: input.opts.depth ?? "shallow",
     limit: input.opts.limit,
     cursor: input.opts.cursor,
     to: input.opts.to,
@@ -165,7 +166,7 @@ export function buildFetchWorkspaceInputFromMcp(
   return parseSurfaceInput("workspace.fetch", fetchWorkspaceCanonicalSchema, {
     target: input.target,
     include: input.include,
-    depth: input.depth,
+    depth: input.depth ?? "shallow",
     limit: input.limit,
     cursor: input.cursor,
     repoRoot: input.repo_root,
@@ -213,6 +214,7 @@ export const exploreWorkspaceOperation = {
   },
   mcp: {
     tool: "explore_linear_workspace",
+      profile: "core",
     title: "Explore Linear workspace context",
     description:
       "Ls-style Linear discovery and search. Returns concise paths, ids, names, states, counts, and next_paths without long bodies.",
@@ -266,6 +268,7 @@ export const fetchWorkspaceOperation = {
   },
   mcp: {
     tool: "fetch_linear_workspace",
+      profile: "core",
     title: "Fetch Linear workspace context",
     description:
       "Materialize a bounded Linear project, issue, initiative, agent session, document, cycle, or milestone dossier into local files and return a compact manifest.",
@@ -340,7 +343,7 @@ export function buildFetchWorkspaceMcpInputSchema(workspaceDescription: string) 
     target: z
       .string()
       .describe(
-        "Concrete workspace path, e.g. /projects/<id>, /issues/NOX-1, /initiatives/<id>, /agent-sessions/<id>, /documents/<id>, /cycles/<id>, or /milestones/<id>.",
+        "Concrete workspace path, e.g. /projects/<id>, /issues/TEAM-1, /initiatives/<id>, /agent-sessions/<id>, /documents/<id>, /cycles/<id>, or /milestones/<id>.",
       ),
     include: z
       .array(z.string())

@@ -1,4 +1,5 @@
 import { envelope } from "../../lib/envelope.ts";
+import { mcpGetNext } from "../../lib/nextStubs.ts";
 import {
   buildCommentAddInputFromMcp,
   buildCommentAddMcpInputSchema,
@@ -52,6 +53,7 @@ export function buildCommentToolSpecs(deps: CommentToolDeps): McpToolSpec[] {
             identifier: args.identifier,
             count: comments.length,
             comments,
+            next: mcpGetNext("add_comment", "get_issue"),
           }),
         );
       },
@@ -69,6 +71,7 @@ export function buildCommentToolSpecs(deps: CommentToolDeps): McpToolSpec[] {
             identifier: args.identifier,
             comment: result.comment,
             cache: result.cache,
+            next: mcpGetNext("list_comments", "get_issue"),
           }),
         );
       },
@@ -84,7 +87,13 @@ export function buildCommentToolSpecs(deps: CommentToolDeps): McpToolSpec[] {
           buildCommentUpdateInputFromMcp(args),
           mcpCacheDeps,
         );
-        return text(envelope({ comment: result.comment, cache: result.cache }));
+        return text(
+          envelope({
+            comment: result.comment,
+            cache: result.cache,
+            next: mcpGetNext("list_comments", "get_issue"),
+          }),
+        );
       },
     },
     {
@@ -105,6 +114,7 @@ export function buildCommentToolSpecs(deps: CommentToolDeps): McpToolSpec[] {
             status: result.status,
             success: result.success,
             cache: result.cache,
+            next: mcpGetNext("list_comments", "get_issue"),
           }),
         );
       },

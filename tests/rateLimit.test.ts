@@ -53,14 +53,14 @@ describe("Linear rate-limit telemetry", () => {
   it("aggregates request count and last observed budgets per async operation", async () => {
     const reset = 1_787_000_000_000;
     const { telemetry } = await collectLinearRateLimitTelemetry(async () => {
-      recordLinearApiAttempt("noxor");
-      observeLinearRateLimitHeaders("noxor", {
+      recordLinearApiAttempt("acme");
+      observeLinearRateLimitHeaders("acme", {
         "x-ratelimit-requests-limit": "2500",
         "x-ratelimit-requests-remaining": "2400",
         "x-ratelimit-requests-reset": String(reset),
       });
-      recordLinearApiAttempt("noxor");
-      observeLinearRateLimitHeaders("noxor", {
+      recordLinearApiAttempt("acme");
+      observeLinearRateLimitHeaders("acme", {
         "x-ratelimit-requests-limit": "2500",
         "x-ratelimit-requests-remaining": "2399",
         "x-ratelimit-requests-reset": String(reset),
@@ -71,13 +71,13 @@ describe("Linear rate-limit telemetry", () => {
     expect(telemetry).toMatchObject({
       observed: true,
       requests_made: 2,
-      workspaces: ["noxor"],
+      workspaces: ["acme"],
       request_budget: { limit: 2500, remaining: 2399, reset_epoch_ms: reset },
     });
     expect(linearApiEnvelopeMeta(telemetry)).toMatchObject({
       linear_api: {
         request_count: 2,
-        workspaces: ["noxor"],
+        workspaces: ["acme"],
         rate_limit: {
           requests: { remaining: 2399 },
         },
@@ -87,14 +87,14 @@ describe("Linear rate-limit telemetry", () => {
 
   it("omits envelope metadata when no Linear rate-limit headers were observed", async () => {
     const { telemetry } = await collectLinearRateLimitTelemetry(async () => {
-      recordLinearApiAttempt("noxor");
+      recordLinearApiAttempt("acme");
       return "ok";
     });
 
     expect(telemetry).toMatchObject({
       observed: false,
       requests_made: 1,
-      workspaces: ["noxor"],
+      workspaces: ["acme"],
     });
     expect(linearApiEnvelopeMeta(telemetry)).toBeUndefined();
   });

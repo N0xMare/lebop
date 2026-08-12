@@ -6,7 +6,7 @@
  * surface it as `slug_id` on the shaped record.
  */
 
-import { NotFoundError, tryMapToNull } from "./errors.ts";
+import { NotFoundError, tryMapToNull, ValidationError } from "./errors.ts";
 import { assertIconNotEmoji } from "./icons.ts";
 import { requireMutationEntity, requireMutationSuccess } from "./mutationResult.ts";
 import { type ConnectionPage, paginateRaw, paginateRawPage } from "./paginate.ts";
@@ -170,8 +170,10 @@ export async function getDocument(id: string): Promise<FullDocument | null> {
 export interface CreateDocumentInput {
   title: string;
   content?: string;
-  /** Project UUID. lebop's first-class create wrapper is currently project-scoped. */
-  projectId: string;
+  /** Project UUID (project-scoped create). */
+  projectId?: string;
+  /** Issue UUID or identifier (issue-scoped create — 0.0.6). */
+  issueId?: string;
   icon?: string;
 }
 
@@ -191,9 +193,22 @@ const CREATE_DOCUMENT_MUTATION = /* GraphQL */ `
 
 export async function createDocument(input: CreateDocumentInput): Promise<FullDocument> {
   assertIconNotEmoji(input.icon);
+  if (!input.projectId && !input.issueId) {
+    throw new ValidationError(
+      "document create requires projectId or issueId",
+      "pass --project-id or --issue for scope",
+    );
+  }
   // NOT retry-wrapped — non-idempotent.
   const client = await linear();
-  const response = (await client.client.rawRequest(CREATE_DOCUMENT_MUTATION, { input })) as {
+  const linearInput: Record<string, unknown> = { title: input.title };
+  if (input.content !== undefined) linearInput.content = input.content;
+  if (input.icon !== undefined) linearInput.icon = input.icon;
+  if (input.projectId) linearInput.projectId = input.projectId;
+  if (input.issueId) linearInput.issueId = input.issueId;
+  const response = (await client.client.rawRequest(CREATE_DOCUMENT_MUTATION, {
+    input: linearInput,
+  })) as {
     data: {
       documentCreate: {
         success: boolean;

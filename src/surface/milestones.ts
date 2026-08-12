@@ -404,7 +404,7 @@ export const milestoneListOperation = {
   action: "list",
   title: "List project milestones",
   description:
-    "List milestones; pass project to filter to one project (name or UUID). Each milestone includes `archived_at` (string | null). Defaults to live milestones only — pass `include_archived: true` to also surface cascade-archived rows (parent-project archived).",
+    "List milestones (optional project filter). includes archived_at; default live-only, include_archived for cascade-archived.",
   cli: {
     command: "milestone list",
     liveSteps: ["cli:milestone list --json"],
@@ -413,14 +413,13 @@ export const milestoneListOperation = {
     tool: "list_milestones",
     title: "List project milestones",
     description:
-      "List milestones; pass project to filter to one project (name or UUID). Each milestone includes `archived_at` (string | null). Defaults to live milestones only — pass `include_archived: true` to also surface cascade-archived rows (parent-project archived).",
+      "List milestones (optional project). archived_at present; include_archived for cascade-archived rows.",
     annotations: {
       title: "List project milestones",
       readOnlyHint: true,
       idempotentHint: true,
       openWorldHint: true,
     },
-    inputSchemaKeys: ["project", "include_archived", "workspace"],
   },
   safety: { readOnly: true, destructive: false, idempotent: true, openWorld: true },
   fromCli: buildMilestoneListInputFromCli,
@@ -439,20 +438,19 @@ export const milestoneGetOperation = {
   action: "get",
   title: "Get one milestone by UUID",
   description:
-    "Returns one milestone. Missing ids surface as structured not_found errors, matching `lebop milestone view --json`. Cascade-archived milestones (parent-project archived) are surfaced — distinguish via `archived_at`. Uses an archive-resilient list-shape query (the single-record `projectMilestone(id:)` getter silently drops cascade-archived rows; see docs/spec.md §12.1).",
+    "Get milestone by UUID. not_found if missing. Surfaces cascade-archived via archived_at (list-shape query).",
   cli: { command: "milestone view", liveSteps: ["cli:milestone view --json"] },
   mcp: {
     tool: "get_milestone",
     title: "Get one milestone by UUID",
     description:
-      "Returns one milestone. Missing ids surface as structured not_found errors, matching `lebop milestone view --json`. Cascade-archived milestones (parent-project archived) are surfaced — distinguish via `archived_at`. Uses an archive-resilient list-shape query (the single-record `projectMilestone(id:)` getter silently drops cascade-archived rows; see docs/spec.md §12.1).",
+      "Get milestone by UUID. not_found if missing. Surfaces cascade-archived via archived_at.",
     annotations: {
       title: "Get one milestone by UUID",
       readOnlyHint: true,
       idempotentHint: true,
       openWorldHint: true,
     },
-    inputSchemaKeys: ["id", "workspace"],
   },
   safety: { readOnly: true, destructive: false, idempotent: true, openWorld: true },
 } satisfies SurfaceOperationContract<MilestoneGetInput, ListedMilestone>;
@@ -476,7 +474,6 @@ export const milestoneCreateOperation = {
       idempotentHint: false,
       openWorldHint: true,
     },
-    inputSchemaKeys: ["name", "project", "description", "target_date", "sort_order", "workspace"],
   },
   safety: { readOnly: false, destructive: false, idempotent: false, openWorld: true },
   notes:
@@ -509,15 +506,6 @@ export const milestoneUpdateOperation = {
       idempotentHint: true,
       openWorldHint: true,
     },
-    inputSchemaKeys: [
-      "id",
-      "name",
-      "description",
-      "target_date",
-      "sort_order",
-      "project",
-      "workspace",
-    ],
   },
   safety: { readOnly: false, destructive: false, idempotent: true, openWorld: true },
   notes:
@@ -552,7 +540,6 @@ export const milestoneDeleteOperation = {
       idempotentHint: true,
       openWorldHint: true,
     },
-    inputSchemaKeys: ["id", "confirm", "workspace"],
   },
   safety: {
     readOnly: false,

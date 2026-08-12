@@ -1,6 +1,9 @@
 import type { Command } from "commander";
 import { resolveConfig } from "../lib/config.ts";
-import { envelope } from "../lib/envelope.ts";
+import { wantsMachineOutput } from "../lib/encode.ts";
+import { projectListedIssuesResult } from "../lib/listIssues.ts";
+import { listNext } from "../lib/nextStubs.ts";
+import { addMachineOutputOptions, writeMachineEnvelope } from "../lib/output.ts";
 import { getTeam } from "../lib/teams.ts";
 import {
   buildIssueMineInputFromCli,
@@ -17,7 +20,7 @@ import { printHuman } from "./list.ts";
  * Pass `--all-states` to include those.
  */
 export function registerMine(program: Command): void {
-  program
+  const cmd = program
     .command("mine")
     .description("list issues assigned to you (defaults to active states)")
     .option("--team <key>")
@@ -31,19 +34,34 @@ export function registerMine(program: Command): void {
     .option("--milestone <name-or-id>")
     .option("--limit <n>", "default 50; pass 0 for no limit", "50")
     .option("--cursor <token>", "continue from a previous JSON result's next_cursor")
-    .option("--json", "emit structured issue records")
-    .action(async (opts: MineOpts) => {
+    .option("--fields <list>", "default slim fields, or full, or comma list");
+  addMachineOutputOptions(cmd);
+  cmd.action(async (opts: MineOpts) => {
       const result = await executeIssueList(buildIssueMineInputFromCli({ opts }), {
         resolveTeam: async (team) => (await resolveConfig({ teamOverride: team })).team,
         getTeam: async (team) => getTeam(team),
       });
 
-      if (opts.json) {
-        process.stdout.write(`${JSON.stringify(envelope(issueListPayload(result)), null, 2)}\n`);
+      const { issues: slimIssues, fields } = projectListedIssuesResult(result, opts.fields);
+      const payload = {
+        ...issueListPayload({ ...result, issues: slimIssues as typeof result.issues }),
+        fields,
+        next: listNext(Boolean(result.truncated), result.next_cursor, {
+          show: "show <id>",
+          fieldsCmd: "mine --fields full",
+        }),
+      };
+
+      if (wantsMachineOutput(opts)) {
+        writeMachineEnvelope(payload as Record<string, unknown>, {
+          json: true,
+          format: opts.format,
+          pretty: opts.pretty,
+        });
         return;
       }
 
-      printHuman(result.issues);
+      printHuman(slimIssues);
       if (result.truncated) {
         process.stdout.write(
           `\nmore results available; use --cursor ${result.next_cursor} with the same filters\n`,
@@ -64,7 +82,10 @@ interface MineOpts {
   milestone?: string;
   limit?: string;
   cursor?: string;
+  fields?: string;
   json?: boolean;
+  format?: string;
+  pretty?: boolean;
 }
 
 function collect(value: string, previous: string[]): string[] {

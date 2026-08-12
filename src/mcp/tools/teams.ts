@@ -1,4 +1,5 @@
 import { envelope } from "../../lib/envelope.ts";
+import { mcpGetNext } from "../../lib/nextStubs.ts";
 import {
   buildTeamGetInputFromMcp,
   buildTeamGetMcpInputSchema,
@@ -35,7 +36,7 @@ export interface TeamToolDeps {
 }
 
 const TEAM_GET_NOT_FOUND_HINT = "verify the team key/UUID; run list_teams to discover teams";
-const WORKFLOW_STATES_TEAM_NOT_FOUND_HINT = "verify the team key (e.g. 'NOX')";
+const WORKFLOW_STATES_TEAM_NOT_FOUND_HINT = "verify the team key (e.g. 'TEAM')";
 
 export function buildTeamToolSpecs(deps: TeamToolDeps): McpToolSpec[] {
   return [
@@ -47,7 +48,12 @@ export function buildTeamToolSpecs(deps: TeamToolDeps): McpToolSpec[] {
       ),
       handler: async (args: TeamListMcpInput) => {
         const result = await executeTeamList(buildTeamListInputFromMcp(args));
-        return text(envelope(teamListPayload(result)));
+        return text(
+          envelope({
+            ...teamListPayload(result),
+            next: mcpGetNext("get_team", "list_team_members", "list_workflow_states"),
+          }),
+        );
       },
     },
     {
@@ -58,7 +64,12 @@ export function buildTeamToolSpecs(deps: TeamToolDeps): McpToolSpec[] {
       ),
       handler: async (args: TeamMembersListMcpInput) => {
         const result = await executeTeamMembersList(buildTeamMembersListInputFromMcp(args));
-        return text(envelope(teamMembersListPayload(result)));
+        return text(
+          envelope({
+            ...teamMembersListPayload(result),
+            next: mcpGetNext("list_issues", "get_team"),
+          }),
+        );
       },
     },
     {
@@ -69,7 +80,12 @@ export function buildTeamToolSpecs(deps: TeamToolDeps): McpToolSpec[] {
       ),
       handler: async (args: TeamGetMcpInput) => {
         const team = await executeTeamGet(buildTeamGetInputFromMcp(args), TEAM_GET_NOT_FOUND_HINT);
-        return text(envelope({ team }));
+        return text(
+          envelope({
+            team,
+            next: mcpGetNext("list_team_members", "list_workflow_states", "list_issues"),
+          }),
+        );
       },
     },
     {
@@ -82,7 +98,12 @@ export function buildTeamToolSpecs(deps: TeamToolDeps): McpToolSpec[] {
         const result = await executeWorkflowStatesList(buildWorkflowStatesListInputFromMcp(args), {
           teamNotFoundHint: WORKFLOW_STATES_TEAM_NOT_FOUND_HINT,
         });
-        return text(envelope(workflowStatesListPayload(result)));
+        return text(
+          envelope({
+            ...workflowStatesListPayload(result),
+            next: mcpGetNext("list_issues", "update_issue", "get_team"),
+          }),
+        );
       },
     },
   ];

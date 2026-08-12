@@ -174,7 +174,7 @@ function agentSession(id: string) {
     created_at: "2026-06-04T00:00:00.000Z",
     updated_at: "2026-06-04T01:00:00.000Z",
     ended_at: null,
-    issue: { id: "issue-1", identifier: "NOX-1", title: "Issue NOX-1" },
+    issue: { id: "issue-1", identifier: "TEAM-1", title: "Issue TEAM-1" },
     creator: { id: "user-1", name: "Agent User", email: "agent@example.com" },
   };
 }
@@ -201,7 +201,7 @@ beforeEach(() => {
     ends_at: "2026-06-15",
     completed_at: null,
     archived_at: null,
-    team: { id: "team-1", key: "NOX", name: "Noxor" },
+    team: { id: "team-1", key: "TEAM", name: "Example" },
   });
   mocks.getMilestone.mockResolvedValue({
     id: "milestone-1",
@@ -224,26 +224,26 @@ beforeEach(() => {
     start_date: null,
     target_date: null,
     archived_at: null,
-    teams: [{ id: "team-1", key: "NOX", name: "Noxor" }],
+    teams: [{ id: "team-1", key: "TEAM", name: "Example" }],
     lead: null,
   });
   mocks.getIssue.mockResolvedValue({
     id: "issue-uuid-1",
-    identifier: "NOX-1",
-    title: "Issue NOX-1",
+    identifier: "TEAM-1",
+    title: "Issue TEAM-1",
     description: "Issue body",
     priority: 0,
     estimate: null,
-    url: "https://linear.app/test/issue/NOX-1",
+    url: "https://linear.app/test/issue/TEAM-1",
     updatedAt: "2026-06-04T00:00:00.000Z",
     state: { id: "state-1", name: "Todo", type: "unstarted" },
     assignee: null,
     project: null,
-    team: { id: "team-1", key: "NOX" },
+    team: { id: "team-1", key: "TEAM" },
     parent: null,
     labels: { nodes: [] },
   });
-  mocks.resolveConfig.mockResolvedValue({ team: "NOX" });
+  mocks.resolveConfig.mockResolvedValue({ team: "TEAM" });
   mocks.listProjectsPage.mockResolvedValue({
     nodes: [],
     pageInfo: { hasNextPage: false, endCursor: null },
@@ -287,14 +287,14 @@ beforeEach(() => {
   });
   mocks.getTeam.mockResolvedValue({
     id: "team-1",
-    key: "NOX",
-    name: "Noxor",
+    key: "TEAM",
+    name: "Example",
     description: null,
     default_state_id: "state-1",
     default_state_name: "Todo",
   });
   mocks.listWorkflowStates.mockResolvedValue({
-    team: "NOX",
+    team: "TEAM",
     states: [],
   });
   mocks.listComments.mockResolvedValue([]);
@@ -365,7 +365,7 @@ describe("exploreLinearWorkspace concrete paths", () => {
     expect(result.items[0]).toMatchObject({
       kind: "cycle",
       path: "/cycles/cycle-1",
-      team: { key: "NOX", name: "Noxor" },
+      team: { key: "TEAM", name: "Example" },
     });
     expect(result.next_paths).toEqual(["/cycles/cycle-1/issues"]);
   });
@@ -400,19 +400,19 @@ describe("exploreLinearWorkspace concrete paths", () => {
   });
 
   it("loads issue metadata as a concrete fetchable item", async () => {
-    const result = await exploreLinearWorkspace({ path: "/issues/NOX-1" });
+    const result = await exploreLinearWorkspace({ path: "/issues/TEAM-1" });
 
-    expect(mocks.getIssue).toHaveBeenCalledWith("NOX-1");
-    expect(result.summary).toMatchObject({ kind: "issue", identifier: "NOX-1" });
+    expect(mocks.getIssue).toHaveBeenCalledWith("TEAM-1");
+    expect(result.summary).toMatchObject({ kind: "issue", identifier: "TEAM-1" });
     expect(result.items).toEqual([
       expect.objectContaining({
         kind: "issue",
         fetchable: true,
-        identifier: "NOX-1",
-        path: "/issues/NOX-1",
+        identifier: "TEAM-1",
+        path: "/issues/TEAM-1",
       }),
     ]);
-    expect(result.next_paths).toContain("/issues/NOX-1/comments");
+    expect(result.next_paths).toContain("/issues/TEAM-1/comments");
   });
 
   it("lists and loads agent-session workspace paths", async () => {
@@ -430,7 +430,7 @@ describe("exploreLinearWorkspace concrete paths", () => {
         path: "/agent-sessions/session-1",
         state: "working",
         created_at: "2026-06-04T00:00:00.000Z",
-        issue: expect.objectContaining({ identifier: "NOX-1", title: "Issue NOX-1" }),
+        issue: expect.objectContaining({ identifier: "TEAM-1", title: "Issue TEAM-1" }),
         creator: expect.objectContaining({ name: "Agent User", email: "agent@example.com" }),
       }),
     ]);
@@ -445,21 +445,21 @@ describe("exploreLinearWorkspace concrete paths", () => {
   });
 
   it("lists issue-scoped agent sessions with cursor support", async () => {
-    mocks.getIssue.mockResolvedValueOnce({ id: "issue-uuid-1", identifier: "NOX-1" });
+    mocks.getIssue.mockResolvedValueOnce({ id: "issue-uuid-1", identifier: "TEAM-1" });
     mocks.listAgentSessionsPage.mockResolvedValueOnce({
       nodes: [agentSession("session-1")],
       pageInfo: { hasNextPage: true, endCursor: "issue-session-cursor-1" },
     });
 
     const result = await exploreLinearWorkspace({
-      path: "/issues/NOX-1/agent-sessions",
+      path: "/issues/TEAM-1/agent-sessions",
       limit: 1,
     });
 
     expect(result.items[0]).toMatchObject({
       kind: "agent_session",
       id: "session-1",
-      issue: { identifier: "NOX-1" },
+      issue: { identifier: "TEAM-1" },
       creator: { email: "agent@example.com" },
     });
     expect(result.next_cursor).toEqual(expect.any(String));
@@ -471,7 +471,7 @@ describe("exploreLinearWorkspace concrete paths", () => {
   });
 
   it("lists issue-scoped documents with cursor support", async () => {
-    mocks.getIssue.mockResolvedValueOnce({ id: "issue-uuid-1", identifier: "NOX-1" });
+    mocks.getIssue.mockResolvedValueOnce({ id: "issue-uuid-1", identifier: "TEAM-1" });
     mocks.listDocumentsPage.mockResolvedValueOnce({
       nodes: [
         {
@@ -481,7 +481,7 @@ describe("exploreLinearWorkspace concrete paths", () => {
           icon: null,
           url: "https://linear.app/test/document/issue-document",
           project: null,
-          issue: { id: "issue-uuid-1", identifier: "NOX-1", title: "Issue NOX-1" },
+          issue: { id: "issue-uuid-1", identifier: "TEAM-1", title: "Issue TEAM-1" },
           creator: null,
           archived_at: null,
         },
@@ -490,7 +490,7 @@ describe("exploreLinearWorkspace concrete paths", () => {
     });
 
     const result = await exploreLinearWorkspace({
-      path: "/issues/NOX-1/documents",
+      path: "/issues/TEAM-1/documents",
       limit: 1,
     });
 
@@ -498,9 +498,9 @@ describe("exploreLinearWorkspace concrete paths", () => {
       kind: "document",
       id: "issue-document-1",
       path: "/documents/issue-document-1",
-      issue: { identifier: "NOX-1", title: "Issue NOX-1" },
+      issue: { identifier: "TEAM-1", title: "Issue TEAM-1" },
     });
-    expect(result.summary).toMatchObject({ kind: "issue_documents", identifier: "NOX-1" });
+    expect(result.summary).toMatchObject({ kind: "issue_documents", identifier: "TEAM-1" });
     expect(result.next_cursor).toEqual(expect.any(String));
     expect(mocks.listDocumentsPage).toHaveBeenCalledWith({
       issueId: "issue-uuid-1",
@@ -567,38 +567,38 @@ describe("exploreLinearWorkspace pagination", () => {
   it("paginates team issue child paths and preserves includeArchived in the cursor identity", async () => {
     mocks.listIssuesPage
       .mockResolvedValueOnce({
-        nodes: [issue("NOX-1")],
+        nodes: [issue("TEAM-1")],
         pageInfo: { hasNextPage: true, endCursor: "team-issues-cursor-1" },
       })
       .mockResolvedValueOnce({
-        nodes: [issue("NOX-2")],
+        nodes: [issue("TEAM-2")],
         pageInfo: { hasNextPage: false, endCursor: null },
       });
 
     const first = await exploreLinearWorkspace({
-      path: "/teams/NOX/issues",
+      path: "/teams/TEAM/issues",
       includeArchived: true,
       limit: 1,
     });
     const second = await exploreLinearWorkspace({
-      path: "/teams/NOX/issues",
+      path: "/teams/TEAM/issues",
       includeArchived: true,
       limit: 1,
       cursor: first.next_cursor ?? "",
     });
 
     expect(first.next_cursor).toEqual(expect.any(String));
-    expect(second.items[0]).toMatchObject({ identifier: "NOX-2" });
+    expect(second.items[0]).toMatchObject({ identifier: "TEAM-2" });
     expect(mocks.listIssuesPage).toHaveBeenNthCalledWith(
       1,
       expect.objectContaining({
-        resolvedTeam: "NOX",
-        team: "NOX",
+        resolvedTeam: "TEAM",
+        team: "TEAM",
         includeArchived: true,
         after: undefined,
       }),
     );
-    expect(mocks.getTeam).toHaveBeenCalledWith("NOX");
+    expect(mocks.getTeam).toHaveBeenCalledWith("TEAM");
     expect(mocks.listIssuesPage).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({
@@ -630,14 +630,14 @@ describe("exploreLinearWorkspace pagination", () => {
 
   it("rejects explicit team filters on team-irrelevant project child paths", async () => {
     await expect(
-      exploreLinearWorkspace({ path: "/projects/project-1/documents", team: "NOX" }),
+      exploreLinearWorkspace({ path: "/projects/project-1/documents", team: "TEAM" }),
     ).rejects.toThrow(/team cannot be applied to \/projects\/project-1\/documents/);
     expect(mocks.listDocumentsPage).not.toHaveBeenCalled();
   });
 
   it("paginates project issue child paths", async () => {
     mocks.listIssuesPage.mockResolvedValueOnce({
-      nodes: [issue("NOX-1")],
+      nodes: [issue("TEAM-1")],
       pageInfo: { hasNextPage: true, endCursor: "project-issues-cursor-1" },
     });
 
@@ -658,11 +658,11 @@ describe("exploreLinearWorkspace pagination", () => {
   it("rejects repeated cursors on child collection continuations", async () => {
     mocks.listIssuesPage
       .mockResolvedValueOnce({
-        nodes: [issue("NOX-1")],
+        nodes: [issue("TEAM-1")],
         pageInfo: { hasNextPage: true, endCursor: "project-issues-cursor-1" },
       })
       .mockResolvedValueOnce({
-        nodes: [issue("NOX-2")],
+        nodes: [issue("TEAM-2")],
         pageInfo: { hasNextPage: true, endCursor: "project-issues-cursor-1" },
       });
 
@@ -688,18 +688,18 @@ describe("exploreLinearWorkspace pagination", () => {
           name: "Backend",
           color: "#00ff00",
           description: "Backend work",
-          team: { id: "team-1", key: "NOX", name: "Noxor" },
+          team: { id: "team-1", key: "TEAM", name: "Example" },
         },
       ],
       pageInfo: { hasNextPage: true, endCursor: "label-cursor-1" },
     });
 
-    const result = await exploreLinearWorkspace({ path: "/teams/NOX/labels", limit: 1 });
+    const result = await exploreLinearWorkspace({ path: "/teams/TEAM/labels", limit: 1 });
 
     expect(result.items[0]).toMatchObject({ kind: "label", id: "label-1", name: "Backend" });
     expect(result.next_cursor).toEqual(expect.any(String));
     expect(mocks.listLabelsPage).toHaveBeenCalledWith({
-      team: "NOX",
+      team: "TEAM",
       limit: 1,
       after: undefined,
     });
@@ -715,18 +715,18 @@ describe("exploreLinearWorkspace pagination", () => {
           display_name: null,
           is_owner: false,
           active: true,
-          team: { id: "team-1", key: "NOX", name: "Noxor" },
+          team: { id: "team-1", key: "TEAM", name: "Example" },
         },
       ],
       pageInfo: { hasNextPage: true, endCursor: "member-cursor-1" },
     });
 
-    const result = await exploreLinearWorkspace({ path: "/teams/NOX/members", limit: 1 });
+    const result = await exploreLinearWorkspace({ path: "/teams/TEAM/members", limit: 1 });
 
     expect(result.items[0]).toMatchObject({ kind: "member", id: "user-1", name: "Agent User" });
     expect(result.next_cursor).toEqual(expect.any(String));
     expect(mocks.listTeamMembersPage).toHaveBeenCalledWith({
-      teamKey: "NOX",
+      teamKey: "TEAM",
       limit: 1,
       after: undefined,
     });
@@ -735,11 +735,11 @@ describe("exploreLinearWorkspace pagination", () => {
   it("paginates cycle issue child paths with the cycle team", async () => {
     mocks.listIssuesPage
       .mockResolvedValueOnce({
-        nodes: [issue("NOX-1")],
+        nodes: [issue("TEAM-1")],
         pageInfo: { hasNextPage: true, endCursor: "cycle-issues-cursor-1" },
       })
       .mockResolvedValueOnce({
-        nodes: [issue("NOX-2")],
+        nodes: [issue("TEAM-2")],
         pageInfo: { hasNextPage: false, endCursor: null },
       });
 
@@ -756,13 +756,13 @@ describe("exploreLinearWorkspace pagination", () => {
     });
 
     expect(first.has_more).toBe(true);
-    expect(second.items[0]).toMatchObject({ identifier: "NOX-2" });
+    expect(second.items[0]).toMatchObject({ identifier: "TEAM-2" });
     expect(mocks.getCycle).toHaveBeenCalledWith("cycle-1");
     expect(mocks.listIssuesPage).toHaveBeenNthCalledWith(
       1,
       expect.objectContaining({
-        resolvedTeam: "NOX",
-        team: "NOX",
+        resolvedTeam: "TEAM",
+        team: "TEAM",
         cycle: "cycle-1",
         includeArchived: true,
         after: undefined,
@@ -779,7 +779,7 @@ describe("exploreLinearWorkspace pagination", () => {
 
   it("paginates milestone issue child paths across teams", async () => {
     mocks.listIssuesPage.mockResolvedValueOnce({
-      nodes: [issue("NOX-1")],
+      nodes: [issue("TEAM-1")],
       pageInfo: { hasNextPage: true, endCursor: "milestone-issues-cursor-1" },
     });
 
@@ -833,7 +833,7 @@ describe("exploreLinearWorkspace search", () => {
       pageInfo: { hasNextPage: true, endCursor: "initiative-cursor-1" },
     });
     mocks.listIssuesPage.mockResolvedValueOnce({
-      nodes: [issue("NOX-1")],
+      nodes: [issue("TEAM-1")],
       pageInfo: { hasNextPage: true, endCursor: "issue-cursor-1" },
     });
 
@@ -858,7 +858,7 @@ describe("exploreLinearWorkspace search", () => {
 
   it("searches issues across all visible teams unless a team is supplied", async () => {
     mocks.listIssuesPage.mockResolvedValueOnce({
-      nodes: [issue("NOX-1")],
+      nodes: [issue("TEAM-1")],
       pageInfo: { hasNextPage: false, endCursor: null },
     });
 
@@ -893,11 +893,11 @@ describe("exploreLinearWorkspace search", () => {
     });
     mocks.listIssuesPage
       .mockResolvedValueOnce({
-        nodes: [issue("NOX-1")],
+        nodes: [issue("TEAM-1")],
         pageInfo: { hasNextPage: true, endCursor: "issue-cursor-1" },
       })
       .mockResolvedValueOnce({
-        nodes: [issue("NOX-2")],
+        nodes: [issue("TEAM-2")],
         pageInfo: { hasNextPage: false, endCursor: null },
       });
 
@@ -918,7 +918,7 @@ describe("exploreLinearWorkspace search", () => {
     expect(mocks.listIssuesPage).toHaveBeenLastCalledWith(
       expect.objectContaining({ after: "issue-cursor-1" }),
     );
-    expect(second.items).toEqual([expect.objectContaining({ kind: "issue", identifier: "NOX-2" })]);
+    expect(second.items).toEqual([expect.objectContaining({ kind: "issue", identifier: "TEAM-2" })]);
     expect(second.summary).toMatchObject({
       search: {
         project: { mode: "cursor_complete", complete: true, searched_count: 0 },
@@ -966,25 +966,25 @@ describe("exploreLinearWorkspace search", () => {
 
   it("uses the team from team child search paths", async () => {
     mocks.listIssuesPage.mockResolvedValueOnce({
-      nodes: [issue("NOX-1")],
+      nodes: [issue("TEAM-1")],
       pageInfo: { hasNextPage: false, endCursor: null },
     });
 
     const result = await exploreLinearWorkspace({
-      path: "/teams/nox/issues",
+      path: "/teams/team/issues",
       query: "alpha",
       limit: 5,
     });
 
-    expect(result.team).toBe("NOX");
+    expect(result.team).toBe("TEAM");
     expect(result.summary).toMatchObject({
       kinds: ["issue"],
-      scope: { path: "/teams/nox/issues", team: "NOX" },
+      scope: { path: "/teams/team/issues", team: "TEAM" },
     });
     expect(mocks.listIssuesPage).toHaveBeenCalledWith(
-      expect.objectContaining({ resolvedTeam: "NOX", team: "NOX", search: "alpha" }),
+      expect.objectContaining({ resolvedTeam: "TEAM", team: "TEAM", search: "alpha" }),
     );
-    expect(mocks.getTeam).toHaveBeenCalledWith("NOX");
+    expect(mocks.getTeam).toHaveBeenCalledWith("TEAM");
   });
 
   it("searches team cycle child paths", async () => {
@@ -998,28 +998,28 @@ describe("exploreLinearWorkspace search", () => {
           ends_at: "2026-06-15",
           completed_at: null,
           archived_at: null,
-          team: { id: "team-1", key: "NOX", name: "Noxor" },
+          team: { id: "team-1", key: "TEAM", name: "Example" },
         },
       ],
       pageInfo: { hasNextPage: false, endCursor: null },
     });
 
     const result = await exploreLinearWorkspace({
-      path: "/teams/nox/cycles",
+      path: "/teams/team/cycles",
       query: "alpha",
       limit: 5,
     });
 
-    expect(result.team).toBe("NOX");
+    expect(result.team).toBe("TEAM");
     expect(result.summary).toMatchObject({
       kinds: ["cycle"],
-      scope: { path: "/teams/nox/cycles", team: "NOX" },
+      scope: { path: "/teams/team/cycles", team: "TEAM" },
     });
     expect(result.items).toEqual([expect.objectContaining({ kind: "cycle", name: "Alpha Cycle" })]);
     expect(mocks.listCyclesPage).toHaveBeenCalledWith(
-      expect.objectContaining({ team: "NOX", search: "alpha", limit: 5 }),
+      expect.objectContaining({ team: "TEAM", search: "alpha", limit: 5 }),
     );
-    expect(mocks.getTeam).toHaveBeenCalledWith("NOX");
+    expect(mocks.getTeam).toHaveBeenCalledWith("TEAM");
   });
 
   it("rejects unknown team-scoped search paths before searching", async () => {
@@ -1069,13 +1069,13 @@ describe("exploreLinearWorkspace search", () => {
   });
 
   it("rejects explicit team filters for workspace-wide collection explore and search", async () => {
-    await expect(exploreLinearWorkspace({ path: "/documents", team: "NOX" })).rejects.toThrow(
+    await expect(exploreLinearWorkspace({ path: "/documents", team: "TEAM" })).rejects.toThrow(
       /team cannot be applied to \/documents/,
     );
     await expect(
-      exploreLinearWorkspace({ path: "/documents", query: "alpha", team: "NOX" }),
+      exploreLinearWorkspace({ path: "/documents", query: "alpha", team: "TEAM" }),
     ).rejects.toThrow(/team cannot be applied to document search/);
-    await expect(exploreLinearWorkspace({ query: "alpha", team: "NOX" })).rejects.toThrow(
+    await expect(exploreLinearWorkspace({ query: "alpha", team: "TEAM" })).rejects.toThrow(
       /team cannot be applied to .* search for \//,
     );
 
@@ -1085,7 +1085,7 @@ describe("exploreLinearWorkspace search", () => {
 
   it("allows explicit team search when all requested kinds support team filtering", async () => {
     mocks.listIssuesPage.mockResolvedValueOnce({
-      nodes: [issue("NOX-1")],
+      nodes: [issue("TEAM-1")],
       pageInfo: { hasNextPage: false, endCursor: null },
     });
     mocks.listCyclesPage.mockResolvedValueOnce({
@@ -1095,7 +1095,7 @@ describe("exploreLinearWorkspace search", () => {
           name: "Cycle 1",
           number: 1,
           archived_at: null,
-          team: { key: "NOX" },
+          team: { key: "TEAM" },
         },
       ],
       pageInfo: { hasNextPage: false, endCursor: null },
@@ -1103,23 +1103,23 @@ describe("exploreLinearWorkspace search", () => {
 
     const result = await exploreLinearWorkspace({
       query: "alpha",
-      team: "NOX",
+      team: "TEAM",
       kinds: ["issue", "cycle"],
     });
 
     expect(result.cursor_identity).toMatchObject({
       path: "/",
       query: "alpha",
-      team: "NOX",
+      team: "TEAM",
       all_teams: false,
       kinds: ["cycle", "issue"],
     });
-    expect(mocks.getTeam).toHaveBeenCalledWith("NOX");
+    expect(mocks.getTeam).toHaveBeenCalledWith("TEAM");
     expect(mocks.listIssuesPage).toHaveBeenCalledWith(
-      expect.objectContaining({ resolvedTeam: "NOX", team: "NOX", allTeams: false }),
+      expect.objectContaining({ resolvedTeam: "TEAM", team: "TEAM", allTeams: false }),
     );
     expect(mocks.listCyclesPage).toHaveBeenCalledWith(
-      expect.objectContaining({ team: "NOX", search: "alpha" }),
+      expect.objectContaining({ team: "TEAM", search: "alpha" }),
     );
   });
 
@@ -1161,7 +1161,7 @@ describe("exploreLinearWorkspace search", () => {
     });
     const first = await exploreLinearWorkspace({
       query: "alpha",
-      team: "NOX",
+      team: "TEAM",
       kinds: ["project"],
       limit: 1,
     });
@@ -1257,7 +1257,7 @@ describe("exploreLinearWorkspace child bounded metadata", () => {
     const teams = vi
       .fn()
       .mockResolvedValueOnce({
-        nodes: [{ id: "team-1", key: "NOX", name: "Noxor", description: null }],
+        nodes: [{ id: "team-1", key: "TEAM", name: "Example", description: null }],
         pageInfo: { hasNextPage: true, endCursor: "team-cursor-1" },
       })
       .mockResolvedValueOnce({
@@ -1283,7 +1283,7 @@ describe("exploreLinearWorkspace child bounded metadata", () => {
           name: "Cycle 1",
           number: 1,
           archived_at: null,
-          team: { key: "NOX" },
+          team: { key: "TEAM" },
         },
       ],
       pageInfo: { hasNextPage: true, endCursor: "cycle-cursor-1" },
@@ -1331,14 +1331,14 @@ describe("exploreLinearWorkspace child bounded metadata", () => {
 
   it("does not report exact-limit workflow states as truncated", async () => {
     mocks.listWorkflowStates.mockResolvedValueOnce({
-      team: "NOX",
+      team: "TEAM",
       states: [
         { id: "state-1", name: "Todo", type: "unstarted", color: null, default: true },
         { id: "state-2", name: "Done", type: "completed", color: null, default: false },
       ],
     });
 
-    const result = await exploreLinearWorkspace({ path: "/teams/NOX/states", limit: 2 });
+    const result = await exploreLinearWorkspace({ path: "/teams/TEAM/states", limit: 2 });
 
     expect(result.items).toHaveLength(2);
     expect(result.truncated).toBe(false);
@@ -1360,7 +1360,7 @@ describe("exploreLinearWorkspace child bounded metadata", () => {
 
   it("reports workflow states as bounded when the full list exceeds the limit", async () => {
     mocks.listWorkflowStates.mockResolvedValueOnce({
-      team: "NOX",
+      team: "TEAM",
       states: [
         { id: "state-1", name: "Todo", type: "unstarted", color: null, default: true },
         { id: "state-2", name: "In Progress", type: "started", color: null, default: false },
@@ -1368,7 +1368,7 @@ describe("exploreLinearWorkspace child bounded metadata", () => {
       ],
     });
 
-    const result = await exploreLinearWorkspace({ path: "/teams/NOX/states", limit: 2 });
+    const result = await exploreLinearWorkspace({ path: "/teams/TEAM/states", limit: 2 });
 
     expect(result.items.map((item) => item.id)).toEqual(["state-1", "state-2"]);
     expect(result.truncated).toBe(true);
@@ -1503,7 +1503,7 @@ describe("exploreLinearWorkspace child bounded metadata", () => {
   it("returns cursor-backed issue relation continuations", async () => {
     mocks.listRelationsPage
       .mockResolvedValueOnce({
-        outbound: [{ id: "relation-1", type: "blocks", otherIdentifier: "NOX-2" }],
+        outbound: [{ id: "relation-1", type: "blocks", otherIdentifier: "TEAM-2" }],
         inbound: [],
         complete: false,
         pageInfo: {
@@ -1512,7 +1512,7 @@ describe("exploreLinearWorkspace child bounded metadata", () => {
         },
       })
       .mockResolvedValueOnce({
-        outbound: [{ id: "relation-2", type: "related", otherIdentifier: "NOX-3" }],
+        outbound: [{ id: "relation-2", type: "related", otherIdentifier: "TEAM-3" }],
         inbound: [],
         complete: true,
         pageInfo: {
@@ -1521,7 +1521,7 @@ describe("exploreLinearWorkspace child bounded metadata", () => {
         },
       });
 
-    const first = await exploreLinearWorkspace({ path: "/issues/NOX-1/relations", limit: 10 });
+    const first = await exploreLinearWorkspace({ path: "/issues/TEAM-1/relations", limit: 10 });
 
     expect(first.has_more).toBe(true);
     expect(first.next_cursor).toEqual(expect.any(String));
@@ -1532,13 +1532,13 @@ describe("exploreLinearWorkspace child bounded metadata", () => {
     });
 
     const second = await exploreLinearWorkspace({
-      path: "/issues/NOX-1/relations",
+      path: "/issues/TEAM-1/relations",
       limit: 10,
       cursor: first.next_cursor ?? "",
     });
 
     expect(second.has_more).toBe(false);
-    expect(mocks.listRelationsPage).toHaveBeenLastCalledWith("NOX-1", {
+    expect(mocks.listRelationsPage).toHaveBeenLastCalledWith("TEAM-1", {
       first: 10,
       outboundAfter: "relation-cursor-1",
       inboundAfter: undefined,
@@ -1547,7 +1547,7 @@ describe("exploreLinearWorkspace child bounded metadata", () => {
 
   it("rejects issue relation pages that report more data without a cursor", async () => {
     mocks.listRelationsPage.mockResolvedValueOnce({
-      outbound: [{ id: "relation-1", type: "blocks", otherIdentifier: "NOX-2" }],
+      outbound: [{ id: "relation-1", type: "blocks", otherIdentifier: "TEAM-2" }],
       inbound: [],
       complete: false,
       pageInfo: {
@@ -1557,7 +1557,7 @@ describe("exploreLinearWorkspace child bounded metadata", () => {
     });
 
     await expect(
-      exploreLinearWorkspace({ path: "/issues/NOX-1/relations", limit: 10 }),
+      exploreLinearWorkspace({ path: "/issues/TEAM-1/relations", limit: 10 }),
     ).rejects.toThrow("cannot continue outbound page");
   });
 
@@ -1581,29 +1581,29 @@ describe("exploreLinearWorkspace child bounded metadata", () => {
         pageInfo: { hasNextPage: false, endCursor: null },
       });
 
-    const comments = await exploreLinearWorkspace({ path: "/issues/NOX-1/comments", limit: 1 });
+    const comments = await exploreLinearWorkspace({ path: "/issues/TEAM-1/comments", limit: 1 });
     await exploreLinearWorkspace({
-      path: "/issues/NOX-1/comments",
+      path: "/issues/TEAM-1/comments",
       limit: 1,
       cursor: comments.next_cursor ?? "",
     });
 
-    expect(mocks.listCommentsPage).toHaveBeenLastCalledWith("NOX-1", {
+    expect(mocks.listCommentsPage).toHaveBeenLastCalledWith("TEAM-1", {
       first: 1,
       after: "comment-cursor-1",
     });
 
     const attachments = await exploreLinearWorkspace({
-      path: "/issues/NOX-1/attachments",
+      path: "/issues/TEAM-1/attachments",
       limit: 1,
     });
     await exploreLinearWorkspace({
-      path: "/issues/NOX-1/attachments",
+      path: "/issues/TEAM-1/attachments",
       limit: 1,
       cursor: attachments.next_cursor ?? "",
     });
 
-    expect(mocks.listAttachmentsPage).toHaveBeenLastCalledWith("NOX-1", {
+    expect(mocks.listAttachmentsPage).toHaveBeenLastCalledWith("TEAM-1", {
       first: 1,
       after: "attachment-cursor-1",
     });

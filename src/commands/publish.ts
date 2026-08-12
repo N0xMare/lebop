@@ -1,10 +1,11 @@
 import chalk from "chalk";
 import type { Command } from "commander";
-import { envelope } from "../lib/envelope.ts";
+import { wantsMachineOutput } from "../lib/encode.ts";
 import type {
   PublishLinearChangesResult,
   ReviewLinearChangesResult,
 } from "../lib/linearPublish.ts";
+import { writeMachineEnvelope } from "../lib/output.ts";
 import {
   buildPublishApplyInputFromCli,
   buildPublishReviewInputFromCli,
@@ -20,11 +21,15 @@ interface ReviewOpts {
   team?: string;
   strict?: boolean;
   json?: boolean;
+  format?: string;
+  pretty?: boolean;
 }
 
 interface ApplyOpts {
   verify?: boolean;
   json?: boolean;
+  format?: string;
+  pretty?: boolean;
 }
 
 export function registerPublish(program: Command): void {
@@ -49,11 +54,18 @@ export function registerPublish(program: Command): void {
     )
     .option("--team <key>", "override the resolved team")
     .option("--strict", "treat lint warnings as blockers")
-    .option("--json", "emit structured result")
+    .option("--json", "machine output (default; TOON)")
+    .option("--format <fmt>", "toon | json | pretty")
+    .option("--pretty", "pretty-printed JSON")
+    .option("--human", "maintainer/dev chalk tables (opt-in; not agent path; bodies uncapped)")
     .action(async (ids: string[], opts: ReviewOpts) => {
       const result = await executePublishReview(buildPublishReviewInputFromCli({ ids, opts }));
-      if (opts.json) {
-        process.stdout.write(`${JSON.stringify(envelope({ ...result }), null, 2)}\n`);
+      if (wantsMachineOutput(opts)) {
+        writeMachineEnvelope({ ...result } as Record<string, unknown>, {
+          json: true,
+          format: opts.format,
+          pretty: opts.pretty,
+        });
       } else {
         printReview(result);
       }
@@ -64,11 +76,18 @@ export function registerPublish(program: Command): void {
     .command("apply <review-id>")
     .description("publish a stored review and verify the resulting remote state")
     .option("--no-verify", "skip post-publish plan diff verification")
-    .option("--json", "emit structured result")
+    .option("--json", "machine output (default; TOON)")
+    .option("--format <fmt>", "toon | json | pretty")
+    .option("--pretty", "pretty-printed JSON")
+    .option("--human", "maintainer/dev chalk tables (opt-in; not agent path; bodies uncapped)")
     .action(async (reviewId: string, opts: ApplyOpts) => {
       const result = await executePublishApply(buildPublishApplyInputFromCli({ reviewId, opts }));
-      if (opts.json) {
-        process.stdout.write(`${JSON.stringify(envelope({ ...result }), null, 2)}\n`);
+      if (wantsMachineOutput(opts)) {
+        writeMachineEnvelope({ ...result } as Record<string, unknown>, {
+          json: true,
+          format: opts.format,
+          pretty: opts.pretty,
+        });
       } else {
         printApply(result);
       }
@@ -99,11 +118,15 @@ function printReview(result: ReviewLinearChangesResult): void {
     `\nwarnings: ${result.summary.warnings} · drift: ${result.summary.drift ? "yes" : "no"}\n`,
   );
   if (result.ready) {
-    const next = result.next;
-    if (!next) return;
-    process.stdout.write(
-      `next: lebop --workspace ${next.arguments.workspace} publish apply ${result.review_id}\n`,
-    );
+    const call = result.next_call;
+    const ws = call?.arguments.workspace;
+    if (ws) {
+      process.stdout.write(
+        `next: lebop --workspace ${ws} publish apply ${result.review_id}\n`,
+      );
+    } else if (result.next?.[0]) {
+      process.stdout.write(`next: ${result.next[0]}\n`);
+    }
   }
 }
 

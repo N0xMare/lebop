@@ -2,13 +2,13 @@ import { describe, expect, it } from "vitest";
 import { envelope, SCHEMA_VERSION } from "../src/lib/envelope.ts";
 
 describe("envelope()", () => {
-  it("returns a new object with schema_version: 1 plus the payload fields", () => {
+  it("returns a new object with schema_version: 2 plus the payload fields", () => {
     const out = envelope({ count: 3, items: ["a", "b", "c"] });
-    expect(out).toEqual({ schema_version: 1, count: 3, items: ["a", "b", "c"] });
+    expect(out).toEqual({ schema_version: 2, count: 3, items: ["a", "b", "c"] });
   });
 
   it("uses the SCHEMA_VERSION constant (single source of truth)", () => {
-    expect(SCHEMA_VERSION).toBe(1);
+    expect(SCHEMA_VERSION).toBe(2);
     const out = envelope({ x: 1 });
     expect(out.schema_version).toBe(SCHEMA_VERSION);
   });
@@ -19,29 +19,29 @@ describe("envelope()", () => {
     expect(Object.keys(payload)).toEqual(["issue"]);
     // out is a fresh object, payload didn't gain `schema_version`.
     expect((payload as Record<string, unknown>).schema_version).toBeUndefined();
-    expect(out.schema_version).toBe(1);
+    expect(out.schema_version).toBe(2);
   });
 
   it("serializes schema_version FIRST so head/tail tooling can spot-check the version", () => {
     // Field ordering is contractually first-position via the explicit
     // schema_version line in envelope().
     const json = JSON.stringify(envelope({ z: "z", a: "a" }));
-    expect(json.startsWith('{"schema_version":1')).toBe(true);
+    expect(json.startsWith('{"schema_version":2')).toBe(true);
   });
 
   it("supports an empty payload", () => {
-    expect(envelope({})).toEqual({ schema_version: 1 });
+    expect(envelope({})).toEqual({ schema_version: 2 });
   });
 
   it("preserves nested values verbatim", () => {
     const out = envelope({
       results: [
-        { identifier: "NOX-1", status: "ok" },
-        { identifier: "NOX-2", status: "not-found" as const },
+        { identifier: "TEAM-1", status: "ok" },
+        { identifier: "TEAM-2", status: "not-found" as const },
       ],
     });
     expect(out.results).toHaveLength(2);
-    expect(out.results[0]).toEqual({ identifier: "NOX-1", status: "ok" });
+    expect(out.results[0]).toEqual({ identifier: "TEAM-1", status: "ok" });
   });
 
   it("payload fields can shadow nothing — schema_version cannot collide", () => {
@@ -50,8 +50,8 @@ describe("envelope()", () => {
       unknown
     >;
     const out = envelope(payload);
-    expect(out.schema_version).toBe(1);
-    expect(out).toEqual({ schema_version: 1, count: 0 });
+    expect(out.schema_version).toBe(2);
+    expect(out).toEqual({ schema_version: 2, count: 0 });
     expect(payload.schema_version).toBe(99);
   });
 
@@ -66,7 +66,7 @@ describe("envelope()", () => {
       },
     );
     expect(out).toEqual({
-      schema_version: 1,
+      schema_version: 2,
       count: 1,
       _meta: {
         linear_api: {
@@ -82,7 +82,7 @@ describe("envelope()", () => {
       string,
       unknown
     >);
-    expect(out).toEqual({ schema_version: 1, count: 1 });
+    expect(out).toEqual({ schema_version: 2, count: 1 });
   });
 
   it("works with a heterogeneous payload (string + boolean + null + object)", () => {
@@ -93,7 +93,7 @@ describe("envelope()", () => {
       issue: { id: "uuid-1" },
     });
     expect(out).toMatchObject({
-      schema_version: 1,
+      schema_version: 2,
       identifier: "UE-359",
       success: true,
       error: null,
@@ -107,7 +107,7 @@ describe("envelope()", () => {
     const result = { dry_run: true, removed: 2, candidates: ["a", "b"] };
     const out = envelope({ dir: "/tmp/p", ...result });
     expect(out).toEqual({
-      schema_version: 1,
+      schema_version: 2,
       dir: "/tmp/p",
       dry_run: true,
       removed: 2,

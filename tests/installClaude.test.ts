@@ -15,6 +15,23 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+const SKILL_INSTALLS = [
+  { rel: join("cli", "lebop"), name: "lebop-cli" },
+  { rel: join("cli", "lebop-program"), name: "lebop-cli-program" },
+  { rel: join("cli", "lebop-execution"), name: "lebop-cli-execution" },
+  { rel: join("mcp", "lebop"), name: "lebop-mcp" },
+  { rel: join("mcp", "lebop-program"), name: "lebop-mcp-program" },
+  { rel: join("mcp", "lebop-execution"), name: "lebop-mcp-execution" },
+] as const;
+
+const COMMANDS = [
+  "lebop-research.md",
+  "lebop-pull.md",
+  "lebop-push.md",
+  "lebop-publish.md",
+  "lebop-lint.md",
+] as const;
+
 describe("bin/install-claude", () => {
   let claudeHome: string;
 
@@ -26,8 +43,8 @@ describe("bin/install-claude", () => {
     rmSync(claudeHome, { recursive: true, force: true });
   });
 
-  it("moves an existing real skill directory aside before symlinking", () => {
-    const skillDir = join(claudeHome, "skills", "lebop");
+  it("installs all six medium/role skills and slash commands", () => {
+    const skillDir = join(claudeHome, "skills", "lebop-cli");
     mkdirSync(skillDir, { recursive: true });
     writeFileSync(join(skillDir, "SKILL.md"), "legacy skill\n");
 
@@ -39,44 +56,98 @@ describe("bin/install-claude", () => {
     expect(lstatSync(skillDir).isSymbolicLink()).toBe(true);
 
     const backups = readdirSync(join(claudeHome, "skills")).filter((name) =>
-      name.startsWith("lebop.backup-"),
+      name.startsWith("lebop-cli.backup-"),
     );
     expect(backups).toHaveLength(1);
-    const backupSkill = join(claudeHome, "skills", backups[0] as string, "SKILL.md");
-    expect(readFileSync(backupSkill, "utf8")).toBe("legacy skill\n");
+    expect(readFileSync(join(claudeHome, "skills", backups[0] as string, "SKILL.md"), "utf8")).toBe(
+      "legacy skill\n",
+    );
 
-    for (const name of [
-      "lebop-research.md",
-      "lebop-pull.md",
-      "lebop-push.md",
-      "lebop-publish.md",
-      "lebop-lint.md",
-    ]) {
+    for (const { rel, name } of SKILL_INSTALLS) {
+      const skill = join(claudeHome, "skills", name);
+      expect(existsSync(skill), `${name} was not installed`).toBe(true);
+      expect(lstatSync(skill).isSymbolicLink(), `${name} is not a symlink`).toBe(true);
+      expect(readlinkSync(skill)).toBe(join(process.cwd(), "agents", "skills", rel));
+    }
+
+    for (const name of COMMANDS) {
       const command = join(claudeHome, "commands", name);
       expect(existsSync(command), `${name} was not installed`).toBe(true);
       expect(lstatSync(command).isSymbolicLink(), `${name} is not a symlink`).toBe(true);
     }
   });
 
-  it("advertises the full Linear research surface in skill trigger metadata", () => {
-    const skill = readFileSync(
-      join(process.cwd(), "agents", "skills", "lebop", "SKILL.md"),
-      "utf8",
-    );
-    const description = skill.match(/^description:\s*(.+)$/m)?.[1] ?? "";
+  it("ships exactly six isolated skills with matching frontmatter names", () => {
+    const skillsRoot = join(process.cwd(), "agents", "skills");
+    const found: { path: string; name: string; body: string }[] = [];
 
-    for (const term of [
-      "workspace research",
-      "explore/fetch",
-      "initiatives",
-      "milestones",
-      "cycles",
-      "documents",
-      "agent sessions",
-      "reviewed publish",
-      "CLI/MCP",
-    ]) {
-      expect(description.toLowerCase()).toContain(term.toLowerCase());
+    for (const medium of ["cli", "mcp"] as const) {
+      const mediumDir = join(skillsRoot, medium);
+      expect(existsSync(mediumDir), `missing medium ${medium}`).toBe(true);
+      for (const role of readdirSync(mediumDir)) {
+        const skillMd = join(mediumDir, role, "SKILL.md");
+        if (!existsSync(skillMd)) continue;
+        const body = readFileSync(skillMd, "utf8");
+        const name = body.match(/^name:\s*(.+)$/m)?.[1]?.trim();
+        expect(name, `${medium}/${role} missing name:`).toBeTruthy();
+        found.push({ path: `${medium}/${role}`, name: name as string, body });
+      }
+    }
+
+    expect(found.map((f) => f.name).sort()).toEqual(
+      [
+        "lebop-cli",
+        "lebop-cli-execution",
+        "lebop-cli-program",
+        "lebop-mcp",
+        "lebop-mcp-execution",
+        "lebop-mcp-program",
+      ].sort(),
+    );
+
+    // No references/ progressive disclosure dirs
+    expect(existsSync(join(skillsRoot, "cli", "lebop", "references"))).toBe(false);
+    expect(existsSync(join(skillsRoot, "mcp", "lebop", "references"))).toBe(false);
+
+    for (const f of found) {
+      expect(f.body).toMatch(/^---\nname:\s/m);
+      expect(f.body).toMatch(/^description:\s/m);
+      // Isolation: no cross-skill path links
+      expect(f.body).not.toMatch(/\.\.\/(lebop|cli|mcp)\//);
+      expect(f.body).not.toMatch(/agents\/skills\//);
+      expect(f.body).not.toMatch(/references\//);
+    }
+
+    const allNames = found.map((f) => f.name);
+    const mentionsInstallName = (body: string, name: string) =>
+      new RegExp(`(?<![A-Za-z0-9-])${name.replace(/-/g, "\\-")}(?![A-Za-z0-9-])`).test(body);
+    // Medium purity + isolation: no peer skill install-name references; CLI ≠ MCP inventory
+    for (const f of found) {
+      for (const other of allNames) {
+        if (other === f.name) continue;
+        expect(
+          mentionsInstallName(f.body, other),
+          `${f.name} must not reference peer skill ${other}`,
+        ).toBe(false);
+      }
+    }
+    for (const f of found.filter((x) => x.name.startsWith("lebop-cli"))) {
+      expect(f.body.toLowerCase()).toMatch(/cli/);
+      expect(f.body).not.toMatch(/explore_linear_workspace/);
+    }
+    for (const f of found.filter((x) => x.name.startsWith("lebop-mcp"))) {
+      expect(f.body.toLowerCase()).toMatch(/mcp/);
+      expect(f.body).not.toMatch(/```sh\s*\nlebop /);
+    }
+  });
+
+  it("advertises research surface in CLI and MCP monolith descriptions", () => {
+    for (const rel of [join("cli", "lebop"), join("mcp", "lebop")]) {
+      const skill = readFileSync(join(process.cwd(), "agents", "skills", rel, "SKILL.md"), "utf8");
+      const description = skill.match(/^description:\s*(.+)$/m)?.[1] ?? "";
+      for (const term of ["Linear", "explore", "publish", "Personal API key"]) {
+        expect(description.toLowerCase()).toContain(term.toLowerCase());
+      }
     }
   });
 

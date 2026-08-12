@@ -1,3 +1,4 @@
+import { SURFACE_OPERATIONS } from "../../surface/index.ts";
 import { registerMcpToolSpecs } from "../adapter.ts";
 import type { McpServerLike, McpToolSpec } from "../types.ts";
 import { type AgentSessionToolDeps, buildAgentSessionsToolSpecs } from "./agent-sessions.ts";
@@ -5,6 +6,7 @@ import { type AttachmentToolDeps, buildAttachmentsToolSpecs } from "./attachment
 import { type AuthToolDeps, buildAuthToolSpecs } from "./auth.ts";
 import { buildCacheToolSpecs, type CacheToolDeps } from "./cache.ts";
 import { buildCommentToolSpecs, type CommentToolDeps } from "./comments.ts";
+import { buildCoverageToolSpecs, type CoverageToolDeps } from "./coverage.ts";
 import { buildCyclesToolSpecs, type CycleToolDeps } from "./cycles.ts";
 import { buildDocumentToolSpecs, type DocumentToolDeps } from "./documents.ts";
 import {
@@ -49,6 +51,7 @@ export interface RegisterAllMcpToolsDeps {
   projectUpdates: ProjectUpdateToolDeps;
   initiatives: InitiativeToolDeps;
   initiativeUpdates: InitiativeUpdateToolDeps;
+  coverage: CoverageToolDeps;
   cycles: CycleToolDeps;
   documents: DocumentToolDeps;
   agentSessions: AgentSessionToolDeps;
@@ -65,11 +68,13 @@ export interface RegisterAllMcpToolsDeps {
 }
 
 /**
- * Stable pre-modularization registration order (85 tools).
- * Some domain builders emit tools that historically sat in different slots;
- * we re-order by name here so runtime inventory order is frozen.
+ * Historical interleave order lock (stable client-facing registration order).
+ * **Inventory authority is SURFACE_OPERATIONS** — this list must be a
+ * permutation of surface-derived MCP tool names (validated at boot + in tests).
+ * New tools: add to surface + builder, then append here only if intentional slot
+ * matters; otherwise they fail closed until listed.
  */
-const MCP_REGISTRATION_ORDER = [
+const MCP_REGISTRATION_ORDER_LOCK = [
   // workspace
   "explore_linear_workspace",
   "fetch_linear_workspace",
@@ -94,7 +99,7 @@ const MCP_REGISTRATION_ORDER = [
   "get_project",
   "create_project",
   "update_project",
-  "delete_project",
+  "soft_delete_project",
   // after projects
   "list_project_updates",
   "create_project_update",
@@ -104,18 +109,21 @@ const MCP_REGISTRATION_ORDER = [
   "update_initiative",
   "archive_initiative",
   "unarchive_initiative",
-  "delete_initiative",
+  "soft_delete_initiative",
   "initiative_add_project",
   "initiative_remove_project",
   "list_initiative_updates",
   "create_initiative_update",
   "list_cycles",
   "get_cycle",
+  "create_cycle",
+  "update_cycle",
+  "archive_cycle",
   "list_documents",
   "get_document",
   "create_document",
   "update_document",
-  "delete_document",
+  "soft_delete_document",
   "list_agent_sessions",
   "get_agent_session",
   "list_team_members",
@@ -169,7 +177,69 @@ const MCP_REGISTRATION_ORDER = [
   "list_workflow_states",
   // last (was post-registerAllMcpTools)
   "lint_files",
+  // 0.0.6 coverage (search, history, views, custom fields)
+  "search_linear",
+  "list_issue_history",
+  "list_views",
+  "get_view",
+  "create_view",
+  "update_view",
+  "delete_view",
+  "materialize_view",
+  "list_custom_fields",
+  "get_issue_custom_fields",
+  "set_issue_custom_field",
+  "update_label",
+  "update_project_update",
+  "soft_delete_project_update",
+  "update_initiative_update",
+  "soft_delete_initiative_update",
 ] as const;
+
+/**
+ * Unique MCP tool names declared on SURFACE_OPERATIONS (L2 inventory).
+ * Alias ops may share one tool name (e.g. list/mine → list_issues); set size
+ * is the registered inventory.
+ */
+export function surfaceMcpToolNames(): string[] {
+  const seen = new Set<string>();
+  const names: string[] = [];
+  for (const op of SURFACE_OPERATIONS) {
+    const tool = (op as { mcp?: { tool?: string } }).mcp?.tool;
+    if (typeof tool === "string" && tool.length > 0 && !seen.has(tool)) {
+      seen.add(tool);
+      names.push(tool);
+    }
+  }
+  return names;
+}
+
+/**
+ * Derive registration order: lock list validated as a permutation of surface
+ * MCP tools (set equality). Order remains the frozen lock for client stability.
+ */
+export function deriveMcpRegistrationOrder(
+  lock: readonly string[] = MCP_REGISTRATION_ORDER_LOCK,
+): readonly string[] {
+  const fromSurface = new Set(surfaceMcpToolNames());
+  const fromLock = new Set(lock);
+  const missingFromLock = [...fromSurface].filter((n) => !fromLock.has(n)).sort();
+  const extraInLock = [...fromLock].filter((n) => !fromSurface.has(n)).sort();
+  if (missingFromLock.length > 0 || extraInLock.length > 0) {
+    const parts: string[] = [];
+    if (missingFromLock.length > 0) {
+      parts.push(`surface tools missing from order lock: ${missingFromLock.join(", ")}`);
+    }
+    if (extraInLock.length > 0) {
+      parts.push(`order lock tools not on surface: ${extraInLock.join(", ")}`);
+    }
+    throw new Error(`MCP registration order drift vs SURFACE_OPERATIONS — ${parts.join("; ")}`);
+  }
+  if (fromLock.size !== lock.length) {
+    throw new Error("MCP registration order lock contains duplicate tool names");
+  }
+  return lock;
+}
 
 function orderSpecs(specs: readonly McpToolSpec[], order: readonly string[]): McpToolSpec[] {
   const byName = new Map(specs.map((spec) => [spec.name, spec]));
@@ -228,7 +298,8 @@ export function registerAllMcpTools(server: McpServerLike, deps: RegisterAllMcpT
     ...buildAttachmentsToolSpecs(deps.attachments),
     ...buildLookupToolSpecs(deps.lookups),
     ...buildIssueBulkToolSpecs(deps.issues),
+    ...buildCoverageToolSpecs(deps.coverage),
   ];
 
-  registerMcpToolSpecs(server, orderSpecs(specs, MCP_REGISTRATION_ORDER));
+  registerMcpToolSpecs(server, orderSpecs(specs, deriveMcpRegistrationOrder()));
 }

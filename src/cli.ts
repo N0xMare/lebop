@@ -8,9 +8,14 @@ import { registerBulk } from "./commands/bulk.ts";
 import { registerCache } from "./commands/cache.ts";
 import { registerComment } from "./commands/comment.ts";
 import { registerCompletions } from "./commands/completions.ts";
+import { registerCustomField } from "./commands/custom-field.ts";
+import { registerNotifications } from "./commands/notifications.ts";
 import { registerCycle } from "./commands/cycle.ts";
 import { registerDiff } from "./commands/diff.ts";
 import { registerDocument } from "./commands/document.ts";
+import { registerHelp } from "./commands/help.ts";
+import { registerHistory } from "./commands/history.ts";
+import { runHome } from "./commands/home.ts";
 import { registerInitiative } from "./commands/initiative.ts";
 import { registerInitiativeUpdate } from "./commands/initiative-update.ts";
 import { registerLabel } from "./commands/label.ts";
@@ -32,16 +37,21 @@ import { registerPush } from "./commands/push.ts";
 import { registerRaw } from "./commands/raw.ts";
 import { registerRelation } from "./commands/relation.ts";
 import { registerSchema } from "./commands/schema.ts";
+import { registerSearch } from "./commands/search.ts";
 import { registerSet } from "./commands/set.ts";
 import { registerShow } from "./commands/show.ts";
 import { registerStatus } from "./commands/status.ts";
 import { registerTeam } from "./commands/team.ts";
 import { registerTeams } from "./commands/teams.ts";
 import { registerUnarchive } from "./commands/unarchive.ts";
+import { registerUpdate } from "./commands/update.ts";
+import { registerView } from "./commands/view.ts";
 import { registerWorkspace } from "./commands/workspace.ts";
+import { formatCommanderHelp } from "./lib/agentHelp.ts";
 import { preprocessSetArgv } from "./lib/argvPrep.ts";
-import { SCHEMA_VERSION } from "./lib/envelope.ts";
+import { encodeErrorEnvelope } from "./lib/encode.ts";
 import { LebopError } from "./lib/errors.ts";
+import { resolveWorkspaceSlugForState, UNSET_WORKSPACE_SLUG } from "./lib/paths.ts";
 import { runWithRequestContext, setRequestOverrides } from "./lib/requestContext.ts";
 import { LEBOP_VERSION } from "./lib/version.ts";
 
@@ -51,10 +61,13 @@ import { LEBOP_VERSION } from "./lib/version.ts";
 // top-level catch otherwise. Reset on each `run()` call so test harnesses that
 // re-invoke the CLI in the same process do not leak state.
 let _wantsJsonError = false;
+/** Argv for the current `run()` call — used by error-envelope format resolution. */
+let _runArgv: string[] = [];
 let _restoreParserStderr: (() => void) | null = null;
 
 export async function run(rawArgv: string[]): Promise<void> {
   _wantsJsonError = false;
+  _runArgv = [];
   restoreParserStderr();
   // Enforce NO_COLOR precedence per no-color.org. Chalk honors FORCE_COLOR
   // over NO_COLOR by default, so hard-disable chalk when NO_COLOR is set even
@@ -64,7 +77,9 @@ export async function run(rawArgv: string[]): Promise<void> {
   }
 
   const argv = preprocessSetArgv(rawArgv);
-  _wantsJsonError = argvRequestsJson(argv);
+  _runArgv = argv;
+  // Agent product: structured machine errors by default; opt out with --human / LEBOP_HUMAN.
+  _wantsJsonError = !argvWantsHuman(argv);
   if (_wantsJsonError) _restoreParserStderr = silenceStderr();
   const program = buildCliProgram();
 
@@ -72,30 +87,20 @@ export async function run(rawArgv: string[]): Promise<void> {
     await runWithRequestContext({}, () => program.parseAsync(argv));
     restoreParserStderr();
   } catch (err) {
-    // If the failing command was running in `--json` mode, emit the structured
-    // envelope on stdout so the caller's JSON parser gets a parseable payload
-    // instead of chalk-formatted human prose. Errors thrown before the
-    // preAction hook ran keep the human path since `_wantsJsonError` is false.
+    // Agent-first: structured error envelopes on stdout by default.
     if (_wantsJsonError) {
       restoreParserStderr();
-      const payload =
+      const error =
         err instanceof LebopError
           ? {
-              ok: false,
-              schema_version: SCHEMA_VERSION,
-              error: {
-                code: err.code,
-                message: err.message,
-                hint: err.hint,
-                ...(err.details ? { details: err.details } : {}),
-              },
+              code: err.code,
+              message: err.message,
+              hint: err.hint,
+              ...(err.details ? { details: err.details } : {}),
             }
-          : {
-              ok: false,
-              schema_version: SCHEMA_VERSION,
-              error: { code: "unknown", message: (err as Error).message ?? String(err) },
-            };
-      process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+          : { code: "unknown", message: (err as Error).message ?? String(err) };
+      const errFormat = resolveMachineErrorFormat(_runArgv);
+      process.stdout.write(`${encodeErrorEnvelope(error, { format: errFormat })}\n`);
       process.exit(1);
     }
     restoreParserStderr();
@@ -132,7 +137,7 @@ export function buildCliProgram(): Command {
 
   program
     .name("lebop")
-    .description("agentic Linear CLI — pull/edit/push loop for coding agents")
+    .description("agentic Linear CLI — dense agent control plane over Linear")
     .version(LEBOP_VERSION)
     .option(
       "--workspace <slug>",
@@ -156,19 +161,36 @@ export function buildCliProgram(): Command {
         workspace?: string;
         team?: string;
         json?: boolean;
+        format?: string;
+        pretty?: boolean;
+        human?: boolean;
       };
-      const ws = (leafOpts.workspace ?? (rootOpts.workspace as string | undefined)) as
+      const explicitWs = (leafOpts.workspace ?? (rootOpts.workspace as string | undefined)) as
         | string
         | undefined;
       const team = (leafOpts.team ?? (rootOpts.team as string | undefined)) as string | undefined;
+      // Lane 3: when no explicit --workspace, resolve auth.default / single-ws into
+      // request context so cache/context paths match API workspace selection.
+      let ws = explicitWs;
+      if (!ws) {
+        try {
+          const resolved = resolveWorkspaceSlugForState(undefined);
+          if (resolved !== UNSET_WORKSPACE_SLUG) ws = resolved;
+        } catch {
+          // fail-closed multi-ws will throw later at path resolve; leave unset here
+        }
+      }
       setRequestOverrides({ workspace: ws, team });
       restoreParserStderr();
-      // Capture per-command `--json` from the leaf subcommand so the top-level
-      // catch formats LebopError as a structured envelope instead of chalk
-      // prose. `--json` lives on individual subcommands, not the root.
-      if (leafOpts.json !== undefined) _wantsJsonError = Boolean(leafOpts.json);
+      // Agent default: machine errors. Only flip off for explicit human mode.
+      if (leafOpts.human === true) _wantsJsonError = false;
+      else if (leafOpts.json === true || leafOpts.format || leafOpts.pretty) _wantsJsonError = true;
     })
-    .showHelpAfterError()
+    // Agent product: never dump human Commander manpages after errors.
+    .showHelpAfterError(false)
+    .configureHelp({
+      formatHelp: (cmd) => formatCommanderHelp(cmd),
+    })
     .configureOutput({
       writeErr: (str) => {
         if (!_wantsJsonError) process.stderr.write(str);
@@ -192,26 +214,30 @@ export function buildCliProgram(): Command {
       }
       const isUsageError = isCommanderUsageError(err.code);
       if (isUsageError) {
-        if (_wantsJsonError) {
-          restoreParserStderr();
-          process.stdout.write(
-            `${JSON.stringify(
-              {
-                ok: false,
-                schema_version: SCHEMA_VERSION,
-                error: {
-                  code: "invalid_arguments",
-                  message: err.message,
-                  hint: "run the command with --help to see accepted arguments",
-                },
-              },
-              null,
-              2,
-            )}\n`,
-          );
+        restoreParserStderr();
+        if (argvWantsHuman(_runArgv)) {
+          process.stderr.write(`${err.message}\n`);
           process.exit(2);
         }
-        process.stderr.write(`${err.message}\n`);
+        const unknownCmd =
+          err.message.match(/unknown command ['"]([^'"]+)['"]/i)?.[1] ??
+          err.message.match(/got \d+:\s*([^\s.]+)/i)?.[1];
+        const suggestions = unknownCmd ? suggestCommandNames(program, unknownCmd) : [];
+        const message =
+          unknownCmd && /too many arguments/i.test(err.message)
+            ? `unknown command '${unknownCmd}'`
+            : err.message;
+        process.stdout.write(
+          `${encodeErrorEnvelope(
+            {
+              code: "invalid_arguments",
+              message,
+              hint: "run `lebop help` for the dense catalog",
+              ...(suggestions.length ? { details: { did_you_mean: suggestions } } : {}),
+            },
+            { format: resolveMachineErrorFormat(_runArgv) },
+          )}\n`,
+        );
         process.exit(2);
       }
       // Any other CommanderError shape: re-throw so the top-level catch
@@ -219,10 +245,16 @@ export function buildCliProgram(): Command {
       throw err;
     });
 
+  registerHelp(program);
   registerAuth(program);
 
   registerList(program);
   registerMine(program);
+  registerSearch(program);
+  registerHistory(program);
+  registerView(program);
+  registerCustomField(program);
+  registerNotifications(program);
   registerProjects(program);
   registerProject(program);
   registerProjectUpdate(program);
@@ -263,8 +295,43 @@ export function buildCliProgram(): Command {
 
   registerSchema(program);
   registerRaw(program);
+  registerUpdate(program);
   registerMcp(program);
   registerCompletions(program);
+
+  // AXI content-first + agent-only: bare `lebop` is always dense machine home (TOON).
+  // Do NOT put --json/--format on the root program — they collide with leaf
+  // subcommand flags (commander binds them to root and leaves never see them).
+  // Home format: LEBOP_MACHINE_FORMAT; offline: --offline or LEBOP_HOME_OFFLINE=1.
+  program
+    .option("--offline", "home without Linear API (no mine list)")
+    .allowExcessArguments(false)
+    .action(async (opts: { offline?: boolean }, cmd: Command) => {
+      // Unknown tokens on bare `lebop` surface as excess args — emit dense error + suggestions.
+      const excess = (cmd.args ?? []).filter((a) => typeof a === "string" && a.length > 0);
+      if (excess.length > 0) {
+        const token = String(excess[0]);
+        const suggestions = suggestCommandNames(program, token);
+        process.stdout.write(
+          `${encodeErrorEnvelope(
+            {
+              code: "invalid_arguments",
+              message: `unknown command '${token}'`,
+              hint: "run `lebop help` for the dense catalog",
+              ...(suggestions.length ? { details: { did_you_mean: suggestions } } : {}),
+            },
+            { format: resolveMachineErrorFormat(_runArgv) },
+          )}\n`,
+        );
+        process.exitCode = 2;
+        return;
+      }
+      await runHome({
+        json: true,
+        format: process.env.LEBOP_MACHINE_FORMAT,
+        offline: opts.offline || process.env.LEBOP_HOME_OFFLINE === "1",
+      });
+    });
 
   return program;
 }
@@ -276,10 +343,58 @@ function isCommanderUsageError(code: string): boolean {
     code === "commander.missingArgument" ||
     code === "commander.missingMandatoryOptionValue" ||
     code === "commander.optionMissingArgument" ||
-    code === "commander.invalidArgument"
+    code === "commander.invalidArgument" ||
+    code === "commander.excessArguments"
   );
 }
 
-function argvRequestsJson(argv: string[]): boolean {
-  return argv.some((arg) => arg === "--json" || arg.startsWith("--json="));
+function argvWantsHuman(argv: string[]): boolean {
+  if (process.env.LEBOP_HUMAN === "1" || process.env.LEBOP_HUMAN === "true") return true;
+  return argv.some((arg) => arg === "--human" || arg.startsWith("--human="));
+}
+
+/** Dense did-you-mean for unknown top-level commands. */
+function suggestCommandNames(program: Command, unknown: string, limit = 5): string[] {
+  const names = program.commands.map((c) => c.name()).filter(Boolean);
+  const u = unknown.toLowerCase();
+  const scored = names
+    .map((n) => {
+      const nl = n.toLowerCase();
+      let score = 0;
+      if (nl === u) score = 100;
+      else if (nl.startsWith(u) || u.startsWith(nl)) score = 80;
+      else if (nl.includes(u) || u.includes(nl)) score = 50;
+      else {
+        // cheap edit distance bound
+        let d = 0;
+        const a = nl;
+        const b = u;
+        const m = Math.max(a.length, b.length);
+        for (let i = 0; i < m; i++) if (a[i] !== b[i]) d++;
+        score = Math.max(0, 40 - d * 8);
+      }
+      return { n, score };
+    })
+    .filter((x) => x.score > 0)
+    .sort((a, b) => b.score - a.score);
+  return scored.slice(0, limit).map((x) => x.n);
+}
+
+/** Resolve error-envelope format from argv flags, then LEBOP_MACHINE_FORMAT, else TOON. */
+function resolveMachineErrorFormat(argv: string[]): "toon" | "json" | "pretty" {
+  if (argv.includes("--pretty")) return "pretty";
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i] ?? "";
+    if (arg.startsWith("--format=")) {
+      const v = arg.slice("--format=".length);
+      if (v === "json" || v === "pretty" || v === "toon") return v;
+    }
+    if (arg === "--format") {
+      const v = argv[i + 1];
+      if (v === "json" || v === "pretty" || v === "toon") return v;
+    }
+  }
+  if (process.env.LEBOP_MACHINE_FORMAT === "json") return "json";
+  if (process.env.LEBOP_MACHINE_FORMAT === "pretty") return "pretty";
+  return "toon";
 }

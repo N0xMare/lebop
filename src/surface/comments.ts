@@ -298,6 +298,7 @@ export const commentListOperation = {
   },
   mcp: {
     tool: "list_comments",
+      profile: "core",
     title: "List comments on an issue",
     description: "Returns all comments on the given issue, chronologically.",
     annotations: {
@@ -306,7 +307,6 @@ export const commentListOperation = {
       idempotentHint: true,
       openWorldHint: true,
     },
-    inputSchemaKeys: ["identifier", "workspace"],
   },
   safety: { readOnly: true, destructive: false, idempotent: true, openWorld: true },
   notes: "CLI --json uses envelope key `issue`; MCP uses `identifier`. Adapter payload shape only.",
@@ -333,6 +333,7 @@ export const commentAddOperation = {
   },
   mcp: {
     tool: "add_comment",
+      profile: "core",
     title: "Add a comment to an issue",
     description: "Posts one comment. NOT retry-wrapped — would post a duplicate.",
     annotations: {
@@ -342,7 +343,6 @@ export const commentAddOperation = {
       idempotentHint: false,
       openWorldHint: true,
     },
-    inputSchemaKeys: ["identifier", "body", "parent_id", "repo_root", "workspace"],
   },
   safety: { readOnly: false, destructive: false, idempotent: false, openWorld: true },
   fromCli: buildCommentAddInputFromCli,
@@ -376,7 +376,6 @@ export const commentUpdateOperation = {
       idempotentHint: true,
       openWorldHint: true,
     },
-    inputSchemaKeys: ["id", "body", "repo_root", "workspace"],
   },
   safety: { readOnly: false, destructive: false, idempotent: true, openWorld: true },
   fromCli: buildCommentUpdateInputFromCli,
@@ -412,7 +411,6 @@ export const commentDeleteOperation = {
       idempotentHint: true,
       openWorldHint: true,
     },
-    inputSchemaKeys: ["id", "confirm", "repo_root", "workspace"],
   },
   safety: {
     readOnly: false,

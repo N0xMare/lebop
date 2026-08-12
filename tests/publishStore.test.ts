@@ -139,21 +139,21 @@ describe("publish review store safety", () => {
         kind: "cache",
         repo_hash: "repo123",
         repo_root: "/tmp/repo",
-        identifiers: ["NOX-1"],
+        identifiers: ["TEAM-1"],
         project_ids: ["00000000-0000-4000-8000-000000000001"],
       },
       requestedSource: {
         kind: "cache",
         repo_hash: "repo123",
         repo_root: "/tmp/repo",
-        identifiers: ["NOX-1", "NOX-2"],
+        identifiers: ["TEAM-1", "TEAM-2"],
         project_ids: ["00000000-0000-4000-8000-000000000001"],
         all_modified: true,
       },
-      team: "NOX",
+      team: "TEAM",
       contentHash: "0".repeat(64),
       remoteSnapshot: {
-        issues: [{ identifier: "NOX-1", id: "issue-1", updated_at: "2026-06-04T00:00:00.000Z" }],
+        issues: [{ identifier: "TEAM-1", id: "issue-1", updated_at: "2026-06-04T00:00:00.000Z" }],
         projects: [
           { id: "00000000-0000-4000-8000-000000000001", updated_at: "2026-06-04T00:00:00.000Z" },
         ],
@@ -164,18 +164,18 @@ describe("publish review store safety", () => {
       source: {
         kind: "cache",
         repo_hash: "repo123",
-        identifiers: ["NOX-1"],
+        identifiers: ["TEAM-1"],
         project_ids: ["00000000-0000-4000-8000-000000000001"],
       },
       requested_source: {
         kind: "cache",
         repo_hash: "repo123",
-        identifiers: ["NOX-1", "NOX-2"],
+        identifiers: ["TEAM-1", "TEAM-2"],
         project_ids: ["00000000-0000-4000-8000-000000000001"],
         all_modified: true,
       },
       remote_snapshot: {
-        issues: [{ identifier: "NOX-1" }],
+        issues: [{ identifier: "TEAM-1" }],
         projects: [{ id: "00000000-0000-4000-8000-000000000001" }],
       },
     });

@@ -69,7 +69,7 @@ function shape(t: TeamNode): FetchedTeam {
 }
 
 /**
- * Fetch one team by key (e.g. "NOX") or UUID. Returns `null` when no team
+ * Fetch one team by key (e.g. "TEAM") or UUID. Returns `null` when no team
  * matches — matches the wave-1 `get_*` contract. Other errors (auth, network,
  * etc.) surface through `tryMapToNull` per the standard SDK boundary.
  */

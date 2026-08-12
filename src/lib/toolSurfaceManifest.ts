@@ -35,6 +35,7 @@ export const CLI_SET_ISSUE_FIELDS = [
   "project",
   "milestone",
   "cycle",
+  "due_date",
   "links",
 ] as const;
 
@@ -53,6 +54,7 @@ export const MCP_UPDATE_ISSUE_FIELDS = [
   "project",
   "milestone",
   "cycle",
+  "due_date",
 ] as const;
 
 const SURFACE_OPS = SURFACE_OPERATIONS as readonly SurfaceOperationMetadata[];

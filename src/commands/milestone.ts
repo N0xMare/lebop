@@ -1,6 +1,7 @@
 import chalk from "chalk";
 import type { Command } from "commander";
-import { envelope } from "../lib/envelope.ts";
+import { wantsMachineOutput } from "../lib/encode.ts";
+import { writeMachineEnvelope } from "../lib/output.ts";
 import {
   buildMilestoneCreateInputFromCli,
   buildMilestoneDeleteInputFromCli,
@@ -29,39 +30,71 @@ export function registerMilestone(program: Command): void {
       "--include-archived",
       "also surface cascade-archived milestones (parent-project archived). Defaults to false (live only).",
     )
-    .option("--json", "emit structured records")
-    .action(async (opts: { project?: string; includeArchived?: boolean; json?: boolean }) => {
-      const result = await executeMilestoneList(buildMilestoneListInputFromCli({ opts }));
+    .option("--json", "machine output (default; TOON)")
+    .option("--format <fmt>", "toon | json | pretty")
+    .option("--pretty", "pretty-printed JSON")
+    .option("--human", "maintainer/dev chalk tables (opt-in; not agent path; bodies uncapped)")
+    .action(
+      async (opts: {
+        project?: string;
+        includeArchived?: boolean;
+        json?: boolean;
+        format?: string;
+        pretty?: boolean;
+      }) => {
+        const result = await executeMilestoneList(buildMilestoneListInputFromCli({ opts }));
 
-      if (opts.json) {
-        process.stdout.write(
-          `${JSON.stringify(envelope(milestoneListPayload(result)), null, 2)}\n`,
-        );
-        return;
-      }
+        if (wantsMachineOutput(opts)) {
+          writeMachineEnvelope(
+            {
+              ...milestoneListPayload(result),
+              next: ["milestone view <id>", "list --milestone <name-or-id>"],
+            } as Record<string, unknown>,
+            {
+              json: true,
+              format: opts.format,
+              pretty: opts.pretty,
+            },
+          );
+          return;
+        }
 
-      if (result.milestones.length === 0) {
-        process.stdout.write("no milestones\n");
-        return;
-      }
-      const nameWidth = Math.max(...result.milestones.map((m) => m.name.length));
-      for (const m of result.milestones) {
-        const date = m.target_date ? chalk.gray(`(${m.target_date})`) : "";
-        process.stdout.write(
-          `${chalk.bold(m.name.padEnd(nameWidth))}  ${chalk.cyan(m.project.name)}  ${date}\n`,
-        );
-      }
-    });
+        if (result.milestones.length === 0) {
+          process.stdout.write("no milestones\n");
+          return;
+        }
+        const nameWidth = Math.max(...result.milestones.map((m) => m.name.length));
+        for (const m of result.milestones) {
+          const date = m.target_date ? chalk.gray(`(${m.target_date})`) : "";
+          process.stdout.write(
+            `${chalk.bold(m.name.padEnd(nameWidth))}  ${chalk.cyan(m.project.name)}  ${date}\n`,
+          );
+        }
+      },
+    );
 
   cmd
     .command("view <id>")
     .description("show one milestone by UUID")
-    .option("--json", "emit structured result")
-    .action(async (id: string, opts: { json?: boolean }) => {
+    .option("--json", "machine output (default; TOON)")
+    .option("--format <fmt>", "toon | json | pretty")
+    .option("--pretty", "pretty-printed JSON")
+    .option("--human", "maintainer/dev chalk tables (opt-in; not agent path; bodies uncapped)")
+    .action(async (id: string, opts: { json?: boolean; format?: string; pretty?: boolean }) => {
       const milestone = await executeMilestoneGet(buildMilestoneGetInput(id));
 
-      if (opts.json) {
-        process.stdout.write(`${JSON.stringify(envelope({ milestone }), null, 2)}\n`);
+      if (wantsMachineOutput(opts)) {
+        writeMachineEnvelope(
+          {
+            milestone,
+            next: ["list --milestone <name-or-id>", "set milestone <id> <name>"],
+          } as Record<string, unknown>,
+          {
+            json: true,
+            format: opts.format,
+            pretty: opts.pretty,
+          },
+        );
         return;
       }
       process.stdout.write(`${chalk.bold(milestone.name)}\n`);
@@ -87,7 +120,10 @@ export function registerMilestone(program: Command): void {
     .option("--description <text>")
     .option("--target-date <iso-date>", "e.g. 2026-12-31")
     .option("--sort-order <n>", "numeric sort order")
-    .option("--json", "emit structured result")
+    .option("--json", "machine output (default; TOON)")
+    .option("--format <fmt>", "toon | json | pretty")
+    .option("--pretty", "pretty-printed JSON")
+    .option("--human", "maintainer/dev chalk tables (opt-in; not agent path; bodies uncapped)")
     .action(
       async (
         name: string,
@@ -98,13 +134,19 @@ export function registerMilestone(program: Command): void {
           targetDate?: string;
           sortOrder?: string;
           json?: boolean;
+          format?: string;
+          pretty?: boolean;
         },
       ) => {
         const created = await executeMilestoneCreate(
           buildMilestoneCreateInputFromCli({ name, opts }),
         );
-        if (opts.json) {
-          process.stdout.write(`${JSON.stringify(envelope({ milestone: created }), null, 2)}\n`);
+        if (wantsMachineOutput(opts)) {
+          writeMachineEnvelope({ milestone: created } as Record<string, unknown>, {
+            json: true,
+            format: opts.format,
+            pretty: opts.pretty,
+          });
           return;
         }
         process.stdout.write(
@@ -121,7 +163,10 @@ export function registerMilestone(program: Command): void {
     .option("--target-date <iso-date>", "or `null` to clear")
     .option("--sort-order <n>")
     .option("--project <name-or-id>", "move to a different project")
-    .option("--json", "emit structured result")
+    .option("--json", "machine output (default; TOON)")
+    .option("--format <fmt>", "toon | json | pretty")
+    .option("--pretty", "pretty-printed JSON")
+    .option("--human", "maintainer/dev chalk tables (opt-in; not agent path; bodies uncapped)")
     .action(
       async (
         id: string,
@@ -132,13 +177,19 @@ export function registerMilestone(program: Command): void {
           sortOrder?: string;
           project?: string;
           json?: boolean;
+          format?: string;
+          pretty?: boolean;
         },
       ) => {
         const updated = await executeMilestoneUpdate(
           buildMilestoneUpdateInputFromCli({ id, opts }),
         );
-        if (opts.json) {
-          process.stdout.write(`${JSON.stringify(envelope({ milestone: updated }), null, 2)}\n`);
+        if (wantsMachineOutput(opts)) {
+          writeMachineEnvelope({ milestone: updated } as Record<string, unknown>, {
+            json: true,
+            format: opts.format,
+            pretty: opts.pretty,
+          });
           return;
         }
         process.stdout.write(
@@ -151,22 +202,31 @@ export function registerMilestone(program: Command): void {
     .command("delete <id>")
     .description("delete a milestone by UUID (irreversible — requires --yes)")
     .option("--yes", "confirm destructive operation (required)")
-    .option("--json", "emit structured result")
-    .action(async (id: string, opts: { yes?: boolean; json?: boolean }) => {
-      const r = await executeMilestoneDelete(buildMilestoneDeleteInputFromCli({ id, opts }));
-      if (r.status === "deleted" && !r.success) process.exitCode = 1;
-      if (opts.json) {
-        process.stdout.write(
-          `${JSON.stringify(envelope({ id, status: r.status, success: r.success }), null, 2)}\n`,
-        );
-        return;
-      }
-      if (r.status === "already-absent") {
-        process.stdout.write(`${chalk.gray("✓")} already absent: ${chalk.bold(id)} (no-op)\n`);
-      } else if (r.success) {
-        process.stdout.write(`${chalk.green("✓")} deleted ${chalk.bold(id)}\n`);
-      } else {
-        process.stdout.write(`${chalk.red("✗")} delete failed for ${id}\n`);
-      }
-    });
+    .option("--json", "machine output (default; TOON)")
+    .option("--format <fmt>", "toon | json | pretty")
+    .option("--pretty", "pretty-printed JSON")
+    .option("--human", "maintainer/dev chalk tables (opt-in; not agent path; bodies uncapped)")
+    .action(
+      async (
+        id: string,
+        opts: { yes?: boolean; json?: boolean; format?: string; pretty?: boolean },
+      ) => {
+        const r = await executeMilestoneDelete(buildMilestoneDeleteInputFromCli({ id, opts }));
+        if (r.status === "deleted" && !r.success) process.exitCode = 1;
+        if (wantsMachineOutput(opts)) {
+          writeMachineEnvelope(
+            { id, status: r.status, success: r.success } as Record<string, unknown>,
+            { json: true, format: opts.format, pretty: opts.pretty },
+          );
+          return;
+        }
+        if (r.status === "already-absent") {
+          process.stdout.write(`${chalk.gray("✓")} already absent: ${chalk.bold(id)} (no-op)\n`);
+        } else if (r.success) {
+          process.stdout.write(`${chalk.green("✓")} deleted ${chalk.bold(id)}\n`);
+        } else {
+          process.stdout.write(`${chalk.red("✗")} delete failed for ${id}\n`);
+        }
+      },
+    );
 }

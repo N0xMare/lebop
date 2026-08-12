@@ -1,9 +1,10 @@
 import chalk from "chalk";
 import type { Command } from "commander";
 import { findGitRoot, hashRepoRoot } from "../lib/config.ts";
-import { envelope } from "../lib/envelope.ts";
+import { wantsMachineOutput } from "../lib/encode.ts";
 import { ValidationError } from "../lib/errors.ts";
 import { resolveBody } from "../lib/io.ts";
+import { writeMachineEnvelope } from "../lib/output.ts";
 import {
   buildCommentAddInputFromCli,
   buildCommentDeleteInputFromCli,
@@ -40,7 +41,10 @@ export function registerComment(program: Command): void {
     .option("--body-file <path>", "read body from a file")
     .option("--stdin", "read body from stdin")
     .option("--parent <comment-id>", "reply to a comment (threads)")
-    .option("--json", "emit structured result")
+    .option("--json", "machine output (default; TOON)")
+    .option("--format <fmt>", "toon | json | pretty")
+    .option("--pretty", "pretty-printed JSON")
+    .option("--human", "maintainer/dev chalk tables (opt-in; not agent path; bodies uncapped)")
     .action(async (id: string, opts: AddOpts) => {
       const body = await resolveBody(opts);
       if (!body.trim()) {
@@ -54,20 +58,22 @@ export function registerComment(program: Command): void {
         cacheDeps,
       );
 
-      if (opts.json) {
+      if (wantsMachineOutput(opts)) {
         // Round-7 / MED-4: echo A26's full response (body/url/user) for
         // CLI/MCP parity. Pre-fix the CLI emitted only `{id, created_at}`;
         // MCP path already echoed the full shape via `result` pass-through.
-        process.stdout.write(
-          `${JSON.stringify(
-            envelope({
-              identifier: id,
-              comment: result.comment,
-              cache: result.cache,
-            }),
-            null,
-            2,
-          )}\n`,
+        writeMachineEnvelope(
+          {
+            identifier: id,
+            comment: result.comment,
+            cache: result.cache,
+            next: ["comment list <id>", "show <id>", "show <id> --comments"],
+          },
+          {
+            json: true,
+            format: opts.format,
+            pretty: opts.pretty,
+          },
         );
         return;
       }
@@ -79,22 +85,27 @@ export function registerComment(program: Command): void {
   cmd
     .command("list <id>")
     .description("list comments on an issue (chronological)")
-    .option("--json", "emit structured records")
-    .action(async (id: string, opts: { json?: boolean }) => {
+    .option("--json", "machine output (default; TOON)")
+    .option("--format <fmt>", "toon | json | pretty")
+    .option("--pretty", "pretty-printed JSON")
+    .option("--human", "maintainer/dev chalk tables (opt-in; not agent path; bodies uncapped)")
+    .action(async (id: string, opts: MachineOpts) => {
       const upperId = id.toUpperCase();
       const { comments } = await executeCommentList(buildCommentListInputFromCli({ id: upperId }));
 
-      if (opts.json) {
-        process.stdout.write(
-          `${JSON.stringify(
-            envelope({
-              issue: upperId,
-              count: comments.length,
-              comments,
-            }),
-            null,
-            2,
-          )}\n`,
+      if (wantsMachineOutput(opts)) {
+        writeMachineEnvelope(
+          {
+            issue: upperId,
+            count: comments.length,
+            comments,
+            next: ["comment add <id>", "show <id>"],
+          },
+          {
+            json: true,
+            format: opts.format,
+            pretty: opts.pretty,
+          },
         );
         return;
       }
@@ -117,7 +128,10 @@ export function registerComment(program: Command): void {
     .option("--body <text>")
     .option("--body-file <path>")
     .option("--stdin", "read body from stdin")
-    .option("--json", "emit structured result")
+    .option("--json", "machine output (default; TOON)")
+    .option("--format <fmt>", "toon | json | pretty")
+    .option("--pretty", "pretty-printed JSON")
+    .option("--human", "maintainer/dev chalk tables (opt-in; not agent path; bodies uncapped)")
     .action(async (commentId: string, opts: AddOpts) => {
       const body = await resolveBody(opts);
       if (!body.trim()) {
@@ -130,16 +144,17 @@ export function registerComment(program: Command): void {
         buildCommentUpdateInputFromCli({ commentId, body }),
         cacheDeps,
       );
-      if (opts.json) {
-        process.stdout.write(
-          `${JSON.stringify(
-            envelope({
-              comment: updated,
-              cache,
-            }),
-            null,
-            2,
-          )}\n`,
+      if (wantsMachineOutput(opts)) {
+        writeMachineEnvelope(
+          {
+            comment: updated,
+            cache,
+          },
+          {
+            json: true,
+            format: opts.format,
+            pretty: opts.pretty,
+          },
         );
         return;
       }
@@ -152,24 +167,28 @@ export function registerComment(program: Command): void {
     .command("delete <comment-id>")
     .description("delete a comment by its UUID (irreversible — requires --yes)")
     .option("--yes", "confirm destructive operation (required)")
-    .option("--json", "emit structured result")
-    .action(async (commentId: string, opts: { yes?: boolean; json?: boolean }) => {
+    .option("--json", "machine output (default; TOON)")
+    .option("--format <fmt>", "toon | json | pretty")
+    .option("--pretty", "pretty-printed JSON")
+    .option("--human", "maintainer/dev chalk tables (opt-in; not agent path; bodies uncapped)")
+    .action(async (commentId: string, opts: MachineOpts & { yes?: boolean }) => {
       const { status, cache } = await executeCommentDelete(
         buildCommentDeleteInputFromCli({ commentId, opts }),
         cacheDeps,
       );
-      if (opts.json) {
-        process.stdout.write(
-          `${JSON.stringify(
-            envelope({
-              id: commentId,
-              status,
-              success: status === "deleted",
-              cache,
-            }),
-            null,
-            2,
-          )}\n`,
+      if (wantsMachineOutput(opts)) {
+        writeMachineEnvelope(
+          {
+            id: commentId,
+            status,
+            success: status === "deleted",
+            cache,
+          },
+          {
+            json: true,
+            format: opts.format,
+            pretty: opts.pretty,
+          },
         );
         return;
       }
@@ -183,12 +202,17 @@ export function registerComment(program: Command): void {
     });
 }
 
-interface AddOpts {
+interface MachineOpts {
+  json?: boolean;
+  format?: string;
+  pretty?: boolean;
+}
+
+interface AddOpts extends MachineOpts {
   body?: string;
   bodyFile?: string;
   stdin?: boolean;
   parent?: string;
-  json?: boolean;
 }
 
 function currentCacheContext(): { repoHash: string; repoRoot: string | null } {

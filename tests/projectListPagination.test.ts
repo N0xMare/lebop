@@ -35,7 +35,7 @@ describe("executeProjectList pagination safety", () => {
       });
 
     await expect(
-      executeProjectList({ allTeams: true, max: 3 }, { resolveTeam: async () => "NOX" }),
+      executeProjectList({ allTeams: true, max: 3 }, { resolveTeam: async () => "TEAM" }),
     ).rejects.toMatchObject({
       code: "validation_error",
       message: "project list pagination returned a repeated cursor",
@@ -49,7 +49,7 @@ describe("executeProjectList pagination safety", () => {
     });
 
     await expect(
-      executeProjectList({ allTeams: true, max: 3 }, { resolveTeam: async () => "NOX" }),
+      executeProjectList({ allTeams: true, max: 3 }, { resolveTeam: async () => "TEAM" }),
     ).rejects.toMatchObject({
       code: "validation_error",
       message: "project list pagination reported more pages without a continuation cursor",
@@ -68,7 +68,7 @@ describe("executeProjectList pagination safety", () => {
       });
 
     await expect(
-      executeProjectList({ allTeams: true, max: 3 }, { resolveTeam: async () => "NOX" }),
+      executeProjectList({ allTeams: true, max: 3 }, { resolveTeam: async () => "TEAM" }),
     ).rejects.toMatchObject({
       code: "validation_error",
       message: "project list pagination made no progress",
@@ -83,7 +83,7 @@ function project(id: string): ListedProject {
     description: null,
     icon: null,
     state: "planned",
-    url: `https://linear.app/nox/project/${id}`,
+    url: `https://linear.app/example/project/${id}`,
     updated_at: "2026-06-05T00:00:00.000Z",
     archived_at: null,
   };

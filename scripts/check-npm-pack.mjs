@@ -1,41 +1,41 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
-import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import https from "node:https";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-const slashCommandEntries = readdirSync("agents/commands")
+/** Safe readdir for pack inventories (tests may run this with cwd temp). */
+function listDir(dir) {
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir);
+}
+
+const slashCommandEntries = listDir("agents/commands")
   .filter((name) => /^lebop-.*\.md$/.test(name))
   .sort()
   .map((name) => `agents/commands/${name}`);
 
-const requiredEntries = [
-  "bin/lebop",
-  "bin/lebop.ts",
-  "bin/install-claude",
-  "src/cli.ts",
-  "agents/skills/lebop/SKILL.md",
-  ...slashCommandEntries,
-  "scripts/check-npm-pack.mjs",
-  "scripts/install.sh",
-  "docs/spec.md",
-  "docs/examples/getting-started/README.md",
-  "README.md",
-  "LICENSE",
-  "CONTRIBUTING.md",
-  "package.json",
-];
-
-const forbiddenPrefixes = ["docs/local/", "tests/", ".github/", "dist/", "node_modules/"];
-
-const forbiddenEntries = ["scripts/live-nox-surface-smoke.mjs", "tests/liveNoxHarness.test.mjs"];
-
-const executableEntries = new Map([
-  ["bin/lebop", 0o755],
-  ["bin/install-claude", 0o755],
-  ["scripts/install.sh", 0o755],
-]);
+/** Nested agents/skills/<medium>/<role>/SKILL.md (CLI×3 + MCP×3). */
+function listSkillEntries() {
+  const entries = [];
+  for (const medium of listDir("agents/skills")) {
+    const mediumPath = path.join("agents/skills", medium);
+    if (!existsSync(mediumPath) || medium.startsWith(".")) continue;
+    // flat skill at medium level (legacy) — ignore unless SKILL.md directly
+    if (existsSync(path.join(mediumPath, "SKILL.md"))) {
+      entries.push(`agents/skills/${medium}/SKILL.md`);
+      continue;
+    }
+    for (const role of listDir(mediumPath)) {
+      const skillMd = path.join(mediumPath, role, "SKILL.md");
+      if (existsSync(skillMd)) {
+        entries.push(`agents/skills/${medium}/${role}/SKILL.md`);
+      }
+    }
+  }
+  return entries.sort();
+}
 
 function run(command, args) {
   return new Promise((resolve, reject) => {
@@ -61,10 +61,60 @@ function run(command, args) {
   });
 }
 
+// Action-ref mode is used from empty temp fixtures in unit tests — skip pack inventory.
 if (process.argv.includes("--workflow-action-refs")) {
   await checkWorkflowActionRefs();
   process.exit(0);
 }
+
+const skillEntries = listSkillEntries();
+const expectedSkillCount = 6;
+if (skillEntries.length !== expectedSkillCount) {
+  console.error(
+    `expected ${expectedSkillCount} agent skills (3 CLI + 3 MCP), found ${skillEntries.length}: ${skillEntries.join(", ")}`,
+  );
+  process.exit(1);
+}
+
+// No progressive-disclosure references/ trees (complete SKILL.md only)
+for (const entry of skillEntries) {
+  const dir = path.dirname(entry);
+  if (existsSync(path.join(dir, "references"))) {
+    console.error(`unexpected references/ next to skill: ${dir}/references`);
+    process.exit(1);
+  }
+}
+
+const requiredEntries = [
+  "bin/lebop",
+  "bin/lebop.ts",
+  "bin/install-claude",
+  "src/cli.ts",
+  ...skillEntries,
+  ...slashCommandEntries,
+  "scripts/check-npm-pack.mjs",
+  "scripts/install.sh",
+  "docs/spec.md",
+  "docs/examples/getting-started/README.md",
+  "README.md",
+  "LICENSE",
+  "CONTRIBUTING.md",
+  "package.json",
+];
+
+const forbiddenPrefixes = ["docs/local/", "tests/", ".github/", "dist/", "node_modules/"];
+
+const liveScriptEntries = listDir("scripts")
+  .filter((name) => name.startsWith("live-") && name.endsWith(".mjs"))
+  .map((name) => `scripts/${name}`);
+
+const forbiddenEntries = [...liveScriptEntries, "tests/liveSurfaceHarness.test.mjs"];
+
+const executableEntries = new Map([
+  ["bin/lebop", 0o755],
+  ["bin/install-claude", 0o755],
+  ["scripts/install.sh", 0o755],
+]);
 
 const result = await run("npm", ["pack", "--dry-run", "--json"]);
 if (result.code !== 0) {

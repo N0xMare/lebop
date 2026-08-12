@@ -80,55 +80,36 @@ export function resolveLebopInvocation(args = [], env = process.env) {
   };
 }
 
+/**
+ * Live full-surface gap allowlist (fixture / environment only).
+ *
+ * Policy (locked Option A, 2026-08-10): agent-session **view/get/fetch** need a
+ * real Linear AgentSession UUID. lebop is intentionally **not** an agent host
+ * and cannot create sessions (personal API key control plane). Empty playground
+ * ⇒ list returns [] (PASS); id-based paths are allowlisted GAPs until a real
+ * external session exists or this expires. Not a product defect.
+ *
+ * Entries: only the four id-based agent-session steps. Expiry 2026-09-30.
+ */
 export const GAP_ALLOWLIST = {
-  "cli:cycle view --json": {
-    reason:
-      "NOX workspace lacks cycle/agent-session fixtures; allowlist extended for architecture release train until fixtures can be seeded; not a product gap. Cycle view has no valid UUID fixture.",
-    expires: "2026-09-30",
-  },
-  "cli:workspace explore cycle issues --json": {
-    reason:
-      "NOX workspace lacks cycle/agent-session fixtures; allowlist extended for architecture release train until fixtures can be seeded; not a product gap. Cycle issue exploration has no valid fixture.",
-    expires: "2026-09-30",
-  },
-  "cli:workspace fetch cycle --json": {
-    reason:
-      "NOX workspace lacks cycle/agent-session fixtures; allowlist extended for architecture release train until fixtures can be seeded; not a product gap. Cycle workspace fetch has no valid fixture.",
-    expires: "2026-09-30",
-  },
   "cli:agent-session view --json": {
     reason:
-      "NOX workspace lacks cycle/agent-session fixtures; allowlist extended for architecture release train until fixtures can be seeded; not a product gap. Agent-session view has no valid fixture.",
+      "Option A fixture gap (not product): agent-session view needs a UUID from an external agent host (Cursor/Linear Agent/etc.). lebop does not create sessions; smoke workspace has none. list alone is sufficient product proof until expiry.",
     expires: "2026-09-30",
   },
   "cli:workspace fetch agent-session --json": {
     reason:
-      "NOX workspace lacks cycle/agent-session fixtures; allowlist extended for architecture release train until fixtures can be seeded; not a product gap. Concrete agent-session fetch has no valid fixture.",
-    expires: "2026-09-30",
-  },
-  "mcp:get_cycle": {
-    reason:
-      "NOX workspace lacks cycle/agent-session fixtures; allowlist extended for architecture release train until fixtures can be seeded; not a product gap. get_cycle has no valid UUID fixture.",
-    expires: "2026-09-30",
-  },
-  "mcp:explore_linear_workspace cycle issues": {
-    reason:
-      "NOX workspace lacks cycle/agent-session fixtures; allowlist extended for architecture release train until fixtures can be seeded; not a product gap. Cycle issue exploration has no valid fixture.",
-    expires: "2026-09-30",
-  },
-  "mcp:fetch_linear_workspace cycle": {
-    reason:
-      "NOX workspace lacks cycle/agent-session fixtures; allowlist extended for architecture release train until fixtures can be seeded; not a product gap. Cycle workspace fetch has no valid fixture.",
+      "Option A fixture gap (not product): concrete agent-session fetch needs an existing session UUID. lebop does not create sessions; smoke workspace has none.",
     expires: "2026-09-30",
   },
   "mcp:get_agent_session": {
     reason:
-      "NOX workspace lacks cycle/agent-session fixtures; allowlist extended for architecture release train until fixtures can be seeded; not a product gap. get_agent_session has no valid fixture.",
+      "Option A fixture gap (not product): get_agent_session needs a UUID from an external agent host. lebop does not create sessions; smoke workspace has none.",
     expires: "2026-09-30",
   },
   "mcp:fetch_linear_workspace agent-session": {
     reason:
-      "NOX workspace lacks cycle/agent-session fixtures; allowlist extended for architecture release train until fixtures can be seeded; not a product gap. Concrete agent-session fetch has no valid fixture.",
+      "Option A fixture gap (not product): MCP agent-session fetch needs an existing session UUID. lebop does not create sessions; smoke workspace has none.",
     expires: "2026-09-30",
   },
 };
@@ -138,8 +119,13 @@ const BASE_REQUIRED_SEMANTIC_LIVE_STEPS = [
   "cli:project update --json",
   "cli:milestone create --json",
   "cli:milestone update --json",
+  "cli:cycle create --json",
+  "cli:cycle update --json",
+  "cli:cycle archive --json",
+  "cli:cycle view --json",
   "cli:new --description-file --json",
   "cli:set description --json",
+  "cli:set due-date --json",
   "cli:set project --json",
   "cli:set milestone --json",
   "cli:set cycle --json",
@@ -166,13 +152,16 @@ const BASE_REQUIRED_SEMANTIC_LIVE_STEPS = [
   "cli:publish apply --json",
   "cli:archive issue final --json",
   "cli:archive primary evidence issue --json",
-  "cli:document delete --json",
+  "cli:document soft-delete --json",
   "cli:milestone delete --json",
-  "cli:initiative delete --json",
+  "cli:initiative soft-delete --json",
   "cli:label delete --json",
-  "cli:project delete --json",
+  "cli:project soft-delete --json",
   "mcp:create_issue",
   "mcp:update_issue",
+  "mcp:create_cycle",
+  "mcp:update_cycle",
+  "mcp:get_cycle",
   "mcp:bulk_update_issues",
   "mcp:explore_linear_workspace",
   "mcp:explore_linear_workspace projects cursor page 1",
@@ -252,6 +241,7 @@ export const LINEAR_API_PROOF_LABELS = [
 
 export const FIELD_UPDATE_PROOF_LABELS = {
   "cli:set description --json": ["remote description contains CLI set description marker"],
+  "cli:set due-date --json": ["remote due date matches CLI set due-date"],
   "cli:set project --json": ["remote project matches CLI set project"],
   "cli:set milestone --json": ["remote milestone matches CLI set milestone"],
   "cli:set cycle --json": ["remote cycle cleared by CLI set cycle"],
@@ -293,7 +283,12 @@ export const REQUIRED_MANIFEST_SEMANTIC_TOOLS = MCP_SURFACE_MANIFEST.filter(
   (entry) => entry.live_semantics === "required",
 ).map((entry) => entry.tool);
 
-export const REQUIRED_MCP_LIVE_TOOLS = MCP_SURFACE_MANIFEST.map((entry) => entry.tool).sort();
+/** All dual MCP tools except those marked live_semantics: "optional" (env/schema-gated). */
+export const REQUIRED_MCP_LIVE_TOOLS = MCP_SURFACE_MANIFEST.filter(
+  (entry) => entry.live_semantics !== "optional",
+)
+  .map((entry) => entry.tool)
+  .sort();
 const initialLebopInvocation = resolveLebopInvocation();
 
 const report = {
@@ -348,9 +343,9 @@ function stableRedaction(value) {
   return createHash("sha256").update(String(value)).digest("hex").slice(0, 12);
 }
 
-const LIVE_NOX_TEMP_PATH_PATTERN =
-  /(?:[A-Za-z]:)?(?:[^\s"']*[\\/])?lebop-live-nox-[^\\/\s"']+(?:[\\/][^\s"']*)?/g;
-const LIVE_NOX_TEMP_SEGMENT_PATTERN = /lebop-live-nox-[^\\/\s"']+/;
+const LIVE_TEMP_PATH_PATTERN =
+  /(?:[A-Za-z]:)?(?:[^\s"']*[\\/])?lebop-live-home-[^\\/\s"']+(?:[\\/][^\s"']*)?/g;
+const LIVE_TEMP_SEGMENT_PATTERN = /lebop-live-home-[^\\/\s"']+/;
 const LINEAR_UUID_PATTERN = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi;
 const LINEAR_UUID_SCAN_PATTERN =
   /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/i;
@@ -361,7 +356,7 @@ function redactSensitiveString(value) {
   return value
     .replace(/query\s*\{\s*viewer\s*\{[^}]*\}\s*\}/gi, "query { viewer [redacted] }")
     .replace(/"viewer"\s*:\s*\{[^}]*"email"[^}]*\}/gi, '"viewer":"[redacted]"')
-    .replace(LIVE_NOX_TEMP_PATH_PATTERN, "[redacted-temp-home]")
+    .replace(LIVE_TEMP_PATH_PATTERN, "[redacted-temp-home]")
     .replace(/\/tmp\/lebop-[^\s"']+/g, "[redacted-temp-path]")
     .replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, "[redacted-email]")
     .replace(/\blin_[A-Za-z0-9_-]{8,}\b/g, "[redacted-token]")
@@ -444,7 +439,7 @@ export function assertLiveSurfaceReportSanitized(targetReport) {
   const serialized = JSON.stringify(targetReport);
   const forbidden = [
     [/stdout_preview|stderr_preview|response_preview|stdout_line/, "CLI/MCP preview fields"],
-    [LIVE_NOX_TEMP_SEGMENT_PATTERN, "temporary live auth path"],
+    [LIVE_TEMP_SEGMENT_PATTERN, "temporary live auth path"],
     [/token\.txt/, "temporary token file path"],
     [/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i, "email address"],
     [/\blin_[A-Za-z0-9_-]{8,}\b/, "Linear token"],
@@ -645,6 +640,14 @@ async function auditRemoteTarget(target) {
     expect(issue.archivedAt, `${target.label}: issue still active on Linear`);
     return `${target.label} archivedAt=${issue.archivedAt}`;
   }
+  if (target.kind === "archived_cycle") {
+    // cycle(id) still resolves archived cycles (archivedAt set).
+    const payload = await auditRaw(
+      "query AuditCycle($id: String!) { cycle(id: $id) { id number archivedAt } }",
+      { id: target.id },
+    );
+    return archivedOrAbsentProof(target, payload?.cycle);
+  }
   throw new Error(`unknown remote audit target kind: ${target.kind}`);
 }
 
@@ -713,6 +716,9 @@ function runProc(cmd, args, options = {}) {
         ...process.env,
         NO_COLOR: "1",
         FORCE_COLOR: "0",
+        // Live harness JSON.parses --json CLI stdout; agents still get TOON by default
+        // outside this env. Compact JSON (not pretty) remains dense.
+        LEBOP_MACHINE_FORMAT: "json",
         ...options.env,
       },
       stdio: ["pipe", "pipe", "pipe"],
@@ -936,6 +942,7 @@ async function readRemoteIssueUpdateState(identifier) {
         id
         identifier
         description
+        dueDate
         project { id name }
         projectMilestone { id name }
         cycle { id name }
@@ -997,6 +1004,12 @@ async function assertRemoteIssueUpdateState(identifier, expectations, label) {
         lastErrors.push(`cycle id ${actual ?? "null"} != ${expectations.cycleId}`);
       }
     }
+    if (expectations.dueDate !== undefined) {
+      const actual = issue?.dueDate ?? null;
+      if (actual !== expectations.dueDate) {
+        lastErrors.push(`dueDate ${actual ?? "null"} != ${expectations.dueDate}`);
+      }
+    }
     if (lastErrors.length === 0) return expectations.proofs ?? [];
     await new Promise((resolve) => setTimeout(resolve, 1_000 * attempt));
   }
@@ -1035,8 +1048,17 @@ function assertPublishReviewPayload(payload, label) {
   expect(payload.summary.ready === payload.ready, `${label}: ready disagrees with summary.ready`);
   proofs.push(`summary.ready=${payload.summary.ready}`);
   if (payload.ready === true) {
-    expect(payload.next?.tool === "publish_linear_changes", `${label}: next publish tool missing`);
-    proofs.push("next publish tool present");
+    // Structured apply handoff is next_call; next[] holds string stubs for agents.
+    expect(
+      payload.next_call?.tool === "publish_linear_changes",
+      `${label}: next_call publish tool missing`,
+    );
+    expect(
+      Array.isArray(payload.next) && payload.next.length > 0,
+      `${label}: next[] string stubs missing`,
+    );
+    proofs.push("next_call publish tool present");
+    proofs.push("next[] stubs present");
   }
   return proofs;
 }
@@ -2090,7 +2112,7 @@ export function assertFullSurfaceReport(targetReport, options = {}) {
   const validation = validateFullSurfaceReport(targetReport, options);
   if (!validation.ok) {
     throw new Error(
-      `live Noxor surface report failed validation:\n${validation.errors.join("\n")}`,
+      `live surface report failed validation:\n${validation.errors.join("\n")}`,
     );
   }
   return validation;
@@ -2132,7 +2154,7 @@ export async function writeLiveSurfaceReport(targetReport, options = {}) {
     options.sanitize === false ? targetReport : sanitizeLiveSurfaceReport(targetReport);
   if (options.sanitize !== false) assertLiveSurfaceReportSanitized(artifactReport);
   await mkdir(reportDir, { recursive: true });
-  const reportPath = path.join(reportDir, `live-nox-surface-report-${reportStamp}.json`);
+  const reportPath = path.join(reportDir, `live-surface-report-${reportStamp}.json`);
   await writeFile(reportPath, `${JSON.stringify(artifactReport, null, 2)}\n`);
   return reportPath;
 }
@@ -2227,7 +2249,7 @@ async function readContextFile(label, root, file) {
 }
 
 async function setupTempAuth() {
-  lebopHome = await mkdtemp(path.join(tmpdir(), "lebop-live-nox-"));
+  lebopHome = await mkdtemp(path.join(tmpdir(), "lebop-live-home-"));
   report.temp_home = lebopHome;
 
   const tokenFromEnv = process.env.LEBOP_SANDBOX_TOKEN?.trim();
@@ -2273,7 +2295,8 @@ async function setupTempAuth() {
 
 class McpClient {
   constructor(env = {}) {
-    const invocation = resolveLebopInvocation(["mcp"]);
+    // Full surface live proof needs the full MCP inventory, not progressive Core.
+    const invocation = resolveLebopInvocation(["mcp", "--profile", "full"]);
     this.child = spawn(invocation.command, invocation.args, {
       cwd: repoRoot,
       env: {
@@ -2283,6 +2306,7 @@ class McpClient {
         LEBOP_HOME: lebopHome,
         LEBOP_WORKSPACE: workspace,
         LEBOP_TEAM: team,
+        LEBOP_MACHINE_FORMAT: "json",
         ...env,
       },
       stdio: ["pipe", "pipe", "pipe"],
@@ -2369,7 +2393,7 @@ class McpClient {
     const init = await this.send("initialize", {
       protocolVersion: "2024-11-05",
       capabilities: {},
-      clientInfo: { name: "lebop-live-nox-smoke", version: "0.0.1" },
+      clientInfo: { name: "lebop-live-surface-smoke", version: "0.0.1" },
     });
     this.notify("notifications/initialized");
     record("mcp:initialize", "pass", { protocolVersion: init.protocolVersion });
@@ -2528,9 +2552,7 @@ async function runCliSurface() {
   const projectId = project.project.id;
   report.created.cli_project = projectId;
   registerRemoteAudit("soft_deleted_project", projectId, "CLI project");
-  const doneCliProjectCleanup = registerCliCleanup("delete CLI project", [
-    "project",
-    "delete",
+  const doneCliProjectCleanup = registerCliCleanup("soft-delete CLI project", ["project", "soft-delete",
     projectId,
     "--yes",
     "--json",
@@ -2599,9 +2621,7 @@ async function runCliSurface() {
   const cursorFixtureProjectId = cursorFixtureProject.project.id;
   report.created.cli_cursor_project = cursorFixtureProjectId;
   registerRemoteAudit("soft_deleted_project", cursorFixtureProjectId, "CLI cursor fixture project");
-  const doneCliCursorProjectCleanup = registerCliCleanup("delete CLI cursor fixture project", [
-    "project",
-    "delete",
+  const doneCliCursorProjectCleanup = registerCliCleanup("soft-delete CLI cursor fixture project", ["project", "soft-delete",
     cursorFixtureProjectId,
     "--yes",
     "--json",
@@ -2709,9 +2729,7 @@ async function runCliSurface() {
   const documentId = doc.document.id;
   report.created.cli_document = documentId;
   registerRemoteAudit("soft_deleted_document", documentId, "CLI document");
-  const doneCliDocumentCleanup = registerCliCleanup("delete CLI document", [
-    "document",
-    "delete",
+  const doneCliDocumentCleanup = registerCliCleanup("soft-delete CLI document", ["document", "soft-delete",
     documentId,
     "--yes",
     "--json",
@@ -2781,9 +2799,7 @@ async function runCliSurface() {
   const initiativeId = initiative.initiative.id;
   report.created.cli_initiative = initiativeId;
   registerRemoteAudit("soft_deleted_initiative", initiativeId, "CLI initiative");
-  const doneCliInitiativeCleanup = registerCliCleanup("delete CLI initiative", [
-    "initiative",
-    "delete",
+  const doneCliInitiativeCleanup = registerCliCleanup("soft-delete CLI initiative", ["initiative", "soft-delete",
     initiativeId,
     "--yes",
     "--json",
@@ -2867,7 +2883,7 @@ async function runCliSurface() {
   );
   await cli(
     "project delete cursor fixture --json",
-    ["project", "delete", cursorFixtureProjectId, "--yes", "--json"],
+    ["project", "soft-delete", cursorFixtureProjectId, "--yes", "--json"],
     {
       json: true,
       assert: (payload) =>
@@ -3008,9 +3024,7 @@ async function runCliSurface() {
   const cliIssueDocumentId = cliIssueDocument.id;
   report.created.cli_issue_document = cliIssueDocumentId;
   registerRemoteAudit("soft_deleted_document", cliIssueDocumentId, "CLI issue document");
-  const doneCliIssueDocumentCleanup = registerCliCleanup("delete CLI issue document", [
-    "document",
-    "delete",
+  const doneCliIssueDocumentCleanup = registerCliCleanup("soft-delete CLI issue document", ["document", "soft-delete",
     cliIssueDocumentId,
     "--yes",
     "--json",
@@ -3084,6 +3098,19 @@ async function runCliSurface() {
       ],
     },
   );
+  const cliDueDate = "2030-06-15";
+  await cli("set due-date --json", ["set", "due-date", issueId1, cliDueDate, "--json"], {
+    json: true,
+    assert: async () =>
+      assertRemoteIssueUpdateState(
+        issueId1,
+        {
+          dueDate: cliDueDate,
+          proofs: FIELD_UPDATE_PROOF_LABELS["cli:set due-date --json"],
+        },
+        "CLI set due-date",
+      ),
+  });
   await cli("set project --json", ["set", "project", issueId1, cursorFixtureProjectId, "--json"], {
     json: true,
     assert: async () =>
@@ -3500,12 +3527,15 @@ async function runCliSurface() {
     ["workspace", "explore", `/projects/${projectId}/issues`, "--json"],
     { json: true },
   );
+  // Aggregate issue dossiers (issue_documents) require depth=full; 0.0.6 default is shallow.
   const cliProjectContext = await cli(
     "workspace fetch project --json",
     [
       "workspace",
       "fetch",
       `/projects/${projectId}`,
+      "--depth",
+      "full",
       "--to",
       path.join(lebopHome, "context-cli-project"),
       "--json",
@@ -3526,7 +3556,7 @@ async function runCliSurface() {
   );
   await cli(
     "document delete issue document fixture --json",
-    ["document", "delete", cliIssueDocumentId, "--yes", "--json"],
+    ["document", "soft-delete", cliIssueDocumentId, "--yes", "--json"],
     {
       json: true,
       assert: (payload) =>
@@ -3574,7 +3604,7 @@ async function runCliSurface() {
   const planDir = path.join(lebopHome, "plan");
   await writeFile(
     path.join(lebopHome, "lint.md"),
-    "# Lint\n\nA bare Linear issue: https://linear.app/noxor/issue/NOX-50/test\n",
+    "# Lint\n\nA bare Linear issue: https://linear.app/lebop-playground/issue/TEAM-50/test\n",
   );
   await cli("lint --json", ["lint", path.join(lebopHome, "lint.md"), "--json"], { json: true });
   await cli("completions bash", ["completions", "bash"]);
@@ -3590,56 +3620,259 @@ async function runCliSurface() {
   donePlanCliCleanup();
   await runPublishCli(labelName);
 
-  const cycles = await cli("cycle list --json", ["cycle", "list", "--team", team, "--json"], {
+  // Cycle CRUD: create a far-future iteration so list/view/explore have a fixture,
+  // then archive (unlinks issues; no unarchive) as cleanup.
+  const cycleStarts = "2037-01-05T00:00:00.000Z";
+  const cycleEnds = "2037-01-18T23:59:59.000Z";
+  const createdCycle = await cli(
+    "cycle create --json",
+    [
+      "cycle",
+      "create",
+      "--team",
+      team,
+      "--starts",
+      cycleStarts,
+      "--ends",
+      cycleEnds,
+      "--name",
+      `${prefix}-cycle-cli`,
+      "--description",
+      "live smoke cycle",
+      "--json",
+    ],
+    {
+      json: true,
+      assert: (payload) => [
+        ...requireFields(
+          payload,
+          ["cycle.id", "cycle.starts_at", "cycle.ends_at", "cycle.number"],
+          "CLI cycle create",
+        ),
+        "created cycle payload has id/window/number",
+      ],
+    },
+  );
+  const cycleId = createdCycle.cycle.id;
+  report.created.cli_cycle = cycleId;
+  registerRemoteAudit("archived_cycle", cycleId, "CLI cycle");
+  const doneCliCycleCleanup = registerCliCleanup("archive CLI cycle", [
+    "cycle",
+    "archive",
+    cycleId,
+    "--yes",
+    "--json",
+  ]);
+  await cli(
+    "cycle update --json",
+    [
+      "cycle",
+      "update",
+      cycleId,
+      "--name",
+      `${prefix}-cycle-cli-updated`,
+      "--description",
+      "updated live smoke cycle",
+      "--json",
+    ],
+    {
+      json: true,
+      assert: (payload) => [
+        ...requireFields(payload, ["cycle.id", "cycle.name"], "CLI cycle update"),
+        "updated cycle payload has id/name",
+      ],
+    },
+  );
+  // C2: assign an issue to the cycle so archive proves Linear unlinks issues.
+  await cli(
+    "set cycle for archive unlink --json",
+    ["set", "cycle", issueId1, cycleId, "--json"],
+    {
+      json: true,
+      assert: (payload) => {
+        const id = payload.identifier ?? payload.issue?.identifier;
+        if (!id) {
+          throw new Error("CLI set cycle missing identifier in machine envelope");
+        }
+        return ["issue assigned to smoke cycle"];
+      },
+    },
+  );
+  await cli("cycle list --json", ["cycle", "list", "--team", team, "--json"], {
     json: true,
   });
-  const cycleFixture = cycles.cycles?.[0];
-  if (cycleFixture?.id) {
-    await cli("cycle view --json", ["cycle", "view", cycleFixture.id, "--json"], {
+  await cli("cycle view --json", ["cycle", "view", cycleId, "--json"], {
+    json: true,
+    assert: (payload) => [
+      ...requireFields(
+        payload,
+        [
+          "cycle.id",
+          "cycle.description",
+          "cycle.is_active",
+          "cycle.is_next",
+          "cycle.is_past",
+          "cycle.is_future",
+          "cycle.is_previous",
+        ],
+        "CLI cycle view",
+      ),
+      "view cycle includes description + status flags",
+    ],
+  });
+  await cli(
+    "workspace explore cycle issues --json",
+    ["workspace", "explore", `/cycles/${cycleId}/issues`, "--json"],
+    {
       json: true,
-    });
-    await cli(
-      "workspace explore cycle issues --json",
-      ["workspace", "explore", `/cycles/${cycleFixture.id}/issues`, "--json"],
-      {
-        json: true,
-        assert: (payload) =>
-          assertExplorePayload(
-            payload,
-            "CLI cycle issue explore",
-            `/cycles/${cycleFixture.id}/issues`,
-          ),
+      assert: (payload) =>
+        assertExplorePayload(payload, "CLI cycle issue explore", `/cycles/${cycleId}/issues`),
+    },
+  );
+  const cliCycleContext = await cli(
+    "workspace fetch cycle --json",
+    [
+      "workspace",
+      "fetch",
+      `/cycles/${cycleId}`,
+      "--to",
+      path.join(lebopHome, "context-cli-cycle"),
+      "--json",
+    ],
+    {
+      json: true,
+      assert: (payload) => assertFetchPayload(payload, "CLI cycle context fetch", "cycle"),
+    },
+  );
+  await assertContextManifest("cli cycle context", cliCycleContext, "cycle", [
+    `${prefix}-cycle-cli-updated`,
+    cycleId,
+  ]);
+  await cli("cycle archive --json", ["cycle", "archive", cycleId, "--yes", "--json"], {
+    json: true,
+    assert: (payload) => [
+      ...requireFields(payload, ["id", "success"], "CLI cycle archive"),
+      "archived cycle payload has id/success",
+    ],
+  });
+  doneCliCycleCleanup();
+  // C2: after archive, issue must no longer be on the cycle (Linear unlinks).
+  await cli(
+    "show after cycle archive --json",
+    ["show", issueId1, "--json"],
+    {
+      json: true,
+      assert: (payload) => {
+        const cycle =
+          payload.issue?.metadata?.cycle ??
+          payload.issue?.cycle ??
+          payload.issue?.cycle_id ??
+          null;
+        if (cycle) {
+          throw new Error(
+            `CLI cycle archive did not unlink issue ${issueId1} (still cycle=${JSON.stringify(cycle)})`,
+          );
+        }
+        return ["cycle archive unlinked issue from cycle"];
       },
-    );
-    const cliCycleContext = await cli(
-      "workspace fetch cycle --json",
-      [
-        "workspace",
-        "fetch",
-        `/cycles/${cycleFixture.id}`,
-        "--to",
-        path.join(lebopHome, "context-cli-cycle"),
-        "--json",
+    },
+  );
+  await cli(
+    "cycle list --include-archived --json",
+    ["cycle", "list", "--team", team, "--include-archived", "--limit", "20", "--json"],
+    {
+      json: true,
+      assert: (payload) => {
+        const found = (payload.cycles ?? []).some(
+          (c) => c.id === cycleId && Boolean(c.archived_at),
+        );
+        if (!found) {
+          throw new Error("CLI cycle list --include-archived missing archived smoke cycle");
+        }
+        return ["include_archived surfaces archived cycle"];
+      },
+    },
+  );
+
+  // C1: CLI discovery surfaces (search / history / views)
+  await cli(
+    "search --json",
+    ["search", "--query", prefix.slice(0, 24), "--limit", "5", "--json"],
+    {
+      json: true,
+      assert: (payload) => [
+        ...requireFields(payload, ["query", "count", "hits", "next"], "CLI search"),
+        "search returns hits + next continuations",
       ],
-      {
-        json: true,
-        assert: (payload) => assertFetchPayload(payload, "CLI cycle context fetch", "cycle"),
-      },
-    );
-    await assertContextManifest("cli cycle context", cliCycleContext, "cycle", [
-      cycleFixture.name ?? cycleFixture.id,
-    ]);
-  } else {
-    record("cli:cycle view --json", "gap", {
-      reason: "NOX currently has no cycles, so cycle view has no valid UUID fixture.",
-    });
-    record("cli:workspace explore cycle issues --json", "gap", {
-      reason: "NOX currently has no cycles, so cycle issue exploration has no valid fixture.",
-    });
-    record("cli:workspace fetch cycle --json", "gap", {
-      reason: "NOX currently has no cycles, so cycle workspace fetch has no valid fixture.",
-    });
-  }
+    },
+  );
+  await cli(
+    "history --json",
+    ["history", issueId1, "--limit", "10", "--json"],
+    {
+      json: true,
+      assert: (payload) => [
+        ...requireFields(payload, ["count", "history", "next"], "CLI history"),
+        "history returns rows + next",
+      ],
+    },
+  );
+  const cliView = await cli(
+    "view create --json",
+    [
+      "view",
+      "create",
+      "--name",
+      `${prefix}-view-cli`,
+      "--description",
+      "live smoke cli view",
+      "--json",
+    ],
+    {
+      json: true,
+      assert: (payload) => [
+        ...requireFields(payload, ["view.id", "view.name"], "CLI view create"),
+        "created view payload has id/name",
+      ],
+    },
+  );
+  const cliViewId = cliView.view.id;
+  report.created.cli_view = cliViewId;
+  const doneCliViewCleanup = registerCliCleanup("delete CLI view", [
+    "view",
+    "delete",
+    cliViewId,
+    "--yes",
+    "--json",
+  ]);
+  await cli("view list --json", ["view", "list", "--limit", "20", "--json"], { json: true });
+  await cli("view get --json", ["view", "get", cliViewId, "--json"], { json: true });
+  await cli(
+    "view update --json",
+    ["view", "update", cliViewId, "--name", `${prefix}-view-cli-updated`, "--json"],
+    {
+      json: true,
+      assert: (payload) => [
+        ...requireFields(payload, ["view.id", "view.name"], "CLI view update"),
+        "updated view payload has id/name",
+      ],
+    },
+  );
+  await cli("view issues --json", ["view", "issues", cliViewId, "--limit", "5", "--json"], {
+    json: true,
+  });
+  await cli(
+    "view delete --json",
+    ["view", "delete", cliViewId, "--yes", "--json"],
+    {
+      json: true,
+      assert: (payload) => [
+        ...requireFields(payload, ["id"], "CLI view delete"),
+        "view delete returns id",
+      ],
+    },
+  );
+  doneCliViewCleanup();
 
   const sessions = await cli(
     "agent-session list --json",
@@ -3679,10 +3912,10 @@ async function runCliSurface() {
     );
   } else {
     record("cli:agent-session view --json", "gap", {
-      reason: "No agent sessions returned by NOX.",
+      reason: `No agent sessions returned by ${team}.`,
     });
     record("cli:workspace fetch agent-session --json", "gap", {
-      reason: "No agent sessions returned by NOX.",
+      reason: `No agent sessions returned by ${team}.`,
     });
   }
 
@@ -3700,7 +3933,7 @@ async function runCliSurface() {
     },
   );
   doneCliPrimaryIssueCleanup();
-  await cli("document delete --json", ["document", "delete", documentId, "--yes", "--json"], {
+  await cli("document soft-delete --json", ["document", "soft-delete", documentId, "--yes", "--json"], {
     json: true,
     assert: (payload) => assertDeletePayload(payload, "CLI document delete", documentId),
   });
@@ -3710,7 +3943,7 @@ async function runCliSurface() {
     assert: (payload) => assertDeletePayload(payload, "CLI milestone delete", milestoneId),
   });
   doneCliMilestoneCleanup();
-  await cli("initiative delete --json", ["initiative", "delete", initiativeId, "--yes", "--json"], {
+  await cli("initiative soft-delete --json", ["initiative", "soft-delete", initiativeId, "--yes", "--json"], {
     json: true,
     assert: (payload) => assertDeletePayload(payload, "CLI initiative delete", initiativeId),
   });
@@ -3720,7 +3953,7 @@ async function runCliSurface() {
     assert: (payload) => assertDeletePayload(payload, "CLI label delete", label.label.id),
   });
   doneCliLabelCleanup();
-  await cli("project delete --json", ["project", "delete", projectId, "--yes", "--json"], {
+  await cli("project soft-delete --json", ["project", "soft-delete", projectId, "--yes", "--json"], {
     json: true,
     assert: (payload) => assertDeletePayload(payload, "CLI project delete", projectId),
   });
@@ -3780,7 +4013,7 @@ async function cleanupPlanCli(planDir) {
     registerRemoteAudit("soft_deleted_project", projectId, "CLI plan project");
     await cli(
       "plan cleanup delete project --json",
-      ["project", "delete", projectId, "--yes", "--json"],
+      ["project", "soft-delete", projectId, "--yes", "--json"],
       {
         json: true,
         assert: (payload) => assertDeletePayload(payload, "CLI plan project delete", projectId),
@@ -3817,9 +4050,9 @@ async function cleanupPlanDirWithCli(name, planDir) {
   }
   if (projectId) {
     registerRemoteAudit("soft_deleted_project", projectId, `${name} project`);
-    await cliCleanupRetried(`${name} delete project`, [
+    await cliCleanupRetried(`${name} soft-delete project`, [
       "project",
-      "delete",
+      "soft-delete",
       projectId,
       "--yes",
       "--json",
@@ -3876,7 +4109,7 @@ async function runPublishCli(labelName) {
     registerRemoteAudit("soft_deleted_project", projectId, "CLI publish project");
     await cli(
       "publish cleanup delete project --json",
-      ["project", "delete", projectId, "--yes", "--json"],
+      ["project", "soft-delete", projectId, "--yes", "--json"],
       {
         json: true,
         assert: (payload) => assertDeletePayload(payload, "CLI publish project delete", projectId),
@@ -3936,9 +4169,7 @@ async function runMcpSurface(context) {
   const projectId = project.project.id;
   report.created.mcp_project = projectId;
   registerRemoteAudit("soft_deleted_project", projectId, "MCP project");
-  const doneMcpProjectCleanup = registerCliCleanup("delete MCP project", [
-    "project",
-    "delete",
+  const doneMcpProjectCleanup = registerCliCleanup("soft-delete MCP project", ["project", "soft-delete",
     projectId,
     "--yes",
     "--json",
@@ -3965,9 +4196,7 @@ async function runMcpSurface(context) {
   const cursorFixtureProjectId = cursorFixtureProject.project.id;
   report.created.mcp_cursor_project = cursorFixtureProjectId;
   registerRemoteAudit("soft_deleted_project", cursorFixtureProjectId, "MCP cursor fixture project");
-  const doneMcpCursorProjectCleanup = registerCliCleanup("delete MCP cursor fixture project", [
-    "project",
-    "delete",
+  const doneMcpCursorProjectCleanup = registerCliCleanup("soft-delete MCP cursor fixture project", ["project", "soft-delete",
     cursorFixtureProjectId,
     "--yes",
     "--json",
@@ -4013,9 +4242,7 @@ async function runMcpSurface(context) {
   });
   const docId = doc.document.id;
   registerRemoteAudit("soft_deleted_document", docId, "MCP document");
-  const doneMcpDocumentCleanup = registerCliCleanup("delete MCP document", [
-    "document",
-    "delete",
+  const doneMcpDocumentCleanup = registerCliCleanup("soft-delete MCP document", ["document", "soft-delete",
     docId,
     "--yes",
     "--json",
@@ -4053,9 +4280,7 @@ async function runMcpSurface(context) {
   });
   const initiativeId = initiative.initiative.id;
   registerRemoteAudit("soft_deleted_initiative", initiativeId, "MCP initiative");
-  const doneMcpInitiativeCleanup = registerCliCleanup("delete MCP initiative", [
-    "initiative",
-    "delete",
+  const doneMcpInitiativeCleanup = registerCliCleanup("soft-delete MCP initiative", ["initiative", "soft-delete",
     initiativeId,
     "--yes",
     "--json",
@@ -4110,7 +4335,7 @@ async function runMcpSurface(context) {
     },
   );
   await mcp.call(
-    "delete_project",
+    "soft_delete_project",
     { id: cursorFixtureProjectId, confirm: true },
     {
       assert: (payload) =>
@@ -4234,9 +4459,7 @@ async function runMcpSurface(context) {
   const mcpIssueDocumentId = mcpIssueDocument.id;
   report.created.mcp_issue_document = mcpIssueDocumentId;
   registerRemoteAudit("soft_deleted_document", mcpIssueDocumentId, "MCP issue document");
-  const doneMcpIssueDocumentCleanup = registerCliCleanup("delete MCP issue document", [
-    "document",
-    "delete",
+  const doneMcpIssueDocumentCleanup = registerCliCleanup("soft-delete MCP issue document", ["document", "soft-delete",
     mcpIssueDocumentId,
     "--yes",
     "--json",
@@ -4587,10 +4810,12 @@ async function runMcpSurface(context) {
   );
   await mcp.call("explore_linear_workspace", { path: `/projects/${projectId}` });
   await mcp.call("explore_linear_workspace", { path: `/projects/${projectId}/issues` });
+  // Aggregate issue dossiers require depth=full; MCP default depth is shallow (0.0.6).
   const mcpProjectContext = await mcp.call(
     "fetch_linear_workspace",
     {
       target: `/projects/${projectId}`,
+      depth: "full",
       to: path.join(lebopHome, "context-mcp-project"),
     },
     {
@@ -4618,7 +4843,7 @@ async function runMcpSurface(context) {
   );
   await cli(
     "document delete MCP issue document fixture --json",
-    ["document", "delete", mcpIssueDocumentId, "--yes", "--json"],
+    ["document", "soft-delete", mcpIssueDocumentId, "--yes", "--json"],
     {
       json: true,
       assert: (payload) =>
@@ -4895,7 +5120,7 @@ async function runMcpSurface(context) {
   await mcp.call(
     "lint_text",
     {
-      content: "Bare Linear URL https://linear.app/noxor/issue/NOX-50/test",
+      content: "Bare Linear URL https://linear.app/lebop-playground/issue/TEAM-50/test",
       fix: true,
     },
     {
@@ -4963,48 +5188,128 @@ async function runMcpSurface(context) {
     },
   );
 
-  const cycles = await mcp.call("list_cycles", { team });
-  const cycleFixture = cycles.cycles?.[0];
-  if (cycleFixture?.id) {
-    await mcp.call("get_cycle", { id: cycleFixture.id });
-    await mcp.call(
-      "explore_linear_workspace",
-      { path: `/cycles/${cycleFixture.id}/issues` },
-      {
-        recordName: "mcp:explore_linear_workspace cycle issues",
-        assert: (payload) =>
-          assertExplorePayload(
-            payload,
-            "MCP cycle issue explore",
-            `/cycles/${cycleFixture.id}/issues`,
-          ),
+  const mcpCycleStarts = "2037-02-02T00:00:00.000Z";
+  const mcpCycleEnds = "2037-02-15T23:59:59.000Z";
+  const mcpCreatedCycle = await mcp.call(
+    "create_cycle",
+    {
+      team,
+      starts_at: mcpCycleStarts,
+      ends_at: mcpCycleEnds,
+      name: `${prefix}-cycle-mcp`,
+      description: "live smoke mcp cycle",
+    },
+    {
+      assert: (payload) => [
+        ...requireFields(
+          payload,
+          ["cycle.id", "cycle.starts_at", "cycle.ends_at", "cycle.number"],
+          "MCP create_cycle",
+        ),
+        "created cycle payload has id/window/number",
+      ],
+    },
+  );
+  const mcpCycleId = mcpCreatedCycle.cycle.id;
+  report.created.mcp_cycle = mcpCycleId;
+  registerRemoteAudit("archived_cycle", mcpCycleId, "MCP cycle");
+  const doneMcpCycleCleanup = registerCliCleanup("archive MCP cycle", [
+    "cycle",
+    "archive",
+    mcpCycleId,
+    "--yes",
+    "--json",
+  ]);
+  await mcp.call(
+    "update_cycle",
+    {
+      id: mcpCycleId,
+      name: `${prefix}-cycle-mcp-updated`,
+      description: "updated mcp smoke cycle",
+    },
+    {
+      assert: (payload) => [
+        ...requireFields(payload, ["cycle.id", "cycle.name"], "MCP update_cycle"),
+        "updated cycle payload has id/name",
+      ],
+    },
+  );
+  await mcp.call("list_cycles", { team });
+  await mcp.call(
+    "get_cycle",
+    {
+      id: mcpCycleId,
+    },
+    {
+      assert: (payload) => [
+        ...requireFields(
+          payload,
+          [
+            "cycle.id",
+            "cycle.description",
+            "cycle.is_active",
+            "cycle.is_next",
+            "cycle.is_past",
+            "cycle.is_future",
+            "cycle.is_previous",
+          ],
+          "MCP get_cycle",
+        ),
+        "get_cycle includes description + status flags",
+      ],
+    },
+  );
+  await mcp.call(
+    "explore_linear_workspace",
+    { path: `/cycles/${mcpCycleId}/issues` },
+    {
+      recordName: "mcp:explore_linear_workspace cycle issues",
+      assert: (payload) =>
+        assertExplorePayload(payload, "MCP cycle issue explore", `/cycles/${mcpCycleId}/issues`),
+    },
+  );
+  const mcpCycleContext = await mcp.call(
+    "fetch_linear_workspace",
+    {
+      target: `/cycles/${mcpCycleId}`,
+      to: path.join(lebopHome, "context-mcp-cycle"),
+    },
+    {
+      recordName: "mcp:fetch_linear_workspace cycle",
+      assert: (payload) => assertFetchPayload(payload, "MCP cycle context fetch", "cycle"),
+    },
+  );
+  await assertContextManifest("mcp cycle context", mcpCycleContext, "cycle", [
+    `${prefix}-cycle-mcp-updated`,
+    mcpCycleId,
+  ]);
+  await mcp.call(
+    "archive_cycle",
+    { id: mcpCycleId, confirm: true },
+    {
+      assert: (payload) => [
+        ...requireFields(payload, ["id", "success"], "MCP archive_cycle"),
+        "archived cycle payload has id/success",
+      ],
+    },
+  );
+  doneMcpCycleCleanup();
+  await mcp.call(
+    "list_cycles",
+    { team, include_archived: true, limit: 20 },
+    {
+      recordName: "mcp:list_cycles include_archived",
+      assert: (payload) => {
+        const found = (payload.cycles ?? []).some(
+          (c) => c.id === mcpCycleId && Boolean(c.archived_at),
+        );
+        if (!found) {
+          throw new Error("MCP list_cycles include_archived missing archived smoke cycle");
+        }
+        return ["include_archived surfaces archived cycle"];
       },
-    );
-    const mcpCycleContext = await mcp.call(
-      "fetch_linear_workspace",
-      {
-        target: `/cycles/${cycleFixture.id}`,
-        to: path.join(lebopHome, "context-mcp-cycle"),
-      },
-      {
-        recordName: "mcp:fetch_linear_workspace cycle",
-        assert: (payload) => assertFetchPayload(payload, "MCP cycle context fetch", "cycle"),
-      },
-    );
-    await assertContextManifest("mcp cycle context", mcpCycleContext, "cycle", [
-      cycleFixture.name ?? cycleFixture.id,
-    ]);
-  } else {
-    record("mcp:get_cycle", "gap", {
-      reason: "NOX currently has no cycles, so get_cycle has no valid UUID fixture.",
-    });
-    record("mcp:explore_linear_workspace cycle issues", "gap", {
-      reason: "NOX currently has no cycles, so cycle issue exploration has no valid fixture.",
-    });
-    record("mcp:fetch_linear_workspace cycle", "gap", {
-      reason: "NOX currently has no cycles, so cycle workspace fetch has no valid fixture.",
-    });
-  }
+    },
+  );
 
   const sessions = await mcp.call("list_agent_sessions", { limit: 1 });
   const agentSessionFixture = sessions.agent_sessions?.[0];
@@ -5030,11 +5335,151 @@ async function runMcpSurface(context) {
     );
   } else {
     record("mcp:get_agent_session", "gap", {
-      reason: "No agent sessions returned by NOX.",
+      reason: `No agent sessions returned by ${team}.`,
     });
     record("mcp:fetch_linear_workspace agent-session", "gap", {
-      reason: "No agent sessions returned by NOX.",
+      reason: `No agent sessions returned by ${team}.`,
     });
+  }
+
+  // ── Coverage L2 tools (search / history / views / label update / status-update tails) ──
+  await mcp.call(
+    "search_linear",
+    { query: prefix.slice(0, 24), limit: 5 },
+    {
+      assert: (payload) => [
+        ...requireFields(payload, ["query", "count", "hits"], "MCP search_linear"),
+        "search_linear returns dense hits envelope",
+      ],
+    },
+  );
+  await mcp.call(
+    "list_issue_history",
+    { identifier: issueId1, limit: 10 },
+    {
+      assert: (payload) => [
+        ...requireFields(payload, ["count"], "MCP list_issue_history"),
+        "list_issue_history returns count",
+      ],
+    },
+  );
+  await mcp.call("list_views", { limit: 10 });
+  const mcpView = await mcp.call(
+    "create_view",
+    {
+      name: `${prefix}-view-mcp`,
+      description: "live smoke view",
+      shared: false,
+    },
+    {
+      assert: (payload) => [
+        ...requireFields(payload, ["view.id", "view.name"], "MCP create_view"),
+        "created view payload has id/name",
+      ],
+    },
+  );
+  const mcpViewId = mcpView.view.id;
+  report.created.mcp_view = mcpViewId;
+  const doneMcpViewCleanup = registerCliCleanup("delete MCP view", [
+    "view",
+    "delete",
+    mcpViewId,
+    "--yes",
+    "--json",
+  ]);
+  await mcp.call("get_view", { id: mcpViewId });
+  await mcp.call(
+    "update_view",
+    { id: mcpViewId, name: `${prefix}-view-mcp-updated` },
+    {
+      assert: (payload) => [
+        ...requireFields(payload, ["view.id", "view.name"], "MCP update_view"),
+        "updated view payload has id/name",
+      ],
+    },
+  );
+  await mcp.call("materialize_view", { id: mcpViewId, limit: 5 });
+  await mcp.call(
+    "delete_view",
+    { id: mcpViewId, confirm: true },
+    {
+      assert: (payload) => [
+        ...requireFields(payload, ["id"], "MCP delete_view"),
+        "delete_view returns id",
+      ],
+    },
+  );
+  doneMcpViewCleanup();
+
+  await mcp.call(
+    "update_label",
+    {
+      id: labelId,
+      description: "updated by mcp live smoke",
+    },
+    {
+      assert: (payload) => [
+        ...requireFields(payload, ["label.id"], "MCP update_label"),
+        "update_label returns label.id",
+      ],
+    },
+  );
+
+  // Project / initiative status-update update+delete (create already covered earlier)
+  const mcpPuList = await mcp.call("list_project_updates", { project: projectId });
+  const mcpPuId = mcpPuList.updates?.[0]?.id;
+  if (mcpPuId) {
+    await mcp.call(
+      "update_project_update",
+      { id: mcpPuId, body: "MCP updated project status update body" },
+      {
+        assert: (payload) => [
+          ...requireFields(payload, ["project_update.id"], "MCP update_project_update"),
+          "update_project_update returns id",
+        ],
+      },
+    );
+    await mcp.call(
+      "soft_delete_project_update",
+      { id: mcpPuId, confirm: true },
+      {
+        assert: (payload) => [
+          ...requireFields(payload, ["id"], "MCP soft_delete_project_update"),
+          "soft_delete_project_update returns id",
+        ],
+      },
+    );
+  } else {
+    throw new Error("MCP list_project_updates returned no updates for live coverage of update/delete");
+  }
+
+  const mcpIuList = await mcp.call("list_initiative_updates", { initiative: initiativeId });
+  const mcpIuId = mcpIuList.updates?.[0]?.id;
+  if (mcpIuId) {
+    await mcp.call(
+      "update_initiative_update",
+      { id: mcpIuId, body: "MCP updated initiative status update body" },
+      {
+        assert: (payload) => [
+          ...requireFields(payload, ["initiative_update.id"], "MCP update_initiative_update"),
+          "update_initiative_update returns id",
+        ],
+      },
+    );
+    await mcp.call(
+      "soft_delete_initiative_update",
+      { id: mcpIuId, confirm: true },
+      {
+        assert: (payload) => [
+          ...requireFields(payload, ["id"], "MCP soft_delete_initiative_update"),
+          "soft_delete_initiative_update returns id",
+        ],
+      },
+    );
+  } else {
+    throw new Error(
+      "MCP list_initiative_updates returned no updates for live coverage of update/delete",
+    );
   }
 
   const donePlanMcpCleanup = await runPlanMcp(labelId);
@@ -5059,7 +5504,7 @@ async function runMcpSurface(context) {
   );
   doneMcpPrimaryIssueCleanup();
   await mcp.call(
-    "delete_document",
+    "soft_delete_document",
     { id: docId, confirm: true },
     {
       assert: (payload) => assertDeletePayload(payload, "MCP document delete", docId),
@@ -5075,7 +5520,7 @@ async function runMcpSurface(context) {
   );
   doneMcpMilestoneCleanup();
   await mcp.call(
-    "delete_initiative",
+    "soft_delete_initiative",
     { id: initiativeId, confirm: true },
     {
       assert: (payload) => assertDeletePayload(payload, "MCP initiative delete", initiativeId),
@@ -5091,7 +5536,7 @@ async function runMcpSurface(context) {
   );
   doneMcpLabelCleanup();
   await mcp.call(
-    "delete_project",
+    "soft_delete_project",
     { id: projectId, confirm: true },
     {
       assert: (payload) => assertDeletePayload(payload, "MCP project delete", projectId),
@@ -5198,7 +5643,7 @@ async function runPlanMcp(_labelId) {
   if (projectId) {
     registerRemoteAudit("soft_deleted_project", projectId, "MCP plan project");
     await mcp.call(
-      "delete_project",
+      "soft_delete_project",
       { id: projectId, confirm: true },
       {
         assert: (payload) => assertDeletePayload(payload, "MCP plan project delete", projectId),
@@ -5328,7 +5773,7 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   const [command, reportPath] = process.argv.slice(2);
   if (command === "--validate-report") {
     if (!reportPath) {
-      console.error("usage: live-nox-surface-smoke.mjs --validate-report <report.json>");
+      console.error("usage: live-surface-smoke.mjs --validate-report <report.json>");
       process.exit(2);
     }
     const expectedBinaryMode = process.env.LEBOP_LIVE_EXPECT_BIN_MODE?.trim() || undefined;

@@ -1,6 +1,7 @@
 import chalk from "chalk";
 import type { Command } from "commander";
-import { envelope } from "../lib/envelope.ts";
+import { wantsMachineOutput } from "../lib/encode.ts";
+import { writeMachineEnvelope } from "../lib/output.ts";
 import {
   buildCacheStatusInputFromCli,
   cacheStatusPayload,
@@ -15,13 +16,26 @@ import {
 export async function statusAction(opts: {
   team?: string;
   json?: boolean;
+  format?: string;
+  pretty?: boolean;
+  human?: boolean;
   remote?: boolean;
 }): Promise<void> {
   const result = await executeCacheStatus(buildCacheStatusInputFromCli({ opts }));
   const status = cacheStatusPayload(result);
 
-  if (opts.json) {
-    process.stdout.write(`${JSON.stringify(envelope({ ...status }), null, 2)}\n`);
+  if (wantsMachineOutput(opts)) {
+    writeMachineEnvelope(
+      {
+        ...status,
+        next: ["diff", "push --dry-run", "push", "pull --refresh --yes"],
+      } as Record<string, unknown>,
+      {
+        json: true,
+        format: opts.format,
+        pretty: opts.pretty,
+      },
+    );
     return;
   }
 
@@ -136,6 +150,9 @@ export function registerStatus(program: Command): void {
     .description("git-like status for the current repo's lebop cache")
     .option("--team <key>", "override the resolved team")
     .option("--no-remote", "skip the remote-staleness check (faster, no Linear API calls)")
-    .option("--json", "emit structured status")
+    .option("--json", "machine output (default; TOON)")
+    .option("--format <fmt>", "toon | json | pretty")
+    .option("--pretty", "pretty-printed JSON")
+    .option("--human", "maintainer/dev chalk tables (opt-in; not agent path; bodies uncapped)")
     .action(statusAction);
 }
