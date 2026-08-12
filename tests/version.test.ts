@@ -192,6 +192,9 @@ describe("runtime version metadata", () => {
     expect(discoverySource).not.toContain('["initiative-update", "delete"');
     expect(discoverySource).toContain('["project-update", "soft-delete"');
     expect(discoverySource).toContain('["initiative-update", "soft-delete"');
+    expect(discoverySource).toContain("LEBOP_SANDBOX_TOKEN");
+    expect(discoverySource).toContain("auth login");
+    expect(discoverySource).toContain("--token-file");
 
     // Surface cleanup fallthrough must use soft-delete for soft-delete domains.
     const surfaceSource = readFileSync(

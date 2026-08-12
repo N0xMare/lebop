@@ -156,21 +156,10 @@ const results = [];
 const cleanup = [];
 const invocationBase = resolveLebopInvocation([]);
 
-function run(args, opts = {}) {
+function spawnOnce(inv, env) {
   return new Promise((resolve) => {
-    const env = {
-      ...process.env,
-      LEBOP_WORKSPACE: workspace,
-      LEBOP_TEAM: team,
-      // Force machine JSON for this smoke so we can parse stably.
-      LEBOP_MACHINE_FORMAT: "json",
-      NO_COLOR: "1",
-      ...opts.env,
-    };
-    const fullArgs = ["--workspace", workspace, "--team", team, ...args];
-    const inv = resolveLebopInvocation(fullArgs, env);
     const child = spawn(inv.command, inv.args, {
-      cwd: opts.cwd ?? repoRoot,
+      cwd: repoRoot,
       env,
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -188,9 +177,24 @@ function run(args, opts = {}) {
     });
     child.on("close", (code) => {
       clearTimeout(timer);
-      resolve({ code, stdout, stderr, args, mode: inv.mode, binary: inv.binary });
+      resolve({ code, stdout, stderr, mode: inv.mode, binary: inv.binary });
     });
   });
+}
+
+function run(args, opts = {}) {
+  const env = {
+    ...process.env,
+    LEBOP_WORKSPACE: workspace,
+    LEBOP_TEAM: team,
+    // Force machine JSON for this smoke so we can parse stably.
+    LEBOP_MACHINE_FORMAT: "json",
+    NO_COLOR: "1",
+    ...opts.env,
+  };
+  const fullArgs = ["--workspace", workspace, "--team", team, ...args];
+  const inv = resolveLebopInvocation(fullArgs, env);
+  return spawnOnce(inv, env).then((r) => ({ ...r, args }));
 }
 
 function parseJson(stdout) {
@@ -227,13 +231,113 @@ function assert(cond, msg) {
   if (!cond) throw new Error(msg);
 }
 
+/**
+ * Release/canary set an empty LEBOP_HOME plus LEBOP_SANDBOX_TOKEN.
+ * Mirror live-surface-smoke: login that token into the isolated home.
+ * Local maintainer runs (no token, no isolated home) keep existing ~/.lebop auth.
+ */
+async function ensureSandboxAuth() {
+  const tokenFromEnv = process.env.LEBOP_SANDBOX_TOKEN?.trim();
+  let lebopHome = process.env.LEBOP_HOME?.trim();
+  if (!tokenFromEnv && !lebopHome) return;
+
+  if (!lebopHome) {
+    lebopHome = await mkdtemp(path.join(tmpdir(), "lebop-live-home-"));
+    process.env.LEBOP_HOME = lebopHome;
+  } else {
+    await mkdir(lebopHome, { recursive: true });
+  }
+
+  await step("auth login --token-file", async () => {
+    let token = tokenFromEnv;
+    if (!token) {
+      const env = { ...process.env };
+      delete env.LEBOP_HOME;
+      const inv = resolveLebopInvocation(
+        ["--workspace", workspace, "auth", "token", workspace, "--unsafe"],
+        env,
+      );
+      const tokenResult = await spawnOnce(inv, env);
+      assert(tokenResult.code === 0, tokenResult.stderr || tokenResult.stdout);
+      token = tokenResult.stdout.trim();
+      assert(Boolean(token), "empty token from existing auth");
+    }
+
+    const tokenFile = path.join(tmpdir(), `lebop-disc-token-${process.pid}.txt`);
+    await writeFile(tokenFile, token, { mode: 0o600 });
+    try {
+      const loginEnv = { ...process.env, LEBOP_HOME: lebopHome, NO_COLOR: "1" };
+      const loginInv = resolveLebopInvocation(
+        ["auth", "login", "--token-file", tokenFile],
+        loginEnv,
+      );
+      const r = await spawnOnce(loginInv, loginEnv);
+      assert(r.code === 0, r.stderr || r.stdout);
+    } finally {
+      await rm(tokenFile, { force: true });
+    }
+
+    const def = await run(["auth", "default", workspace]);
+    assert(def.code === 0, def.stderr || def.stdout);
+    const teamSet = await run(["auth", "set-default-team", workspace, team]);
+    assert(teamSet.code === 0, teamSet.stderr || teamSet.stdout);
+    return { workspace, team };
+  });
+}
+
+async function writeDiscoveryReport(fatal = null) {
+  if (fatal) {
+    results.push({ name: "fatal", ok: false, ms: 0, error: fatal });
+  }
+  const failed = results.filter((r) => !r.ok);
+  const passed = results.filter((r) => r.ok);
+  const summary = {
+    workspace,
+    team,
+    prefix,
+    binary_under_test: invocationBase.binary,
+    mode: invocationBase.mode,
+    total: results.length,
+    passed: passed.length,
+    failed: failed.length,
+    failures: failed.map((f) => ({ name: f.name, error: f.error })),
+    steps: results,
+  };
+
+  const outDir = path.join(repoRoot, "docs", "local");
+  await mkdir(outDir, { recursive: true });
+  const reportPath = path.join(outDir, `live-discovery-report-${stamp}.json`);
+  const sanitized = sanitizeDiscoveryReport(summary);
+  await writeFile(reportPath, JSON.stringify(sanitized, null, 2));
+  console.log(`\nreport: ${reportPath}`);
+  console.log(`passed ${passed.length}/${results.length}`);
+  if (failed.length) {
+    console.error("FAILURES:");
+    for (const f of failed) console.error(`  - ${f.name}: ${f.error}`);
+    process.exitCode = 1;
+  }
+}
+
 async function main() {
   console.log(
     `live-discovery-smoke workspace=${workspace} team=${team} prefix=${prefix} mode=${invocationBase.mode} binary=${invocationBase.binary}`,
   );
 
+  let fatal = null;
+  try {
+    await ensureSandboxAuth();
+    await runDiscoverySteps();
+  } catch (err) {
+    fatal = err instanceof Error ? err.message : String(err);
+    console.error(fatal);
+    process.exitCode = 1;
+  }
+  await writeDiscoveryReport(fatal);
+}
+
+async function runDiscoverySteps() {
   // ── baseline ──────────────────────────────────────────────────────────
-  const who = await step("auth whoami --refresh", async () => {
+  await step("auth whoami --refresh", async () => {
     const r = await run(["auth", "whoami", "--refresh", "--json"]);
     assert(r.code === 0, r.stderr || r.stdout);
     const body = parseJson(r.stdout);
@@ -628,34 +732,6 @@ async function main() {
     }
     return report;
   });
-
-  const failed = results.filter((r) => !r.ok);
-  const passed = results.filter((r) => r.ok);
-  const summary = {
-    workspace,
-    team,
-    prefix,
-    binary_under_test: invocationBase.binary,
-    mode: invocationBase.mode,
-    total: results.length,
-    passed: passed.length,
-    failed: failed.length,
-    failures: failed.map((f) => ({ name: f.name, error: f.error })),
-    steps: results,
-  };
-
-  const outDir = path.join(repoRoot, "docs", "local");
-  await mkdir(outDir, { recursive: true });
-  const reportPath = path.join(outDir, `live-discovery-report-${stamp}.json`);
-  const sanitized = sanitizeDiscoveryReport(summary);
-  await writeFile(reportPath, JSON.stringify(sanitized, null, 2));
-  console.log(`\nreport: ${reportPath}`);
-  console.log(`passed ${passed.length}/${results.length}`);
-  if (failed.length) {
-    console.error("FAILURES:");
-    for (const f of failed) console.error(`  - ${f.name}: ${f.error}`);
-    process.exitCode = 1;
-  }
 }
 
 async function validateDiscoveryReportCli(reportPath) {
