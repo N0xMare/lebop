@@ -21,19 +21,17 @@ import { spawn } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { sanitizeLiveSurfaceReport } from "./live-surface-smoke.mjs";
+import {
+  defaultLiveStamp,
+  normalizeLiveStamp,
+  sanitizeLiveSurfaceReport,
+} from "./live-surface-smoke.mjs";
 
 const repoRoot = path.resolve(import.meta.dir, "..");
 const DEFAULT_LEBOP_BIN = path.join(repoRoot, "bin", "lebop");
 const workspace = process.env.LEBOP_LIVE_WORKSPACE ?? "lebop-playground";
 const team = process.env.LEBOP_LIVE_TEAM ?? "LEB";
-const stamp = (
-  process.env.LEBOP_LIVE_STAMP ??
-  new Date()
-    .toISOString()
-    .replace(/[-:TZ.]/g, "")
-    .slice(0, 14)
-).slice(0, 20);
+const stamp = normalizeLiveStamp(process.env.LEBOP_LIVE_STAMP ?? defaultLiveStamp());
 const prefix = `disc-${stamp}`;
 const timeoutMs = Number(process.env.LEBOP_LIVE_TIMEOUT_MS ?? 120_000);
 

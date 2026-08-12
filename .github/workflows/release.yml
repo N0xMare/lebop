@@ -307,16 +307,18 @@ jobs:
           set -euo pipefail
           chmod +x compiled-live/lebop-linux-x64
           export LEBOP_LIVE_BIN="$PWD/compiled-live/lebop-linux-x64"
+          export LEBOP_LIVE_STAMP="discovery-${{ github.run_id }}-${{ github.run_attempt }}"
           export LEBOP_LIVE_WORKSPACE=lebop-playground
           export LEBOP_LIVE_TEAM=LEB
           bun scripts/live-discovery-smoke.mjs
 
       - name: validate discovery live report
         env:
+          LEBOP_LIVE_STAMP: discovery-${{ github.run_id }}-${{ github.run_attempt }}
           LEBOP_LIVE_EXPECT_WORKSPACE: lebop-playground
           LEBOP_LIVE_EXPECT_TEAM: LEB
         run: |
-          report="$(ls -1t docs/local/live-discovery-report-*.json | head -n1)"
+          report="docs/local/live-discovery-report-${LEBOP_LIVE_STAMP}.json"
           bun scripts/live-discovery-smoke.mjs --validate-report "$report"
 
       - name: upload discovery live report

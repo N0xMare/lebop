@@ -163,11 +163,24 @@ describe("runtime version metadata", () => {
     });
     const discoveryRun = workflowStep(discoverySmoke, "compiled discovery live harness").run as string;
     expect(discoveryRun).toContain('export LEBOP_LIVE_BIN="$PWD/compiled-live/lebop-linux-x64"');
+    expect(discoveryRun).toContain(
+      'export LEBOP_LIVE_STAMP="discovery-${{ github.run_id }}-${{ github.run_attempt }}"',
+    );
     expect(discoveryRun).toContain("bun scripts/live-discovery-smoke.mjs");
 
-    // R13-P1-4: discovery co-gate must fail-closed on sanitized report inventory.
-    const discoveryValidate = workflowStep(discoverySmoke, "validate discovery live report").run as string;
+    // R13-P1-4: discovery co-gate must fail-closed on sanitized, stamp-bound report.
+    const discoveryValidateStep = workflowStep(discoverySmoke, "validate discovery live report");
+    expect(discoveryValidateStep.env).toEqual({
+      LEBOP_LIVE_STAMP: `discovery-\${{ github.run_id }}-\${{ github.run_attempt }}`,
+      LEBOP_LIVE_EXPECT_WORKSPACE: "lebop-playground",
+      LEBOP_LIVE_EXPECT_TEAM: "LEB",
+    });
+    const discoveryValidate = discoveryValidateStep.run as string;
     expect(discoveryValidate).toContain("live-discovery-smoke.mjs --validate-report");
+    expect(discoveryValidate).toContain(
+      'report="docs/local/live-discovery-report-${LEBOP_LIVE_STAMP}.json"',
+    );
+    expect(discoveryValidate).not.toContain("ls -1t");
 
     // Soft-delete hard cutover: discovery must not invoke obsolete status-update delete leaves.
     const discoverySource = readFileSync(
