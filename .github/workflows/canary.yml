@@ -60,6 +60,8 @@ jobs:
       # Job-level env can't use ${{ runner.temp }} — that context is only
       # available inside steps. /tmp is always writable on ubuntu-latest.
       LEBOP_HOME: /tmp/lebop-canary
+      # CI parses CLI stdout with JSON.parse; retain TOON as the product default.
+      LEBOP_MACHINE_FORMAT: json
       LEBOP_SANDBOX_TOKEN: ${{ secrets.LEBOP_SANDBOX_TOKEN }}
       LEBOP_CANARY_WORKSPACE: lebop-playground
       LEBOP_CANARY_TEAM: LEB
