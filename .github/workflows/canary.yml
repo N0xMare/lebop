@@ -336,7 +336,8 @@ jobs:
             echo "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"list_issues\",\"arguments\":{\"team\":\"${LEBOP_CANARY_TEAM}\",\"limit\":2,\"workspace\":\"${LEBOP_CANARY_WORKSPACE}\"}}}"
             echo "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{\"name\":\"explore_linear_workspace\",\"arguments\":{\"path\":\"/projects\",\"team\":\"${LEBOP_CANARY_TEAM}\",\"limit\":1,\"workspace\":\"${LEBOP_CANARY_WORKSPACE}\"}}}"
             echo "{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"tools/call\",\"params\":{\"name\":\"fetch_linear_workspace\",\"arguments\":{\"target\":\"/issues/${issue_id}\",\"include\":[\"comments\",\"relations\",\"attachments\"],\"depth\":\"shallow\",\"limit\":2,\"to\":\"${mcp_context_dir}\",\"workspace\":\"${LEBOP_CANARY_WORKSPACE}\"}}}"
-          ) | timeout 12 ./bin/lebop mcp > "$out"
+          # This smoke asserts the broad MCP inventory below; product default remains core.
+          ) | timeout 12 ./bin/lebop mcp --profile full > "$out"
           mcp_status=$?
           set -e
           if [ "$mcp_status" -ne 0 ]; then
