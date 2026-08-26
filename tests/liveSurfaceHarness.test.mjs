@@ -120,7 +120,7 @@ function compiledBinaryProvenance() {
     path: "./dist/lebop",
     sha256: "a".repeat(64),
     size_bytes: 123456,
-    version: "0.0.6",
+    version: "0.0.7",
     platform: "darwin",
     arch: "arm64",
   };
@@ -228,7 +228,7 @@ describe("live surface harness validation helpers", () => {
     expect(() =>
       assertFullSurfaceReport(report, {
         expectedBinaryMode: "compiled-binary",
-        expectedBinaryVersion: "0.0.6",
+        expectedBinaryVersion: "0.0.7",
       }),
     ).toThrow(/binary_under_test\.version/);
   });
