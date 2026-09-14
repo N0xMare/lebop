@@ -53,12 +53,12 @@ function inputDescription(toolName: string, field: string): string {
 describe("MCP tool annotations", () => {
   const allTools = listToolNames();
 
-  it("registers exactly 104 tools", () => {
-    expect(allTools.length).toBe(104);
+  it("registers exactly 103 tools", () => {
+    expect(allTools.length).toBe(103);
   });
 
   it("docs/spec.md shipped-tool inventory exactly matches server registrations", () => {
-    const section = /#### Shipped tools \(104\)([\s\S]*?)#### MCP tool inventory/.exec(spec)?.[1];
+    const section = /#### Shipped tools \(103\)([\s\S]*?)#### MCP tool inventory/.exec(spec)?.[1];
     expect(section).toBeDefined();
     const documented = Array.from(
       new Set([...(section ?? "").matchAll(/`([a-z_]+)`/g)].map((m) => m[1])),

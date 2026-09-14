@@ -6,7 +6,7 @@ under gitignored `docs/local/` only — they must not override this document for
 released/shipped behavior. If something here disagrees with the code, the
 **code wins** — open a PR fixing this doc.
 
-**Version: 0.0.7** — public product surface for this release (AXI density,
+**Version: 0.0.8** — public product surface for this release (AXI density,
 multi-workspace paths, progressive MCP, expanded Linear surface, content size
 policy). Mid-train design notes under `docs/local/` are not shipped.
 
@@ -34,7 +34,7 @@ Two surfaces share one `lib/` + `surface/` core:
   progressive `mcp`, GraphQL `raw` (raw GraphQL responses stay unenveloped
   JSON for `jq`).
 - **`lebop mcp`** — stdio MCP; **default profile `core`** (**17** tools);
-  `--profile full` for the entire inventory (**104** tools). Tool text is
+  `--profile full` for the entire inventory (**103** tools). Tool text is
   **compact JSON** always (hosts commonly `JSON.parse`).
 
 One sentence: dense dual transport over `@linear/sdk`, with markdown + YAML
@@ -71,7 +71,7 @@ declarative authoring).
 
 ## 3. Scope
 
-### In scope (v0.0.7)
+### In scope (v0.0.8)
 
 | Group | Commands |
 |---|---|
@@ -94,7 +94,7 @@ Plus the runtime substrate:
 - Context dossiers under `~/.lebop/context/<workspace-slug>/<repo-hash>/…`
 - `updatedAt` stale guard on cache push / plan apply (not atomic server CAS)
 - AXI machine output: `schema_version: 2`; CLI machine default → **TOON** (tabular); MCP text → **compact JSON** always
-- Progressive MCP: default **core** (17 tools); **full** = 104 tools
+- Progressive MCP: default **core** (17 tools); **full** = 103 tools
 - Markdown linter + GraphQL `raw` escape hatch
 - Agent skills: 6 isolated verticals under `agents/skills/{cli,mcp}/` (monolith + program + execution per medium) + CLI slash commands (`agents/commands/`)
 - Cursor continuation on list/search surfaces; structured `LebopError` taxonomy (§13.1)
@@ -111,7 +111,7 @@ Plus the runtime substrate:
   interactive-only ergonomics — see §13.2 for shipped vs planned details
 - **First-class Linear PM verbs**: initiatives + initiative-update
   (create/list/update/soft-delete), milestones, cycles
-  (list/view/create/update/archive), labels (list/create/update/delete),
+  (list/view/update/archive), labels (list/create/update/delete),
   project- and issue-scoped documents (list/view/create/update/soft-delete),
   agent-sessions (list/view read-only), team members (list), team
   detail, team workflow states, project-update create/list/update/soft-delete
@@ -177,7 +177,7 @@ curl -fsSL https://raw.githubusercontent.com/N0xMare/lebop/main/scripts/install.
 The installer downloads the matching GitHub Releases binary for macOS/Linux
 x64/arm64, verifies it against `SHA256SUMS`, and writes it to
 `~/.local/bin/lebop` or `/usr/local/bin/lebop`. Pin a release with
-`LEBOP_VERSION=v0.0.7`.
+`LEBOP_VERSION=v0.0.8`.
 
 From source (Bun required):
 
@@ -204,7 +204,7 @@ sudo ln -sf "$HOME/.bun/bin/lebop" /usr/local/bin/lebop
 Verify:
 
 ```sh
-lebop --version       # 0.0.7
+lebop --version       # 0.0.8
 which lebop           # /opt/homebrew/bin/lebop (or /usr/local/bin/lebop)
 ```
 
@@ -1037,18 +1037,19 @@ soft-archives** via Linear `initiativeUpdateArchive`.
 ```
 lebop cycle list [--team KEY | --all-teams] [--include-archived] [--limit N] [--json]
 lebop cycle view <id> [--json]
-lebop cycle create [--team KEY] --starts <ISO> --ends <ISO> [--name TEXT] [--description TEXT] [--json]
 lebop cycle update <id> [--name TEXT] [--description TEXT|null] [--starts <ISO>] [--ends <ISO>] [--completed-at <ISO|null>] [--json]
 lebop cycle archive <id> --yes [--json]
 ```
 
-Team-scoped iterations (sprints). **Create** requires ISO DateTime
-`--starts` / `--ends`; cycle **number is server-assigned** (not writable).
-**Update** may set name, description, window dates, or `completed_at`
-(ISO to mark complete; string/`null` to clear). **Archive** unlinks all
-issues currently on the cycle, then archives it — Linear has **no**
-cycle unarchive mutation. Prefer updating an existing future cycle when a
-team already has a generated runway.
+Team-scoped iterations (sprints). Linear generates cycles from **team cycle
+settings** (duration + upcoming runway); lebop does **not** wrap
+`cycleCreate` (the live API refuses it). Prefer `cycle list` + `cycle update`
+on an existing future cycle, and assign issues via `set cycle` /
+`update_issue`. **Update** may set name, description, window dates, or
+`completed_at` (ISO to mark complete; string/`null` to clear). **Archive**
+unlinks all issues currently on the cycle, then archives it — Linear has
+**no** cycle unarchive mutation. Do not archive a shared team cycle unless
+you mean to.
 
 List/get include `description` and status flags: `is_active`, `is_next`,
 `is_past`, `is_future`, `is_previous`. Default list is live-only;
@@ -1381,7 +1382,7 @@ SHA256 against `SHA256SUMS`, and installs to the release target:
 
 Source checkouts / `bun link` wrappers are **not** overwritten; the command
 updates the release install path so PATH picks up the new binary after a new
-shell. Pin with `--version v0.0.7` (or `0.0.7`). `--check` only reports
+shell. Pin with `--version v0.0.8` (or `0.0.8`). `--check` only reports
 whether an update is available. `--force` reinstalls even when already current.
 
 This updates **released tags** only — it cannot install unreleased main commits
@@ -1881,6 +1882,13 @@ Facts that cost time on first encounter. **Check here before re-deriving.**
 
 ### 12.1 Linear API / SDK
 
+- **`cycleCreate` is refused.** Linear schema 93+ deprecates
+  `Mutation.cycleCreate` with reason "Cycle creation is not supported."; the
+  live API returns that as a GraphQL error. lebop does not wrap create —
+  cycles come from team settings. Live smoke uses an existing team cycle for
+  list/view/update/explore/fetch. Successful archive is not live-proven
+  against a smoke-owned cycle (no unarchive; cannot create a disposable
+  fixture).
 - **`IssueFilter` has no `identifier` field.** `issues(filter: { identifier:
   { in: [...] } })` errors. Workaround: multi-alias query — `issue(id:
   "TEAM-NN")` accepts either UUID or identifier. See
@@ -1983,7 +1991,7 @@ Facts that cost time on first encounter. **Check here before re-deriving.**
 
 ## 13. Release surface and validation
 
-The shipped surface in §3 is the public product surface for **v0.0.7**. This
+The shipped surface in §3 is the public product surface for **v0.0.8**. This
 section covers agent-oriented CLI + MCP tooling, reviewed publish, context
 materialization, cache/stale-guard workflows, and deliberately skipped
 interactive-only ergonomics (see §3 out-of-scope).
@@ -2061,7 +2069,7 @@ exist yet. Interactive-only ergonomics remain deliberately out of scope (§3).
 | **Projects** | `project create\|update\|soft-delete\|view` (`soft-delete` → `archived_at`; not issue-style unarchive); `project-update create\|list\|update\|soft-delete` (`--health`; soft-archives) | |
 | **Milestones** | `milestone list\|view\|create\|update\|delete --project` | |
 | **Initiatives** | `initiative list\|view\|create\|update\|soft-delete\|archive\|unarchive\|add-project\|remove-project`, `initiative-update create\|list\|update\|soft-delete` (`--health`; soft-archives) | |
-| **Cycles** | `cycle list\|view\|create\|update\|archive` (archive unlinks issues; no unarchive) | `cycleShiftAll` / `cycleStartUpcomingCycleToday` remain via `raw`. |
+| **Cycles** | `cycle list\|view\|update\|archive` (archive unlinks issues; no unarchive). Linear generates cycles from team settings; no `cycle create` | `cycleShiftAll` / `cycleStartUpcomingCycleToday` remain via `raw`. |
 | **Documents** | `document list\|view\|create\|update\|soft-delete` — project- and issue-scoped create (`--project` / `--issue`); soft-delete sets `archived_at` | Interactive `--edit` not shipped. |
 | **Workspace context** | `workspace explore`, `workspace fetch` — default fetch depth **shallow**; multi-ws context paths | |
 | **Publish workflow** | `publish review --plan <dir>`, `publish review --cache [IDS...] [--project-id UUID...] [--all-modified]`, `publish apply <review-id>` | |
@@ -2082,7 +2090,7 @@ HTTP+SSE transport is post-release for hosted/multi-user setups.
 | Profile | Flag | Size | Role |
 |---|---|---|---|
 | **core** (default) | `lebop mcp` or `--profile core` | **17** tools | Daily coding-agent Linear loop |
-| **full** | `lebop mcp --profile full` | **104** tools | Entire dual inventory |
+| **full** | `lebop mcp --profile full` | **103** tools | Entire dual inventory |
 
 Core tools (frozen list in `src/lib/mcpProfiles.ts`):
 `explore_linear_workspace`, `fetch_linear_workspace`, `search_linear`,
@@ -2148,7 +2156,7 @@ Cursor project config (`.cursor/mcp.json`) uses the same command shape:
   `{content: [{type, text}], isError: true}` with `LebopError.code` +
   `hint` preserved. MCP clients see the structured taxonomy.
 
-#### Shipped tools (104)
+#### Shipped tools (103)
 
 **Workspace context** (2): `explore_linear_workspace`,
 `fetch_linear_workspace`
@@ -2186,8 +2194,7 @@ active-work default.
 `initiative_add_project`, `initiative_remove_project`,
 `list_initiative_updates`, `create_initiative_update`
 
-**Cycles** (5): `list_cycles`, `get_cycle`, `create_cycle`, `update_cycle`,
-`archive_cycle`
+**Cycles** (4): `list_cycles`, `get_cycle`, `update_cycle`, `archive_cycle`
 
 **Documents** (5): `list_documents`, `get_document`, `create_document`,
 `update_document`, `soft_delete_document`
@@ -2222,7 +2229,7 @@ identifier. Real mutations require `confirm: true`.
 **GraphQL escape hatch** (1): `raw_graphql`
 
 **Coverage / residual dual tools (0.0.6)** (16; historical inventory bucket —
-domain list/create live under domain sections; totals still sum to 104):
+domain list/create live under domain sections; totals still sum to 103):
 `search_linear`, `list_issue_history`, `list_views`, `get_view`, `create_view`,
 `update_view`, `delete_view`, `materialize_view`, `list_custom_fields`,
 `get_issue_custom_fields`, `set_issue_custom_field`, `update_label`,
@@ -2237,7 +2244,7 @@ remaining post-fix warnings. `lint_text` runs the in-memory renderer rule set
 With `fix: true`, `lint_text` returns fixed content, fix pass count, remaining
 warning count, and remaining warnings without touching files.
 
-#### MCP tool inventory (104 tools)
+#### MCP tool inventory (103 tools)
 
 The MCP server is intended to be self-sufficient for shipped agent workflows —
 agents, including fully sandboxed containers / VMs where Linear's hosted
@@ -2350,7 +2357,7 @@ works.
 PM object coverage: projects (create/update/`soft_delete_project`), initiatives
 (create/update/archive/unarchive/`soft_delete_initiative`), label
 list/create/delete, milestones CRUD, documents
-(create/update/`soft_delete_document`), cycle list/view/create/update/archive,
+(create/update/`soft_delete_document`), cycle list/view/update/archive,
 agent-session list/view, and team list/detail/member tools (`list_teams`,
 `get_team`, `list_team_members`) are shipped in the current release surface; see
 the command reference and MCP inventory for exact arguments.

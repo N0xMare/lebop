@@ -116,7 +116,6 @@ const MCP_REGISTRATION_ORDER_LOCK = [
   "create_initiative_update",
   "list_cycles",
   "get_cycle",
-  "create_cycle",
   "update_cycle",
   "archive_cycle",
   "list_documents",

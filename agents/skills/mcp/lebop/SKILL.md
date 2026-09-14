@@ -16,7 +16,7 @@ If lebop MCP tools are not available in the host, stop and report that. Do not i
 | Profile | Tools | When |
 |---------|-------|------|
 | **core** (default) | **17** | Day-to-day research + common issue writes |
-| **full** | **104** | Initiatives, plan tools, documents, cycles, milestones, views, custom fields, broader PM |
+| **full** | **103** | Initiatives, plan tools, documents, cycles, milestones, views, custom fields, broader PM |
 
 Host config typically: `command: lebop`, `args: ["mcp"]` or `["mcp", "--profile", "full"]`. Prefer **core** until a goal needs tools only present in full.
 

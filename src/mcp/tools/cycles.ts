@@ -5,29 +5,23 @@ import { getTeam } from "../../lib/teams.ts";
 import {
   buildCycleArchiveInputFromMcp,
   buildCycleArchiveMcpInputSchema,
-  buildCycleCreateInputFromMcp,
-  buildCycleCreateMcpInputSchema,
   buildCycleGetInput,
   buildCycleGetMcpInputSchema,
   buildCycleListInputFromMcp,
   buildCycleListMcpInputSchema,
   buildCycleUpdateInputFromMcp,
   buildCycleUpdateMcpInputSchema,
-  CYCLE_MCP_CREATE_TEAM_HINT,
   CYCLE_MCP_GET_HINT,
   CYCLE_MCP_TEAM_NOT_FOUND_HINT,
   type CycleArchiveMcpInput,
-  type CycleCreateMcpInput,
   type CycleListMcpInput,
   type CycleUpdateMcpInput,
   cycleArchiveOperation,
-  cycleCreateOperation,
   cycleGetOperation,
   cycleListOperation,
   cycleListPayload,
   cycleUpdateOperation,
   executeCycleArchive,
-  executeCycleCreate,
   executeCycleGet,
   executeCycleList,
   executeCycleUpdate,
@@ -79,20 +73,6 @@ export function buildCyclesToolSpecs(deps: CycleToolDeps): McpToolSpec[] {
         return text(
           envelope({ cycle, next: mcpGetNext("list_issues", "update_issue", "list_cycles") }),
         );
-      },
-    },
-    {
-      name: "create_cycle",
-      config: mcpToolConfig(
-        cycleCreateOperation,
-        buildCycleCreateMcpInputSchema(deps.workspaceParamDescription),
-      ),
-      handler: async (args: CycleCreateMcpInput) => {
-        const cycle = await executeCycleCreate(buildCycleCreateInputFromMcp(args), {
-          resolveTeam: async (team) => (await resolveConfig({ teamOverride: team })).team,
-          teamNotFoundHint: CYCLE_MCP_CREATE_TEAM_HINT,
-        });
-        return text(envelope({ cycle, next: mcpGetNext("get_cycle", "list_cycles") }));
       },
     },
     {

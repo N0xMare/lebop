@@ -9,7 +9,7 @@
 
 **Docs:** the sole comprehensive public reference is [`docs/spec.md`](docs/spec.md).
 
-**Version:** **0.0.7** — agent-first Linear control plane (machine/TOON default, progressive MCP core 17 / full 104, multi-workspace paths, AXI densified `next[]`, content size policy, reviewed publish).
+**Version:** **0.0.8** — agent-first Linear control plane (machine/TOON default, progressive MCP core 17 / full 103, multi-workspace paths, AXI densified `next[]`, content size policy, reviewed publish).
 
 Two shapes:
 
@@ -32,14 +32,14 @@ lebop teams
 lebop list --assignee me --state-type started --limit 10
 ```
 
-The installer drops a single self-contained binary (no Bun runtime needed) at `~/.local/bin/lebop` if writable, otherwise `/usr/local/bin/lebop` (sudo). Override with `LEBOP_INSTALL_DIR=...`. Pin a specific version with `LEBOP_VERSION=v0.0.7`.
+The installer drops a single self-contained binary (no Bun runtime needed) at `~/.local/bin/lebop` if writable, otherwise `/usr/local/bin/lebop` (sudo). Override with `LEBOP_INSTALL_DIR=...`. Pin a specific version with `LEBOP_VERSION=v0.0.8`.
 
 After install, stay current with:
 
 ```sh
 lebop update --check    # compare installed version to latest GitHub release
 lebop update            # download + SHA256-verify + install latest
-lebop update --version v0.0.7   # pin a tag
+lebop update --version v0.0.8   # pin a tag
 ```
 
 `lebop update` only installs **tagged releases** (not unreleased main). If `which lebop` still shows an old binary after update, check PATH order (`~/.local/bin` vs another copy).

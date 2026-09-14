@@ -6,13 +6,11 @@ import { writeMachineEnvelope } from "../lib/output.ts";
 import { getTeam } from "../lib/teams.ts";
 import {
   buildCycleArchiveInputFromCli,
-  buildCycleCreateInputFromCli,
   buildCycleGetInput,
   buildCycleListInputFromCli,
   buildCycleUpdateInputFromCli,
   cycleListPayload,
   executeCycleArchive,
-  executeCycleCreate,
   executeCycleGet,
   executeCycleList,
   executeCycleUpdate,
@@ -21,12 +19,10 @@ import {
 const CYCLE_LIST_TEAM_NOT_FOUND_HINT =
   "use `lebop teams` to see available team keys, or pass --all-teams to skip team scoping";
 
-const CYCLE_CREATE_TEAM_NOT_FOUND_HINT =
-  "use `lebop teams` to see available team keys, or pass --team KEY";
-
 /**
- * `lebop cycle list|view|create|update|archive` — team cycle (iteration) CRUD.
- * Issue assignment remains `set cycle` / update_issue.
+ * `lebop cycle list|view|update|archive` — team cycle (iteration) verbs.
+ * Linear generates cycles from team settings (no create). Issue assignment
+ * remains `set cycle` / update_issue.
  */
 export function registerCycle(program: Command): void {
   const cmd = program.command("cycle").description("Linear cycles (iterations)");
@@ -137,48 +133,6 @@ export function registerCycle(program: Command): void {
       if (cycle.completed_at) process.stdout.write(`  completed: ${cycle.completed_at}\n`);
       if (cycle.archived_at) process.stdout.write(`  archived: ${cycle.archived_at}\n`);
     });
-
-  cmd
-    .command("create")
-    .description("create a team cycle (ISO DateTime starts/ends; number is server-assigned)")
-    .option("--team <key>", "team key (default: configured team)")
-    .requiredOption("--starts <iso>", "start ISO DateTime (e.g. 2026-09-01T00:00:00.000Z)")
-    .requiredOption("--ends <iso>", "end ISO DateTime (e.g. 2026-09-14T23:59:59.999Z)")
-    .option("--name <text>", "optional custom name")
-    .option("--description <text>", "optional description")
-    .option("--json", "machine output (default; TOON)")
-    .option("--format <fmt>", "toon | json | pretty")
-    .option("--pretty", "pretty-printed JSON")
-    .option("--human", "maintainer/dev chalk tables (opt-in; not agent path; bodies uncapped)")
-    .action(
-      async (opts: {
-        team?: string;
-        starts: string;
-        ends: string;
-        name?: string;
-        description?: string;
-        json?: boolean;
-        format?: string;
-        pretty?: boolean;
-      }) => {
-        const created = await executeCycleCreate(buildCycleCreateInputFromCli({ opts }), {
-          resolveTeam: async (team) => (await resolveConfig({ teamOverride: team })).team,
-          teamNotFoundHint: CYCLE_CREATE_TEAM_NOT_FOUND_HINT,
-        });
-        if (wantsMachineOutput(opts)) {
-          writeMachineEnvelope({ cycle: created } as Record<string, unknown>, {
-            json: true,
-            format: opts.format,
-            pretty: opts.pretty,
-          });
-          return;
-        }
-        const label = created.name ?? `Cycle ${created.number}`;
-        process.stdout.write(
-          `${chalk.green("✓")} created ${chalk.bold(label)} #${created.number} ${chalk.gray(`(${created.id})`)} on ${chalk.cyan(created.team.key)}\n`,
-        );
-      },
-    );
 
   cmd
     .command("update <id>")

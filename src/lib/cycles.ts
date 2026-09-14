@@ -1,9 +1,10 @@
 /**
- * Cycle list/view/create/update/archive. Linear cycles are per-team iterations
+ * Cycle list/view/update/archive. Linear cycles are per-team iterations
  * (sprints). Each cycle has a server-assigned number, optional name/description,
  * startsAt/endsAt, and computed status flags (isActive, isNext, …).
  *
- * First-class surface: list, get, create, update, archive.
+ * First-class surface: list, get, update, archive.
+ * Linear generates cycles from team settings — no cycleCreate wrapper.
  * Assign issues via `set cycle` / update_issue — not cycle object verbs.
  * No unarchive / hard delete / shift-all / start-upcoming first-class.
  */
@@ -179,43 +180,6 @@ export async function getCycle(id: string): Promise<ListedCycle | null> {
   );
   if (!response) return null;
   return response.data.cycle ? shape(response.data.cycle) : null;
-}
-
-export interface CreateCycleInput {
-  teamId: string;
-  startsAt: string;
-  endsAt: string;
-  name?: string;
-  description?: string;
-}
-
-const CREATE_CYCLE_MUTATION = /* GraphQL */ `
-  mutation CreateCycle($input: CycleCreateInput!) {
-    cycleCreate(input: $input) {
-      success
-      cycle {
-        ${CYCLE_NODE_FIELDS}
-      }
-    }
-  }
-`;
-
-export async function createCycle(input: CreateCycleInput): Promise<ListedCycle> {
-  // NOT retry-wrapped — non-idempotent.
-  const client = await linear();
-  const response = (await client.client.rawRequest(CREATE_CYCLE_MUTATION, {
-    input: {
-      teamId: input.teamId,
-      startsAt: input.startsAt,
-      endsAt: input.endsAt,
-      name: input.name,
-      description: input.description,
-    },
-  })) as {
-    data: { cycleCreate: { success: boolean; cycle: CycleNode } };
-  };
-  const cycle = requireMutationEntity<CycleNode>("cycleCreate", response.data.cycleCreate, "cycle");
-  return shape(cycle);
 }
 
 export interface UpdateCycleInput {

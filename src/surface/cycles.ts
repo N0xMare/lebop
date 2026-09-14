@@ -2,14 +2,12 @@ import { z } from "zod";
 import { parseCliLimit } from "../lib/cliOptions.ts";
 import {
   archiveCycle,
-  createCycle,
   getCycle,
   type ListedCycle,
   listCycles,
   updateCycle,
 } from "../lib/cycles.ts";
 import { NotFoundError, ValidationError } from "../lib/errors.ts";
-import { getTeam } from "../lib/teams.ts";
 import type { SurfaceOperationContract } from "./contracts.ts";
 import { parseSurfaceInput, teamArg, workspaceArg } from "./schema.ts";
 
@@ -53,32 +51,6 @@ export interface CycleListDeps {
   getTeam: (team: string) => Promise<unknown | null>;
   teamNotFoundHint: string;
 }
-
-export interface CycleCreateInput {
-  team?: string;
-  startsAt: string;
-  endsAt: string;
-  name?: string;
-  description?: string;
-}
-
-export interface CycleCreateCliInput {
-  opts: {
-    team?: string;
-    starts?: string;
-    ends?: string;
-    name?: string;
-    description?: string;
-  };
-}
-
-export type CycleCreateMcpInput = Record<string, unknown> & {
-  team?: string;
-  starts_at: string;
-  ends_at: string;
-  name?: string;
-  description?: string;
-};
 
 export interface CycleUpdateInput {
   id: string;
@@ -128,11 +100,6 @@ export interface CycleArchiveExecutionResult {
   success: boolean;
 }
 
-export interface CycleCreateDeps {
-  resolveTeam: (team: string | undefined) => Promise<string>;
-  teamNotFoundHint: string;
-}
-
 // ── Schemas ─────────────────────────────────────────────────────────────────
 
 const cycleListCanonicalSchema = z
@@ -152,16 +119,6 @@ const isoDateTimeSchema = z
   .refine((v) => !Number.isNaN(Date.parse(v)), {
     message: "must be a valid ISO DateTime",
   });
-
-const cycleCreateCanonicalSchema = z
-  .object({
-    team: teamArg,
-    startsAt: isoDateTimeSchema,
-    endsAt: isoDateTimeSchema,
-    name: z.string().optional(),
-    description: z.string().optional(),
-  })
-  .strict();
 
 const cycleUpdateCanonicalSchema = z
   .object({
@@ -199,38 +156,6 @@ export function buildCycleListInputFromMcp(input: CycleListMcpInput): CycleListI
 
 export function buildCycleGetInput(id: string): CycleGetInput {
   return parseSurfaceInput("cycles.get", cycleGetCanonicalSchema, { id });
-}
-
-export function buildCycleCreateInputFromCli(input: CycleCreateCliInput): CycleCreateInput {
-  if (!input.opts.starts) {
-    throw new ValidationError(
-      "missing required --starts <ISO DateTime>",
-      "pass --starts 2026-09-01T00:00:00.000Z (ISO DateTime)",
-    );
-  }
-  if (!input.opts.ends) {
-    throw new ValidationError(
-      "missing required --ends <ISO DateTime>",
-      "pass --ends 2026-09-14T23:59:59.999Z (ISO DateTime)",
-    );
-  }
-  return parseSurfaceInput("cycles.create", cycleCreateCanonicalSchema, {
-    team: input.opts.team,
-    startsAt: input.opts.starts,
-    endsAt: input.opts.ends,
-    name: input.opts.name,
-    description: input.opts.description,
-  });
-}
-
-export function buildCycleCreateInputFromMcp(input: CycleCreateMcpInput): CycleCreateInput {
-  return parseSurfaceInput("cycles.create", cycleCreateCanonicalSchema, {
-    team: input.team,
-    startsAt: input.starts_at,
-    endsAt: input.ends_at,
-    name: input.name,
-    description: input.description,
-  });
 }
 
 function hasCycleUpdateFields(update: CycleUpdateInput): boolean {
@@ -337,24 +262,6 @@ export async function executeCycleGet(
   return cycle;
 }
 
-export async function executeCycleCreate(
-  input: CycleCreateInput,
-  deps: CycleCreateDeps,
-): Promise<ListedCycle> {
-  const teamKey = await deps.resolveTeam(input.team);
-  const team = await getTeam(teamKey);
-  if (!team) {
-    throw new NotFoundError(`team not found: ${teamKey}`, deps.teamNotFoundHint);
-  }
-  return createCycle({
-    teamId: team.id,
-    startsAt: input.startsAt,
-    endsAt: input.endsAt,
-    name: input.name,
-    description: input.description,
-  });
-}
-
 export async function executeCycleUpdate(
   input: CycleUpdateInput,
   notFoundHint?: string,
@@ -390,8 +297,6 @@ export async function executeCycleArchive(
 export const CYCLE_MCP_GET_HINT = "verify the cycle UUID; run list_cycles to discover ids";
 export const CYCLE_MCP_TEAM_NOT_FOUND_HINT =
   "use list_teams to see available team keys, or pass all_teams: true to skip team scoping";
-export const CYCLE_MCP_CREATE_TEAM_HINT =
-  "pass team key or omit for the configured default; run list_teams to discover keys";
 
 export const cycleListOperation = {
   id: "cycles.list",
@@ -445,38 +350,6 @@ export const cycleGetOperation = {
   },
   safety: { readOnly: true, destructive: false, idempotent: true, openWorld: true },
 } satisfies SurfaceOperationContract<CycleGetInput, ListedCycle>;
-
-export const cycleCreateOperation = {
-  id: "cycles.create",
-  domain: "cycles",
-  resource: "cycle",
-  action: "create",
-  title: "Create a team cycle",
-  description:
-    "Create a cycle (team + starts_at + ends_at ISO DateTime). number is server-assigned. NOT retry-wrapped. Prefer updating existing future cycles when a runway already exists.",
-  cli: { command: "cycle create", liveSteps: ["cli:cycle create --json"] },
-  mcp: {
-    tool: "create_cycle",
-    title: "Create a team cycle",
-    description:
-      "Create cycle (team + starts_at + ends_at ISO DateTime). number server-assigned. NOT retry-wrapped.",
-    annotations: {
-      title: "Create a team cycle",
-      readOnlyHint: false,
-      destructiveHint: false,
-      idempotentHint: false,
-      openWorldHint: true,
-    },
-  },
-  safety: { readOnly: false, destructive: false, idempotent: false, openWorld: true },
-  fromCli: buildCycleCreateInputFromCli,
-  fromMcp: buildCycleCreateInputFromMcp,
-} satisfies SurfaceOperationContract<
-  CycleCreateInput,
-  ListedCycle,
-  CycleCreateCliInput,
-  CycleCreateMcpInput
->;
 
 export const cycleUpdateOperation = {
   id: "cycles.update",
@@ -552,7 +425,6 @@ export const cycleArchiveOperation = {
 export const CYCLES_SURFACE_OPERATIONS = [
   cycleListOperation,
   cycleGetOperation,
-  cycleCreateOperation,
   cycleUpdateOperation,
   cycleArchiveOperation,
 ] as const;
@@ -578,17 +450,6 @@ export function buildCycleListMcpInputSchema(workspaceDescription: string) {
 export function buildCycleGetMcpInputSchema(workspaceDescription: string) {
   return {
     id: z.string(),
-    workspace: workspaceArg.describe(workspaceDescription),
-  };
-}
-
-export function buildCycleCreateMcpInputSchema(workspaceDescription: string) {
-  return {
-    team: teamArg.describe("Team key. Omit for the configured default team."),
-    starts_at: z.string().describe("Cycle start (ISO DateTime)."),
-    ends_at: z.string().describe("Cycle end (ISO DateTime)."),
-    name: z.string().optional().describe("Optional custom name (else Linear shows Cycle N)."),
-    description: z.string().optional(),
     workspace: workspaceArg.describe(workspaceDescription),
   };
 }

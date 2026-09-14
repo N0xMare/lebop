@@ -119,7 +119,6 @@ const BASE_REQUIRED_SEMANTIC_LIVE_STEPS = [
   "cli:project update --json",
   "cli:milestone create --json",
   "cli:milestone update --json",
-  "cli:cycle create --json",
   "cli:cycle update --json",
   "cli:cycle archive --json",
   "cli:cycle view --json",
@@ -159,7 +158,6 @@ const BASE_REQUIRED_SEMANTIC_LIVE_STEPS = [
   "cli:project soft-delete --json",
   "mcp:create_issue",
   "mcp:update_issue",
-  "mcp:create_cycle",
   "mcp:update_cycle",
   "mcp:get_cycle",
   "mcp:bulk_update_issues",
@@ -1041,6 +1039,22 @@ function requireFields(payload, fields, label) {
     proofs.push(`${field} present`);
   }
   return proofs;
+}
+
+/** Live cycle proofs use an existing team cycle — Linear does not support cycleCreate. */
+const UNKNOWN_CYCLE_ID = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+
+function pickCycleFixture(payload, label) {
+  const cycles = payload?.cycles ?? [];
+  if (!Array.isArray(cycles) || cycles.length === 0) {
+    throw new Error(`${label}: team has no cycles to use as a live fixture`);
+  }
+  return (
+    cycles.find((cycle) => cycle.is_future) ??
+    cycles.find((cycle) => cycle.is_next) ??
+    cycles.find((cycle) => cycle.is_active) ??
+    cycles[0]
+  );
 }
 
 function assertPublishReviewPayload(payload, label) {
@@ -2426,7 +2440,7 @@ class McpClient {
     return parsed;
   }
 
-  async expectError(name, args = {}) {
+  async expectError(name, args = {}, options = {}) {
     const toolArgs = MCP_NO_WORKSPACE_ARG.has(name) ? args : { workspace, ...args };
     const out = await this.send(
       "tools/call",
@@ -2437,8 +2451,14 @@ class McpClient {
     if (!out.isError) {
       throw new Error(`MCP tool ${name} unexpectedly succeeded\n${first}`);
     }
-    record(`mcp:${name} expected error`, "pass", { response_preview: first.slice(0, 500) });
-    return first ? JSON.parse(first) : null;
+    const parsed = first ? JSON.parse(first) : null;
+    const semanticAssertions = options.assert ? await options.assert(parsed) : undefined;
+    record(options.recordName ?? `mcp:${name} expected error`, "pass", {
+      tool: name,
+      response_preview: first.slice(0, 500),
+      ...(semanticAssertions ? { semantic_assertions: semanticAssertions } : {}),
+    });
+    return parsed;
   }
 
   async close() {
@@ -3628,83 +3648,40 @@ async function runCliSurface() {
   donePlanCliCleanup();
   await runPublishCli(labelName);
 
-  // Cycle CRUD: create a far-future iteration so list/view/explore have a fixture,
-  // then archive (unlinks issues; no unarchive) as cleanup.
-  const cycleStarts = "2037-01-05T00:00:00.000Z";
-  const cycleEnds = "2037-01-18T23:59:59.000Z";
-  const createdCycle = await cli(
-    "cycle create --json",
-    [
-      "cycle",
-      "create",
-      "--team",
-      team,
-      "--starts",
-      cycleStarts,
-      "--ends",
-      cycleEnds,
-      "--name",
-      `${prefix}-cycle-cli`,
-      "--description",
-      "live smoke cycle",
-      "--json",
-    ],
-    {
-      json: true,
-      assert: (payload) => [
-        ...requireFields(
-          payload,
-          ["cycle.id", "cycle.starts_at", "cycle.ends_at", "cycle.number"],
-          "CLI cycle create",
-        ),
-        "created cycle payload has id/window/number",
-      ],
-    },
-  );
-  const cycleId = createdCycle.cycle.id;
+  // Cycle verbs: Linear generates cycles from team settings (no cycleCreate).
+  // Live proofs use an existing team cycle. Do not archive a shared team cycle
+  // (no unarchive).
+  const listedCycles = await cli("cycle list --json", ["cycle", "list", "--team", team, "--json"], {
+    json: true,
+  });
+  const cycleFixture = pickCycleFixture(listedCycles, "CLI cycle list");
+  const cycleId = cycleFixture.id;
   report.created.cli_cycle = cycleId;
-  registerRemoteAudit("archived_cycle", cycleId, "CLI cycle");
-  const doneCliCycleCleanup = registerCliCleanup("archive CLI cycle", [
-    "cycle",
-    "archive",
-    cycleId,
-    "--yes",
-    "--json",
-  ]);
+  const originalCycleName = cycleFixture.name ?? null;
+  const originalCycleDescription = cycleFixture.description ?? null;
+  const cliCycleUpdateMarker = `${prefix}-cycle-cli-updated`;
   await cli(
     "cycle update --json",
-    [
-      "cycle",
-      "update",
-      cycleId,
-      "--name",
-      `${prefix}-cycle-cli-updated`,
-      "--description",
-      "updated live smoke cycle",
-      "--json",
-    ],
+    ["cycle", "update", cycleId, "--description", cliCycleUpdateMarker, "--json"],
     {
       json: true,
       assert: (payload) => [
-        ...requireFields(payload, ["cycle.id", "cycle.name"], "CLI cycle update"),
-        "updated cycle payload has id/name",
+        ...requireFields(payload, ["cycle.id", "cycle.description"], "CLI cycle update"),
+        payload.cycle.description === cliCycleUpdateMarker
+          ? "updated cycle description to smoke marker"
+          : (() => {
+              throw new Error(
+                `CLI cycle update description=${JSON.stringify(payload.cycle.description)}`,
+              );
+            })(),
       ],
     },
   );
-  // C2: assign an issue to the cycle so archive proves Linear unlinks issues.
-  await cli("set cycle for archive unlink --json", ["set", "cycle", issueId1, cycleId, "--json"], {
-    json: true,
-    assert: (payload) => {
-      const id = payload.identifier ?? payload.issue?.identifier;
-      if (!id) {
-        throw new Error("CLI set cycle missing identifier in machine envelope");
-      }
-      return ["issue assigned to smoke cycle"];
-    },
-  });
-  await cli("cycle list --json", ["cycle", "list", "--team", team, "--json"], {
-    json: true,
-  });
+  const restoreCliCycleArgs = ["cycle", "update", cycleId, "--json"];
+  if (originalCycleDescription === null) restoreCliCycleArgs.splice(3, 0, "--description", "null");
+  else restoreCliCycleArgs.splice(3, 0, "--description", originalCycleDescription);
+  if (originalCycleName) restoreCliCycleArgs.splice(3, 0, "--name", originalCycleName);
+  const doneCliCycleRestore = registerCliCleanup("restore CLI cycle fixture", restoreCliCycleArgs);
   await cli("cycle view --json", ["cycle", "view", cycleId, "--json"], {
     json: true,
     assert: (payload) => [
@@ -3748,30 +3725,19 @@ async function runCliSurface() {
       assert: (payload) => assertFetchPayload(payload, "CLI cycle context fetch", "cycle"),
     },
   );
-  await assertContextManifest("cli cycle context", cliCycleContext, "cycle", [
-    `${prefix}-cycle-cli-updated`,
-    cycleId,
-  ]);
-  await cli("cycle archive --json", ["cycle", "archive", cycleId, "--yes", "--json"], {
+  await assertContextManifest("cli cycle context", cliCycleContext, "cycle", [cycleId]);
+  await cli("cycle archive --json", ["cycle", "archive", UNKNOWN_CYCLE_ID, "--yes", "--json"], {
     json: true,
-    assert: (payload) => [
-      ...requireFields(payload, ["id", "success"], "CLI cycle archive"),
-      "archived cycle payload has id/success",
-    ],
-  });
-  doneCliCycleCleanup();
-  // C2: after archive, issue must no longer be on the cycle (Linear unlinks).
-  await cli("show after cycle archive --json", ["show", issueId1, "--json"], {
-    json: true,
+    allowExitCodes: [1],
     assert: (payload) => {
-      const cycle =
-        payload.issue?.metadata?.cycle ?? payload.issue?.cycle ?? payload.issue?.cycle_id ?? null;
-      if (cycle) {
-        throw new Error(
-          `CLI cycle archive did not unlink issue ${issueId1} (still cycle=${JSON.stringify(cycle)})`,
-        );
-      }
-      return ["cycle archive unlinked issue from cycle"];
+      expect(payload?.ok === false, "CLI cycle archive unknown id: expected ok=false");
+      expect(
+        payload?.error?.code === "not_found",
+        `CLI cycle archive unknown id: expected not_found, got ${JSON.stringify(payload?.error)}`,
+      );
+      return [
+        "unknown cycle archive is not_found; skipped destructive archive of shared team cycle",
+      ];
     },
   });
   await cli(
@@ -3780,16 +3746,13 @@ async function runCliSurface() {
     {
       json: true,
       assert: (payload) => {
-        const found = (payload.cycles ?? []).some(
-          (c) => c.id === cycleId && Boolean(c.archived_at),
-        );
-        if (!found) {
-          throw new Error("CLI cycle list --include-archived missing archived smoke cycle");
-        }
-        return ["include_archived surfaces archived cycle"];
+        expect(Array.isArray(payload.cycles), "CLI cycle list --include-archived missing cycles[]");
+        return ["include_archived list succeeds"];
       },
     },
   );
+  await cli("restore CLI cycle fixture --json", restoreCliCycleArgs, { json: true });
+  doneCliCycleRestore();
 
   // C1: CLI discovery surfaces (search / history / views)
   await cli("search --json", ["search", "--query", prefix.slice(0, 24), "--limit", "5", "--json"], {
@@ -3957,7 +3920,7 @@ async function runCliSurface() {
   doneCliProjectCleanup();
 
   report.evidence_issue = { id: issueUuid1, identifier: issueId1 };
-  return { teamId, email, evidenceIdentifier: issueId1 };
+  return { teamId, email, evidenceIdentifier: issueId1, cycleId };
 }
 
 async function runPlanCli(planDir, labelName) {
@@ -5195,53 +5158,39 @@ async function runMcpSurface(context) {
     },
   );
 
-  const mcpCycleStarts = "2037-02-02T00:00:00.000Z";
-  const mcpCycleEnds = "2037-02-15T23:59:59.000Z";
-  const mcpCreatedCycle = await mcp.call(
-    "create_cycle",
-    {
-      team,
-      starts_at: mcpCycleStarts,
-      ends_at: mcpCycleEnds,
-      name: `${prefix}-cycle-mcp`,
-      description: "live smoke mcp cycle",
-    },
-    {
-      assert: (payload) => [
-        ...requireFields(
-          payload,
-          ["cycle.id", "cycle.starts_at", "cycle.ends_at", "cycle.number"],
-          "MCP create_cycle",
-        ),
-        "created cycle payload has id/window/number",
-      ],
-    },
-  );
-  const mcpCycleId = mcpCreatedCycle.cycle.id;
+  const mcpListedCycles = await mcp.call("list_cycles", { team });
+  const mcpCycleId = context.cycleId ?? pickCycleFixture(mcpListedCycles, "MCP list_cycles").id;
   report.created.mcp_cycle = mcpCycleId;
-  registerRemoteAudit("archived_cycle", mcpCycleId, "MCP cycle");
-  const doneMcpCycleCleanup = registerCliCleanup("archive MCP cycle", [
-    "cycle",
-    "archive",
-    mcpCycleId,
-    "--yes",
-    "--json",
-  ]);
+  const mcpCycleBefore = await mcp.call("get_cycle", { id: mcpCycleId });
+  const mcpOriginalDescription = mcpCycleBefore.cycle?.description ?? null;
+  const mcpCycleUpdateMarker = `${prefix}-cycle-mcp-updated`;
   await mcp.call(
     "update_cycle",
     {
       id: mcpCycleId,
-      name: `${prefix}-cycle-mcp-updated`,
-      description: "updated mcp smoke cycle",
+      description: mcpCycleUpdateMarker,
     },
     {
       assert: (payload) => [
-        ...requireFields(payload, ["cycle.id", "cycle.name"], "MCP update_cycle"),
-        "updated cycle payload has id/name",
+        ...requireFields(payload, ["cycle.id", "cycle.description"], "MCP update_cycle"),
+        payload.cycle.description === mcpCycleUpdateMarker
+          ? "updated cycle description to smoke marker"
+          : (() => {
+              throw new Error(
+                `MCP update_cycle description=${JSON.stringify(payload.cycle.description)}`,
+              );
+            })(),
       ],
     },
   );
-  await mcp.call("list_cycles", { team });
+  const doneMcpCycleRestore = registerCliCleanup("restore MCP cycle fixture", [
+    "cycle",
+    "update",
+    mcpCycleId,
+    "--description",
+    mcpOriginalDescription === null ? "null" : mcpOriginalDescription,
+    "--json",
+  ]);
   await mcp.call(
     "get_cycle",
     {
@@ -5286,37 +5235,47 @@ async function runMcpSurface(context) {
       assert: (payload) => assertFetchPayload(payload, "MCP cycle context fetch", "cycle"),
     },
   );
-  await assertContextManifest("mcp cycle context", mcpCycleContext, "cycle", [
-    `${prefix}-cycle-mcp-updated`,
-    mcpCycleId,
-  ]);
-  await mcp.call(
+  await assertContextManifest("mcp cycle context", mcpCycleContext, "cycle", [mcpCycleId]);
+  await mcp.expectError(
     "archive_cycle",
-    { id: mcpCycleId, confirm: true },
+    { id: UNKNOWN_CYCLE_ID, confirm: true },
     {
-      assert: (payload) => [
-        ...requireFields(payload, ["id", "success"], "MCP archive_cycle"),
-        "archived cycle payload has id/success",
-      ],
+      recordName: "mcp:archive_cycle",
+      assert: (payload) => {
+        expect(
+          payload?.error?.code === "not_found",
+          "MCP archive_cycle unknown id: expected not_found",
+        );
+        return [
+          "unknown cycle archive is not_found; skipped destructive archive of shared team cycle",
+        ];
+      },
     },
   );
-  doneMcpCycleCleanup();
   await mcp.call(
     "list_cycles",
     { team, include_archived: true, limit: 20 },
     {
       recordName: "mcp:list_cycles include_archived",
       assert: (payload) => {
-        const found = (payload.cycles ?? []).some(
-          (c) => c.id === mcpCycleId && Boolean(c.archived_at),
-        );
-        if (!found) {
-          throw new Error("MCP list_cycles include_archived missing archived smoke cycle");
-        }
-        return ["include_archived surfaces archived cycle"];
+        expect(Array.isArray(payload.cycles), "MCP list_cycles include_archived missing cycles[]");
+        return ["include_archived list succeeds"];
       },
     },
   );
+  await cli(
+    "restore MCP cycle fixture --json",
+    [
+      "cycle",
+      "update",
+      mcpCycleId,
+      "--description",
+      mcpOriginalDescription === null ? "null" : mcpOriginalDescription,
+      "--json",
+    ],
+    { json: true },
+  );
+  doneMcpCycleRestore();
 
   const sessions = await mcp.call("list_agent_sessions", { limit: 1 });
   const agentSessionFixture = sessions.agent_sessions?.[0];

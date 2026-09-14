@@ -369,7 +369,7 @@ describe("mcp: handshake + tools/list", () => {
     // or remove a tool, bump this number AND verify the new tool has an
     // MCP-level test (not just a lib test).
     // 0.0.6 full profile = prior 85 + coverage tools (search/history/views/fields).
-    expect(tools).toHaveLength(104);
+    expect(tools).toHaveLength(103);
 
     // Sample-check a representative across surfaces — this is the same set
     // the canary workflow asserts on, so the two stay in sync.

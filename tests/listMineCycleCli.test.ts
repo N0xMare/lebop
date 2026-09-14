@@ -28,7 +28,6 @@ vi.mock("../src/lib/cycles.ts", () => ({
   listCycles: mocks.listCycles,
   listCyclesPage: vi.fn(),
   getCycle: vi.fn(),
-  createCycle: vi.fn(),
   updateCycle: vi.fn(),
   archiveCycle: vi.fn(),
 }));

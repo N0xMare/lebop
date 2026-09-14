@@ -2,8 +2,6 @@ import { describe, expect, it } from "vitest";
 import { ValidationError } from "../src/lib/errors.ts";
 import {
   buildCycleArchiveInputFromCli,
-  buildCycleCreateInputFromCli,
-  buildCycleCreateInputFromMcp,
   buildCycleListInputFromCli,
   buildCycleListInputFromMcp,
   buildCycleUpdateInputFromCli,
@@ -31,39 +29,6 @@ describe("cycles surface builders", () => {
       includeArchived: true,
       max: Number.POSITIVE_INFINITY,
     });
-  });
-
-  it("create requires starts/ends and validates ISO DateTime", () => {
-    expect(() => buildCycleCreateInputFromCli({ opts: {} })).toThrow(ValidationError);
-    expect(() =>
-      buildCycleCreateInputFromCli({
-        opts: { starts: "not-a-date", ends: "2026-09-14T00:00:00.000Z" },
-      }),
-    ).toThrow(/ISO DateTime|must be a valid/);
-
-    const created = buildCycleCreateInputFromCli({
-      opts: {
-        team: "TEAM",
-        starts: "2026-09-01T00:00:00.000Z",
-        ends: "2026-09-14T23:59:59.999Z",
-        name: "Far Future",
-        description: "lebop pass2",
-      },
-    });
-    expect(created).toEqual({
-      team: "TEAM",
-      startsAt: "2026-09-01T00:00:00.000Z",
-      endsAt: "2026-09-14T23:59:59.999Z",
-      name: "Far Future",
-      description: "lebop pass2",
-    });
-
-    const mcp = buildCycleCreateInputFromMcp({
-      starts_at: "2026-09-01T00:00:00.000Z",
-      ends_at: "2026-09-14T23:59:59.999Z",
-    });
-    expect(mcp.startsAt).toBe("2026-09-01T00:00:00.000Z");
-    expect(mcp.endsAt).toBe("2026-09-14T23:59:59.999Z");
   });
 
   it("update rejects empty patch and maps CLI null sentinels", () => {
