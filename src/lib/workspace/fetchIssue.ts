@@ -2,94 +2,41 @@
  * Mechanical extract from workspaceFetch — kind context.
  */
 
-import { getAgentSession, listAgentSessionsPage } from "../agentSessions.ts";
-import { listAttachmentsPage } from "../attachments.ts";
-import { listCommentsPage } from "../comments.ts";
-import { mapLimit } from "../concurrency.ts";
-import { getCycle } from "../cycles.ts";
-import { type getDocument, listDocumentsPage } from "../documents.ts";
-import { NotFoundError, ValidationError } from "../errors.ts";
-import { getInitiativeProjectsPage, listInitiativeUpdatesPage } from "../initiatives.ts";
+import { listAgentSessionsPage } from "../agentSessions.ts";
+import { type getDocument } from "../documents.ts";
+import { NotFoundError } from "../errors.ts";
 import { getIssue } from "../issues.ts";
-import { type ListedIssue, listIssuesPage } from "../listIssues.ts";
-import { getMilestone, listMilestonesPage } from "../milestones.ts";
-import { getProject, listProjectUpdatesPage } from "../projects.ts";
-import { listRelationsPage } from "../relations.ts";
 import {
   type ContextFile,
   markdownJsonBlock,
   writeWorkspaceContext,
 } from "../workspaceContextWriter.ts";
 import type { ExploreCursor } from "../workspaceExplore.ts";
-import type { ParsedWorkspacePath } from "../workspacePaths.ts";
 import { safeSegment } from "../workspacePaths.ts";
 import {
-  ALLOWED_CYCLE_INCLUDES,
-  ALLOWED_DOCUMENT_INCLUDES,
-  ALLOWED_INITIATIVE_INCLUDES,
-  ALLOWED_ISSUE_INCLUDES,
-  ALLOWED_MILESTONE_INCLUDES,
-  ALLOWED_PROJECT_INCLUDES,
   addIssueDocumentFiles,
-  addIssueDossierFiles,
-  addIssueDossiersConcurrent,
   addWorkspaceToContinuationList,
-  continuationHints,
   continuationIncludeFor,
-  DEFAULT_CYCLE_INCLUDES,
-  DEFAULT_DEPTH,
-  DEFAULT_DOCUMENT_INCLUDES,
-  DEFAULT_INITIATIVE_INCLUDES,
-  DEFAULT_ISSUE_INCLUDES,
-  DEFAULT_LIMIT,
-  DEFAULT_MILESTONE_INCLUDES,
-  DEFAULT_PROJECT_INCLUDES,
   dedupeContinuations,
-  exploreContinuation,
-  fetchContinuation,
   focusedCursorAfter,
   focusedRelationCursors,
-  ISSUE_DOSSIER_CONCURRENCY,
-  includeSet,
-  initiativeProjectContinuationInclude,
-  issueCollectionContinuationInclude,
-  issueDocumentsContinuationInclude,
   isTruncated,
   markComplete,
-  markDocumentDetailsCompleteness,
-  markIssueDetailsCompletenessAggregate,
   markPageCompleteness,
-  markPageCompletenessAggregate,
   markRelationCompleteness,
-  markRelationCompletenessAggregate,
   materializeAttachmentPages,
   materializeCommentPages,
-  materializeInitiativeIdentityPage,
-  materializeInitiativeProjectsPage,
-  materializePages,
   materializeRelationPages,
-  mergeCompletenessEntry,
-  mergeFetchCollection,
-  normalizeDirectIssueIncludes,
-  normalizeInitiativeIncludes,
-  normalizeIssueCollectionIncludes,
-  normalizeProjectIncludes,
-  omitDocumentContent,
-  projectIssueCollectionContinuationInclude,
   pushPageContinuation,
   pushRelationContinuation,
   recommendedList,
   recommendedReads,
-  relationNextCursors,
   renderEntityMarkdown,
   renderListMarkdown,
-  selectionFor,
-  sortedIncludeArgs,
 } from "./fetchShared.ts";
 import type {
   FetchCompletenessEntry,
   FetchContinuation,
-  FetchDepth,
   FetchLinearWorkspaceResult,
   FetchSelection,
 } from "./fetchTypes.ts";

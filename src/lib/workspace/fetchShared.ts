@@ -9,16 +9,10 @@ import { mapLimit } from "../concurrency.ts";
 import { findGitRoot, hashRepoRoot } from "../config.ts";
 import { getDocument, listDocumentsPage } from "../documents.ts";
 import { ValidationError } from "../errors.ts";
-import {
-  getInitiativeProjectsPage,
-  type InitiativeProjectsPage,
-  listInitiativeUpdatesPage,
-} from "../initiatives.ts";
+import { getInitiativeProjectsPage, type InitiativeProjectsPage } from "../initiatives.ts";
 import { getIssue } from "../issues.ts";
-import { type ListedIssue, listIssuesPage } from "../listIssues.ts";
-import { listMilestonesPage } from "../milestones.ts";
+import { type ListedIssue } from "../listIssues.ts";
 import type { ConnectionPage } from "../paginate.ts";
-import { listProjectUpdatesPage } from "../projects.ts";
 import { type ListedRelationsPage, listRelationsPage } from "../relations.ts";
 import { type ContextFile, markdownJsonBlock } from "../workspaceContextWriter.ts";
 import {
@@ -27,7 +21,7 @@ import {
   encodeExploreCursor,
 } from "../workspaceExplore.ts";
 import type { ParsedWorkspacePath } from "../workspacePaths.ts";
-import { parseWorkspacePath, safeSegment } from "../workspacePaths.ts";
+import { safeSegment } from "../workspacePaths.ts";
 import type {
   FetchCollectionFragment,
   FetchCompletenessEntry,

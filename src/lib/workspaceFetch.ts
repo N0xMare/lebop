@@ -1,7 +1,7 @@
 /**
  * Workspace fetch orchestrator (kind contexts extracted to workspace/*).
  */
-import { NotFoundError, ValidationError } from "./errors.ts";
+import { ValidationError } from "./errors.ts";
 import { fetchAgentSessionContext } from "./workspace/fetchAgentSession.ts";
 import { fetchCycleContext } from "./workspace/fetchCycle.ts";
 import { fetchDocumentContext } from "./workspace/fetchDocument.ts";
@@ -22,7 +22,6 @@ import {
   DEFAULT_DOCUMENT_INCLUDES,
   DEFAULT_MILESTONE_INCLUDES,
   decodeFetchCursor,
-  dedupeContinuations,
   includeSet,
   initiativeDefaults,
   issueDefaults,
@@ -37,13 +36,9 @@ import {
   validateExplicitOutputRoot,
 } from "./workspace/fetchShared.ts";
 import type {
-  FetchCompletenessEntry,
-  FetchContinuation,
-  FetchDepth,
   FetchLinearWorkspaceInput,
   FetchLinearWorkspaceResult,
 } from "./workspace/fetchTypes.ts";
-import type { ParsedWorkspacePath } from "./workspacePaths.ts";
 import { parseWorkspacePath } from "./workspacePaths.ts";
 
 export type {

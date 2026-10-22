@@ -11,7 +11,6 @@ import {
   getCacheRoot,
   resolveWorkspaceSlugForState,
   sanitizeWorkspaceSlug,
-  UNSET_WORKSPACE_SLUG,
   workspaceCacheRoot,
 } from "./paths.ts";
 import {

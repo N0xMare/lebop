@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-import { NotFoundError } from "../src/lib/errors.ts";
 
 vi.mock("../src/lib/sdk.ts", () => ({
   withClient: async <T>(fn: (c: unknown) => Promise<T>): Promise<T> =>
