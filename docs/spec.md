@@ -161,7 +161,7 @@ Plus the runtime substrate:
 | Install path | Bun required? | Scope |
 |---|---:|---|
 | GitHub Releases binary installer | No | Normal CLI/MCP use |
-| Source checkout, local development, tests, release builds | Yes, Bun 1.3.13+ (CI and release builds pin 1.4.4) | `bun install`, `bun link`, tests, compiled binaries |
+| Source checkout, local development, tests, release builds | Yes, Bun 1.4.0+ (`bun.lock` is format v2; CI and release builds pin 1.4.4) | `bun install`, `bun link`, tests, compiled binaries |
 
 All install paths need a **Linear personal API key** (Linear → Settings → API
 → Personal API keys → Create key).

@@ -20,9 +20,10 @@ bun run test           # vitest (do not use bare `bun test` — that's
 bun run check:package  # npm package contents + install-script assumptions
 ```
 
-The vitest CLI and `check:package` are launched with Node, so the dev gates
-also need Node 22.12+ on `PATH` (vitest 5 requirement; GitHub-hosted runners
-ship Node 22).
+Working from a checkout needs Bun 1.4.0+ (`bun.lock` is lockfile format v2,
+which Bun 1.3 cannot read; CI pins 1.4.4). The vitest CLI and `check:package`
+are launched with Node, so the dev gates also need Node 22.12+ on `PATH`
+(vitest 5 requirement; GitHub-hosted runners ship Node 22).
 
 Those core gates must be green before opening a PR. CI also verifies GitHub
 Actions refs, runs `actionlint`, and builds a compiled binary smoke. If you
