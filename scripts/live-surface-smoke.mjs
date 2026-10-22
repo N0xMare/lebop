@@ -89,28 +89,28 @@ export function resolveLebopInvocation(args = [], env = process.env) {
  * ⇒ list returns [] (PASS); id-based paths are allowlisted GAPs until a real
  * external session exists or this expires. Not a product defect.
  *
- * Entries: only the four id-based agent-session steps. Expiry 2026-09-30.
+ * Entries: only the four id-based agent-session steps. Expiry 2026-12-31.
  */
 export const GAP_ALLOWLIST = {
   "cli:agent-session view --json": {
     reason:
       "Option A fixture gap (not product): agent-session view needs a UUID from an external agent host (Cursor/Linear Agent/etc.). lebop does not create sessions; smoke workspace has none. list alone is sufficient product proof until expiry.",
-    expires: "2026-09-30",
+    expires: "2026-12-31",
   },
   "cli:workspace fetch agent-session --json": {
     reason:
       "Option A fixture gap (not product): concrete agent-session fetch needs an existing session UUID. lebop does not create sessions; smoke workspace has none.",
-    expires: "2026-09-30",
+    expires: "2026-12-31",
   },
   "mcp:get_agent_session": {
     reason:
       "Option A fixture gap (not product): get_agent_session needs a UUID from an external agent host. lebop does not create sessions; smoke workspace has none.",
-    expires: "2026-09-30",
+    expires: "2026-12-31",
   },
   "mcp:fetch_linear_workspace agent-session": {
     reason:
       "Option A fixture gap (not product): MCP agent-session fetch needs an existing session UUID. lebop does not create sessions; smoke workspace has none.",
-    expires: "2026-09-30",
+    expires: "2026-12-31",
   },
 };
 

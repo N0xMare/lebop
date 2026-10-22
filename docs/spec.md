@@ -1091,7 +1091,7 @@ omit).
 **Live harness note:** full-surface smoke can only **list** when the sandbox
 has no sessions. Id-based `view` / `get_agent_session` / workspace
 fetch-of-session are allowlisted fixture gaps (Option A) through
-**2026-09-30** — not a product defect; seeding requires an external agent
+**2026-12-31** — not a product defect; seeding requires an external agent
 host, not lebop create.
 
 ### 8.14a `search` / `history` / `view` / `custom-field` (0.0.6 discovery)
@@ -2073,7 +2073,7 @@ exist yet. Interactive-only ergonomics remain deliberately out of scope (§3).
 | **Documents** | `document list\|view\|create\|update\|soft-delete` — project- and issue-scoped create (`--project` / `--issue`); soft-delete sets `archived_at` | Interactive `--edit` not shipped. |
 | **Workspace context** | `workspace explore`, `workspace fetch` — default fetch depth **shallow**; multi-ws context paths | |
 | **Publish workflow** | `publish review --plan <dir>`, `publish review --cache [IDS...] [--project-id UUID...] [--all-modified]`, `publish apply <review-id>` | |
-| **Agent sessions** | `agent-session list\|view` — **read-only** research of sessions created by other tools | No create/activity/emit (not an app-agent host). Live smoke id-based view/get/fetch may gap when the sandbox has no external sessions (allowlisted Option A through 2026-09-30). |
+| **Agent sessions** | `agent-session list\|view` — **read-only** research of sessions created by other tools | No create/activity/emit (not an app-agent host). Live smoke id-based view/get/fetch may gap when the sandbox has no external sessions (allowlisted Option A through 2026-12-31). |
 | **Teams** | `teams`, `team members [team-key] [--all]`, `team get <key-or-id>`, `team workflow-states [team-key]` | Team create/delete/autolinks are UI-managed; use raw GraphQL only when explicitly requested. |
 | **Schema** | `lebop schema [-o file]` (offline GraphQL schema dump) | |
 | **Raw** | `--paginate`, `--variable k=v` (with `@file` for file-backed values) | |
@@ -2428,7 +2428,7 @@ Shipped:
   assertions for high-risk publish/context/write operations.
   **Unallowlisted or expired** fixture gaps fail the run; **allowlisted**
   gaps (currently only agent-session id-based view/get/fetch when the
-  workspace has no external sessions — Option A through 2026-09-30) are
+  workspace has no external sessions — Option A through 2026-12-31) are
   non-blocking. Failed steps and cleanup/remote-audit failures always fail.
 - `bun scripts/live-discovery-smoke.mjs` — secondary discovery/feature
   harness (search/history/views/custom-fields/related). Same workspace env

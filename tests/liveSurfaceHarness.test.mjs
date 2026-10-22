@@ -135,11 +135,11 @@ describe("live surface harness validation helpers", () => {
         name: "mcp:get_agent_session",
         allowed: true,
         reason: GAP_ALLOWLIST["mcp:get_agent_session"].reason,
-        expires: "2026-09-30",
+        expires: "2026-12-31",
         detail_reason: "fixture unavailable",
       },
     ]);
-    expect(() => assertNoUnexpectedGaps({ gaps }, new Date("2026-10-01T00:00:00.000Z"))).toThrow(
+    expect(() => assertNoUnexpectedGaps({ gaps }, new Date("2027-01-01T00:00:00.000Z"))).toThrow(
       /unallowlisted or expired gaps/,
     );
   });
