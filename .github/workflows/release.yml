@@ -18,7 +18,7 @@ jobs:
   # branch would publish without typecheck/biome/test ever running.
   gate:
     name: gate (test + typecheck + biome + version-tag match)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -72,7 +72,7 @@ jobs:
           - os: macos-15-intel
             target: bun-darwin-x64
             asset: lebop-darwin-x64
-          - os: ubuntu-latest
+          - os: ubuntu-24.04
             target: bun-linux-x64
             asset: lebop-linux-x64
           - os: ubuntu-24.04-arm
@@ -199,7 +199,7 @@ jobs:
 
   compiled-linux-live-smoke:
     name: compiled Linux x64 full live smoke
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: build
     timeout-minutes: 45
     concurrency:
@@ -274,7 +274,7 @@ jobs:
   # Secondary discovery smoke (search/history/views/CF/related) — not version-tied.
   compiled-linux-discovery-smoke:
     name: compiled Linux x64 discovery live smoke
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: build
     timeout-minutes: 30
     concurrency:
@@ -335,7 +335,7 @@ jobs:
 
   release:
     name: publish release
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: [build, compiled-linux-live-smoke, compiled-linux-discovery-smoke]
     timeout-minutes: 10
     permissions:

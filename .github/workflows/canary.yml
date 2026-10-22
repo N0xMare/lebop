@@ -24,7 +24,7 @@ concurrency:
 jobs:
   public-installer-smoke:
     name: public installer smoke
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - name: install latest public release
@@ -51,14 +51,14 @@ jobs:
 
   smoke:
     name: smoke vs sandbox
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     concurrency:
       group: sandbox-live-write
       cancel-in-progress: false
     env:
       # Job-level env can't use ${{ runner.temp }} — that context is only
-      # available inside steps. /tmp is always writable on ubuntu-latest.
+      # available inside steps. /tmp is always writable on GitHub-hosted Ubuntu runners.
       LEBOP_HOME: /tmp/lebop-canary
       # CI parses CLI stdout with JSON.parse; retain TOON as the product default.
       LEBOP_MACHINE_FORMAT: json
