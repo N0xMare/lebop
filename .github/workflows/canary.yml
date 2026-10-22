@@ -67,9 +67,9 @@ jobs:
       LEBOP_CANARY_TEAM: LEB
 
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: 1.4.4
 
@@ -412,7 +412,7 @@ jobs:
 
       - name: upload live harness reports
         if: (github.event_name == 'workflow_dispatch' || github.event.schedule == '0 16 * * 1') && always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: live-sandbox-reports
           path: docs/local/live-surface-report-*.json
@@ -420,7 +420,7 @@ jobs:
 
       - name: upload read smoke reports
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: canary-read-smoke-reports
           path: docs/local/canary-read-*-report-*.json
