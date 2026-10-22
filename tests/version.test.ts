@@ -165,6 +165,7 @@ describe("runtime version metadata", () => {
       .run as string;
     expect(discoveryRun).toContain('export LEBOP_LIVE_BIN="$PWD/compiled-live/lebop-linux-x64"');
     expect(discoveryRun).toContain(
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: literal GitHub Actions expression in workflow YAML
       'export LEBOP_LIVE_STAMP="discovery-${{ github.run_id }}-${{ github.run_attempt }}"',
     );
     expect(discoveryRun).toContain("bun scripts/live-discovery-smoke.mjs");
@@ -179,6 +180,7 @@ describe("runtime version metadata", () => {
     const discoveryValidate = discoveryValidateStep.run as string;
     expect(discoveryValidate).toContain("live-discovery-smoke.mjs --validate-report");
     expect(discoveryValidate).toContain(
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: literal shell variable in workflow run script
       'report="docs/local/live-discovery-report-${LEBOP_LIVE_STAMP}.json"',
     );
     expect(discoveryValidate).not.toContain("ls -1t");

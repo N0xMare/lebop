@@ -303,8 +303,8 @@ describe("show read surface", () => {
     expect(r.exitCode, `${r.stdout}\n${r.stderr}`).toBe(0);
     const body = JSON.parse(r.stdout) as { next?: string[]; issue?: { content?: unknown } };
     expect(Array.isArray(body.next)).toBe(true);
-    expect(body.next!.length).toBeGreaterThan(0);
-    expect(body.next!.some((s) => s.includes("comments") || s.includes("set"))).toBe(true);
+    expect(body.next?.length).toBeGreaterThan(0);
+    expect(body.next?.some((s) => s.includes("comments") || s.includes("set"))).toBe(true);
   });
 
   it("show --json completes comment overflow and reports completeness", async () => {
@@ -372,7 +372,8 @@ describe("show read surface", () => {
     };
     const issue = body.issue ?? body;
     const comments = (issue as { comments: { frontmatter: { id: string } }[] }).comments;
-    const completeness = (issue as { completeness: typeof body.completeness }).completeness!;
+    const completeness = (issue as { completeness: NonNullable<typeof body.completeness> })
+      .completeness;
     expect(comments.map((c) => c.frontmatter.id)).toEqual(["show-c-1", "show-c-2"]);
     expect(completeness.comments).toMatchObject({
       complete: true,
@@ -407,7 +408,7 @@ describe("list densified next", () => {
     const body = JSON.parse(r.stdout) as { next?: string[]; count?: number };
     expect(body.count).toBe(0);
     expect(Array.isArray(body.next)).toBe(true);
-    expect(body.next!.length).toBeGreaterThan(0);
+    expect(body.next?.length).toBeGreaterThan(0);
   });
 });
 
@@ -451,7 +452,7 @@ describe("pull read surface", () => {
       expect(body.issues[0]).toMatchObject({ identifier: "TEAM-8", comments: 0 });
       expect(body.issues[0]?.cache_path).toBeUndefined();
       expect(Array.isArray(body.next)).toBe(true);
-      expect(body.next!.length).toBeGreaterThan(0);
+      expect(body.next?.length).toBeGreaterThan(0);
       await expect(
         readFile(join(body.issues[0]?.path ?? "", "comments", "stale.md"), "utf8"),
       ).rejects.toThrow();

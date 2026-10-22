@@ -26,14 +26,14 @@ describe("list due date filters", () => {
     const due = filter.dueDate as { lte?: Date; gte?: Date };
     expect(due.lte).toBeInstanceOf(Date);
     expect(due.gte).toBeInstanceOf(Date);
-    expect(due.lte!.toISOString().startsWith("2030-01-15")).toBe(true);
-    expect(due.gte!.toISOString().startsWith("2020-01-01")).toBe(true);
+    expect(due.lte?.toISOString().startsWith("2030-01-15")).toBe(true);
+    expect(due.gte?.toISOString().startsWith("2020-01-01")).toBe(true);
   });
 
   it("accepts relative Nd for due filters", async () => {
     const filter = await buildIssueFilter({ dueBefore: "7d" }, undefined);
     const due = filter.dueDate as { lte?: Date };
     expect(due.lte).toBeInstanceOf(Date);
-    expect(due.lte!.getTime()).toBeLessThanOrEqual(Date.now());
+    expect(due.lte?.getTime()).toBeLessThanOrEqual(Date.now());
   });
 });
