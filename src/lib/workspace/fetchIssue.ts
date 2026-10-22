@@ -3,7 +3,7 @@
  */
 
 import { listAgentSessionsPage } from "../agentSessions.ts";
-import { type getDocument } from "../documents.ts";
+import type { getDocument } from "../documents.ts";
 import { NotFoundError } from "../errors.ts";
 import { getIssue } from "../issues.ts";
 import {

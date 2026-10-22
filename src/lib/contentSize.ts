@@ -58,11 +58,12 @@ export async function applyContentPolicy(input: ContentPolicyInput): Promise<App
   const maxBytes = input.maxBytes ?? getContentMaxBytes();
   const source = input.text ?? "";
   const originalBytes = utf8ByteLength(source);
-  const wantFile = typeof input.contentFile === "string" && input.contentFile.trim() !== "";
+  const contentFile = typeof input.contentFile === "string" ? input.contentFile.trim() : "";
+  const wantFile = contentFile !== "";
   const wantFull = input.fullContent === true;
 
   if (wantFile) {
-    const abs = resolve(input.contentFile!.trim());
+    const abs = resolve(contentFile);
     await writeContentFile(abs, source);
     const preview = originalBytes <= maxBytes ? source : truncateUtf8Prefix(source, maxBytes).text;
     return {

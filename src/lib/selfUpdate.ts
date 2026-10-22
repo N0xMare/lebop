@@ -142,8 +142,10 @@ export function resolveInstallTarget(opts?: {
     );
   }
 
-  if (opts?.installDir || process.env.LEBOP_INSTALL_DIR) {
-    const dir = opts?.installDir ?? process.env.LEBOP_INSTALL_DIR!;
+  const envInstallDir = process.env.LEBOP_INSTALL_DIR;
+  if (opts?.installDir || envInstallDir) {
+    // The guard guarantees one of them is set; `?? ""` only satisfies the type.
+    const dir = opts?.installDir ?? envInstallDir ?? "";
     return {
       install_target: join(dir, "lebop"),
       current_binary: existsSync(join(dir, "lebop")) ? join(dir, "lebop") : null,

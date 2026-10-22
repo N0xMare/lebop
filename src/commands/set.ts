@@ -20,7 +20,6 @@ import {
 
 /** Inventory fields + local CLI aliases (single authority: CLI_SET_ISSUE_FIELDS). */
 const SUPPORTED_FIELDS = [...CLI_SET_ISSUE_FIELDS, "due-date"] as const;
-type SupportedField = (typeof SUPPORTED_FIELDS)[number];
 /** Canonical update fields (aliases normalized before handleUpdateField). */
 type UpdateField = Exclude<(typeof CLI_SET_ISSUE_FIELDS)[number], "links">;
 const UNSUPPORTED_FIELDS = new Set(["content"]);

@@ -11,7 +11,7 @@ import { getDocument, listDocumentsPage } from "../documents.ts";
 import { ValidationError } from "../errors.ts";
 import { getInitiativeProjectsPage, type InitiativeProjectsPage } from "../initiatives.ts";
 import { getIssue } from "../issues.ts";
-import { type ListedIssue } from "../listIssues.ts";
+import type { ListedIssue } from "../listIssues.ts";
 import type { ConnectionPage } from "../paginate.ts";
 import { type ListedRelationsPage, listRelationsPage } from "../relations.ts";
 import { type ContextFile, markdownJsonBlock } from "../workspaceContextWriter.ts";
