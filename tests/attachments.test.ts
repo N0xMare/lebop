@@ -4,6 +4,11 @@ import { NotFoundError, ValidationError } from "../src/lib/errors.ts";
 let mockRawResponses: Array<{ data: unknown }> = [];
 let calls: Array<{ source: "withClient" | "linear"; query: string; variables: unknown }> = [];
 
+function callVars<T>(call: { variables: unknown } | undefined): T {
+  if (!call) throw new Error("expected a recorded GraphQL call");
+  return call.variables as T;
+}
+
 vi.mock("../src/lib/sdk.ts", () => ({
   withClient: async <T>(fn: (c: unknown) => Promise<T>): Promise<T> =>
     fn({
@@ -159,7 +164,7 @@ describe("updateAttachment", () => {
     });
     const a = await updateAttachment("att-1", { title: "New title" });
     expect(a.title).toBe("New title");
-    expect((calls[0]?.variables as { input: { title?: string; url?: string } }).input).toEqual({
+    expect(callVars<{ input: { title?: string; url?: string } }>(calls[0]).input).toEqual({
       title: "New title",
     });
   });

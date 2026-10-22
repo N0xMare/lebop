@@ -3,6 +3,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 let mockRawResponses: Array<{ data: unknown }> = [];
 let calls: Array<{ query: string; variables: unknown }> = [];
 
+function callVars<T>(call: { variables: unknown } | undefined): T {
+  if (!call) throw new Error("expected a recorded GraphQL call");
+  return call.variables as T;
+}
+
 vi.mock("../src/lib/sdk.ts", () => ({
   withClient: async <T>(fn: (c: unknown) => Promise<T>): Promise<T> =>
     fn({
@@ -45,7 +50,7 @@ describe("getTeam", () => {
     expect(team?.id).toBe("team-uuid-team");
     expect(team?.default_state_id).toBe("state-bl");
     expect(team?.default_state_name).toBe("Backlog");
-    expect((calls[0]?.variables as { key: string }).key).toBe("TEAM");
+    expect(callVars<{ key: string }>(calls[0]).key).toBe("TEAM");
   });
 
   it("resolves by UUID via team(id: $id)", async () => {

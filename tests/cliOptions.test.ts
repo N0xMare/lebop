@@ -13,18 +13,14 @@ describe("parseCliLimit", () => {
     expect(() => parseCliLimit("0")).toThrow(/invalid --limit value "0"/);
   });
 
-  it.each([
-    "1abc",
-    "3.7",
-    "-1",
-    "Infinity",
-    "",
-    "9007199254740993",
-  ])("rejects non-strict limit value %s", (value) => {
-    expect(() => parseCliLimit(value, { zeroMeansInfinity: true })).toThrow(
-      new RegExp(`invalid --limit value "${value}"`),
-    );
-  });
+  it.each(["1abc", "3.7", "-1", "Infinity", "", "9007199254740993"])(
+    "rejects non-strict limit value %s",
+    (value) => {
+      expect(() => parseCliLimit(value, { zeroMeansInfinity: true })).toThrow(
+        new RegExp(`invalid --limit value "${value}"`),
+      );
+    },
+  );
 
   it("enforces bounded workspace limits", () => {
     expect(parseCliLimit("250", { max: 250 })).toBe(250);

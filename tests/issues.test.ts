@@ -3,6 +3,11 @@ import { NotFoundError, ValidationError } from "../src/lib/errors.ts";
 
 let mockResponses: Array<{ data: unknown }> = [];
 let calls: Array<{ query: string; variables: unknown }> = [];
+
+function callVars<T>(call: { variables: unknown } | undefined): T {
+  if (!call) throw new Error("expected a recorded GraphQL call");
+  return call.variables as T;
+}
 let issueLookups: Array<string> = [];
 let issueLookupOverride: ((id: string) => unknown) | null = null;
 let rawRequestOverride: ((q: string, v: unknown) => Promise<unknown>) | null = null;
@@ -222,7 +227,7 @@ describe("createIssue", () => {
     });
 
     await createIssue({ team: "TEAM", title: "T" });
-    const input = (calls[0]?.variables as { input: Record<string, unknown> }).input;
+    const input = callVars<{ input: Record<string, unknown> }>(calls[0]).input;
     expect(input).toEqual({ teamId: "team-uuid", title: "T" });
   });
 
@@ -326,7 +331,7 @@ describe("updateIssue", () => {
       },
     });
     await updateIssue({ identifier: "TEAM-1", team: "TEAM", parent: null });
-    const input = (calls.at(-1)?.variables as { input: Record<string, unknown> }).input;
+    const input = callVars<{ input: Record<string, unknown> }>(calls.at(-1)).input;
     expect(input.parentId).toBeNull();
   });
 });
@@ -354,7 +359,7 @@ describe("updateIssue — round-6 / C3 team auto-derivation from identifier", ()
     // No `team` arg — derivation should pick "TEAM" from "TEAM-1" and let the
     // state name resolve via the mocked team metadata.
     await updateIssue({ identifier: "TEAM-1", state: "Done" });
-    const input = (calls.at(-1)?.variables as { input: Record<string, unknown> }).input;
+    const input = callVars<{ input: Record<string, unknown> }>(calls.at(-1)).input;
     expect(input.stateId).toBe("state-uuid");
   });
 
@@ -369,7 +374,7 @@ describe("updateIssue — round-6 / C3 team auto-derivation from identifier", ()
       },
     });
     await updateIssue({ identifier: "TEAM-1", labels: ["bug"] });
-    const input = (calls.at(-1)?.variables as { input: Record<string, unknown> }).input;
+    const input = callVars<{ input: Record<string, unknown> }>(calls.at(-1)).input;
     expect(input.labelIds).toEqual(["label-uuid"]);
   });
 
@@ -388,7 +393,7 @@ describe("updateIssue — round-6 / C3 team auto-derivation from identifier", ()
     // out `@me`/`me` to the workspace-wide viewer query — see the next
     // test for that path.
     await updateIssue({ identifier: "TEAM-1", assignee: "alice@example.com" });
-    const input = (calls.at(-1)?.variables as { input: Record<string, unknown> }).input;
+    const input = callVars<{ input: Record<string, unknown> }>(calls.at(-1)).input;
     expect(input.assigneeId).toBe("assignee-uuid");
   });
 
@@ -407,7 +412,7 @@ describe("updateIssue — round-6 / C3 team auto-derivation from identifier", ()
     // malformed identifier to prove no team scope is involved.
     issueLookupOverride = (id: string) => ({ id: `uuid-of-${id}` });
     await updateIssue({ identifier: "no-team-shape", assignee: "@me" });
-    const input = (calls.at(-1)?.variables as { input: Record<string, unknown> }).input;
+    const input = callVars<{ input: Record<string, unknown> }>(calls.at(-1)).input;
     expect(input.assigneeId).toBe("viewer-uuid");
   });
 
@@ -422,7 +427,7 @@ describe("updateIssue — round-6 / C3 team auto-derivation from identifier", ()
       },
     });
     await updateIssue({ identifier: "TEAM-1", assignee: "me" });
-    const input = (calls.at(-1)?.variables as { input: Record<string, unknown> }).input;
+    const input = callVars<{ input: Record<string, unknown> }>(calls.at(-1)).input;
     expect(input.assigneeId).toBe("viewer-uuid");
   });
 
@@ -445,7 +450,7 @@ describe("updateIssue — round-6 / C3 team auto-derivation from identifier", ()
       },
     });
     await updateIssue({ identifier: "TEAM-1", assignee: "@me", state: "Done" });
-    const input = (calls.at(-1)?.variables as { input: Record<string, unknown> }).input;
+    const input = callVars<{ input: Record<string, unknown> }>(calls.at(-1)).input;
     // viewerAssigneeId (from the hoist) wins; not the closure's
     // resolveAssigneeId stub which would also return "viewer-uuid".
     expect(input.assigneeId).toBe("viewer-uuid");
@@ -466,7 +471,7 @@ describe("updateIssue — round-6 / C3 team auto-derivation from identifier", ()
     // explicit arg wins. The lib doesn't sanity-check the relationship
     // (Linear's resolver does that via the underlying issue UUID lookup).
     await updateIssue({ identifier: "TEAM-1", team: "OPS", state: "Done" });
-    const input = (calls.at(-1)?.variables as { input: Record<string, unknown> }).input;
+    const input = callVars<{ input: Record<string, unknown> }>(calls.at(-1)).input;
     expect(input.stateId).toBe("state-uuid");
   });
 
@@ -486,7 +491,7 @@ describe("updateIssue — round-6 / C3 team auto-derivation from identifier", ()
       description: "updated",
       estimate: 3,
     });
-    const input = (calls.at(-1)?.variables as { input: Record<string, unknown> }).input;
+    const input = callVars<{ input: Record<string, unknown> }>(calls.at(-1)).input;
     expect(input.priority).toBe(2);
     expect(input.description).toBe("updated");
     expect(input.estimate).toBe(3);
@@ -511,7 +516,7 @@ describe("updateIssue — round-6 / C3 team auto-derivation from identifier", ()
       },
     });
     await updateIssue({ identifier: "TEAM-1", parent: "TEAM-2" });
-    const input = (calls.at(-1)?.variables as { input: Record<string, unknown> }).input;
+    const input = callVars<{ input: Record<string, unknown> }>(calls.at(-1)).input;
     expect(input.parentId).toBe("uuid-of-TEAM-2");
   });
 
@@ -545,7 +550,7 @@ describe("updateIssue — round-6 / C3 team auto-derivation from identifier", ()
       },
     });
     await updateIssue({ identifier: "TEAM-1", assignee: null });
-    const input = (calls.at(-1)?.variables as { input: Record<string, unknown> }).input;
+    const input = callVars<{ input: Record<string, unknown> }>(calls.at(-1)).input;
     expect(input.assigneeId).toBeNull();
   });
 
@@ -575,7 +580,7 @@ describe("updateIssue — round-6 / C3 team auto-derivation from identifier", ()
       },
     });
     await updateIssue({ identifier: "not-team-shape", priority: 1 });
-    const input = (calls.at(-1)?.variables as { input: Record<string, unknown> }).input;
+    const input = callVars<{ input: Record<string, unknown> }>(calls.at(-1)).input;
     expect(input.priority).toBe(1);
   });
 });
@@ -624,7 +629,7 @@ describe("updateIssue with project/milestone/cycle (wave-3 single-call path)", (
     expect(calls.length).toBe(2);
     expect(calls[0]?.query).toContain("ResolveIssueId");
     expect(calls[1]?.query).toContain("issueUpdate");
-    const input = (calls[1]?.variables as { input: Record<string, unknown> }).input;
+    const input = callVars<{ input: Record<string, unknown> }>(calls[1]).input;
     expect(input.projectId).toBeDefined();
     expect(input.projectMilestoneId).toBeDefined();
     expect(input.cycleId).toBeDefined();
@@ -656,7 +661,7 @@ describe("updateIssue with project/milestone/cycle (wave-3 single-call path)", (
       milestone: null,
       cycle: null,
     });
-    const input = (calls.at(-1)?.variables as { input: Record<string, unknown> }).input;
+    const input = callVars<{ input: Record<string, unknown> }>(calls.at(-1)).input;
     expect(input.projectId).toBeNull();
     expect(input.projectMilestoneId).toBeNull();
     expect(input.cycleId).toBeNull();
@@ -705,7 +710,7 @@ describe("updateIssue with project/milestone/cycle (wave-3 single-call path)", (
         team: "TEAM",
         project: "Some Project",
       });
-      const input = (calls.at(-1)?.variables as { input: Record<string, unknown> }).input;
+      const input = callVars<{ input: Record<string, unknown> }>(calls.at(-1)).input;
       // Team-cache hit → no workspace-wide projects(...) query was emitted.
       expect(input.projectId).toBe("team-cache-project-uuid");
       expect(calls.length).toBe(2); // ResolveIssueId + issueUpdate only
@@ -818,7 +823,7 @@ describe("updateIssue with project/milestone/cycle (wave-3 single-call path)", (
     expect(milestoneResolveCalls).toEqual([
       { nameOrId: "Beta", opts: { projectId: "project-current" } },
     ]);
-    const input = (calls.at(-1)?.variables as { input: Record<string, unknown> }).input;
+    const input = callVars<{ input: Record<string, unknown> }>(calls.at(-1)).input;
     expect(input.projectMilestoneId).toBe("uuid-of-milestone-Beta");
   });
 
@@ -912,7 +917,7 @@ describe("updateIssue with project/milestone/cycle (wave-3 single-call path)", (
       cycle: "Cycle 12",
     });
 
-    const input = (calls.at(-1)?.variables as { input: Record<string, unknown> }).input;
+    const input = callVars<{ input: Record<string, unknown> }>(calls.at(-1)).input;
     expect(input.cycleId).toBe("uuid-of-cycle-Cycle 12");
   });
 
