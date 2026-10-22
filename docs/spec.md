@@ -6,7 +6,7 @@ under gitignored `docs/local/` only — they must not override this document for
 released/shipped behavior. If something here disagrees with the code, the
 **code wins** — open a PR fixing this doc.
 
-**Version: 0.0.8** — public product surface for this release (AXI density,
+**Version: 0.0.9** — public product surface for this release (AXI density,
 multi-workspace paths, progressive MCP, expanded Linear surface, content size
 policy). Mid-train design notes under `docs/local/` are not shipped.
 
@@ -71,7 +71,7 @@ declarative authoring).
 
 ## 3. Scope
 
-### In scope (v0.0.8)
+### In scope (v0.0.9)
 
 | Group | Commands |
 |---|---|
@@ -177,7 +177,7 @@ curl -fsSL https://raw.githubusercontent.com/N0xMare/lebop/main/scripts/install.
 The installer downloads the matching GitHub Releases binary for macOS/Linux
 x64/arm64, verifies it against `SHA256SUMS`, and writes it to
 `~/.local/bin/lebop` or `/usr/local/bin/lebop`. Pin a release with
-`LEBOP_VERSION=v0.0.8`.
+`LEBOP_VERSION=v0.0.9`.
 
 From source (Bun required):
 
@@ -204,7 +204,7 @@ sudo ln -sf "$HOME/.bun/bin/lebop" /usr/local/bin/lebop
 Verify:
 
 ```sh
-lebop --version       # 0.0.8
+lebop --version       # 0.0.9
 which lebop           # /opt/homebrew/bin/lebop (or /usr/local/bin/lebop)
 ```
 
@@ -1382,7 +1382,7 @@ SHA256 against `SHA256SUMS`, and installs to the release target:
 
 Source checkouts / `bun link` wrappers are **not** overwritten; the command
 updates the release install path so PATH picks up the new binary after a new
-shell. Pin with `--version v0.0.8` (or `0.0.8`). `--check` only reports
+shell. Pin with `--version v0.0.9` (or `0.0.9`). `--check` only reports
 whether an update is available. `--force` reinstalls even when already current.
 
 This updates **released tags** only — it cannot install unreleased main commits
@@ -1991,7 +1991,7 @@ Facts that cost time on first encounter. **Check here before re-deriving.**
 
 ## 13. Release surface and validation
 
-The shipped surface in §3 is the public product surface for **v0.0.8**. This
+The shipped surface in §3 is the public product surface for **v0.0.9**. This
 section covers agent-oriented CLI + MCP tooling, reviewed publish, context
 materialization, cache/stale-guard workflows, and deliberately skipped
 interactive-only ergonomics (see §3 out-of-scope).
