@@ -1,44 +1,32 @@
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import {
-  normalizeObjectSchema,
-  safeParseAsync,
-} from "@modelcontextprotocol/sdk/server/zod-compat.js";
-import { CallToolRequestSchema } from "@modelcontextprotocol/sdk/types.js";
+import type { McpServer, RegisteredTool, ToolCallback } from "@modelcontextprotocol/server";
+import { z } from "zod";
 import { InvalidArgumentsError } from "../lib/errors.ts";
 import { envelopeError, formatToolError } from "./response.ts";
-import type { ToolHandlerResult } from "./types.ts";
 
-export function installEnvelopeValidator(server: McpServer): void {
-  type RegisteredTool = {
-    enabled?: boolean;
-    inputSchema?: unknown;
-    outputSchema?: unknown;
-    execution?: { taskSupport?: string };
-    handler: (args: unknown, extra: unknown) => Promise<ToolHandlerResult>;
-  };
-  const registry = (server as unknown as { _registeredTools: Record<string, RegisteredTool> })
-    ._registeredTools;
-
-  for (const [name, tool] of Object.entries(registry)) {
+export function installEnvelopeValidator(
+  server: McpServer,
+  tools: ReadonlyMap<string, RegisteredTool>,
+): void {
+  for (const [name, tool] of tools) {
     if (tool.outputSchema !== undefined) {
       throw new Error(
-        `installEnvelopeValidator: tool "${name}" has an outputSchema, but the envelope validator does not replicate the SDK's output-validation branch. Mirror it from @modelcontextprotocol/sdk/server/mcp.js:185-207 before adding outputSchema-bearing tools.`,
+        `installEnvelopeValidator: tool "${name}" has an outputSchema, but the envelope validator does not replicate the SDK's output-validation branch. Add output validation before adding outputSchema-bearing tools.`,
       );
     }
     const taskSupport = tool.execution?.taskSupport;
     if (taskSupport === "required" || taskSupport === "optional") {
       throw new Error(
-        `installEnvelopeValidator: tool "${name}" has taskSupport="${taskSupport}", but the envelope validator does not replicate the SDK's task-handler branches. Mirror them from @modelcontextprotocol/sdk/server/mcp.js:109-122 before adding task-aware tools.`,
+        `installEnvelopeValidator: tool "${name}" has taskSupport="${taskSupport}", but the envelope validator does not support task-aware tools.`,
       );
     }
   }
 
-  server.server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
+  server.server.setRequestHandler("tools/call", async (request, extra) => {
     const name = request.params.name;
     const hasArguments = Object.hasOwn(request.params, "arguments");
     const args = hasArguments ? request.params.arguments : {};
 
-    const tool = registry[name];
+    const tool = tools.get(name);
     if (!tool) {
       return envelopeError("not_found", `Tool ${name} not found`);
     }
@@ -48,15 +36,13 @@ export function installEnvelopeValidator(server: McpServer): void {
 
     let parsedArgs: unknown = args;
     if (tool.inputSchema !== undefined) {
-      const inputObj = normalizeObjectSchema(tool.inputSchema as never);
-      const schemaToParse = inputObj ?? (tool.inputSchema as never);
-      const parseResult = await safeParseAsync(schemaToParse, args);
+      // startMcpServer registers Zod objects; parse with Zod directly to retain
+      // issue codes and paths in lebop's structured invalid_arguments envelope.
+      const parseResult = await z.safeParseAsync(tool.inputSchema as z.ZodType, args);
       if (!parseResult.success) {
-        const errObj = (parseResult as { error?: { issues?: unknown } }).error;
-        const issues = Array.isArray(errObj?.issues) ? errObj.issues : [];
         const err = new InvalidArgumentsError(
           `Invalid arguments for tool ${name}`,
-          issues,
+          parseResult.error.issues,
           "see `issues` for per-field detail (path + zod issue code + expected vs received)",
         );
         return {
@@ -89,7 +75,8 @@ export function installEnvelopeValidator(server: McpServer): void {
     }
 
     try {
-      return await tool.handler(parsedArgs, extra);
+      const handler = tool.handler as ToolCallback<z.ZodType>;
+      return await handler(parsedArgs, extra);
     } catch (err) {
       return {
         content: [{ type: "text", text: formatToolError(err) }],

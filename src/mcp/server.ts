@@ -13,8 +13,9 @@
  * Tool bodies live in `./tools/*`; this module is boot + wiring only.
  */
 
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { McpServer, type RegisteredTool } from "@modelcontextprotocol/server";
+import { StdioServerTransport } from "@modelcontextprotocol/server/stdio";
+import { z } from "zod";
 import { refreshCachedProjectAfterUpdate } from "../lib/cacheRefresh.ts";
 import { resolveConfig } from "../lib/config.ts";
 import { filterToolsByProfile, type McpProfile } from "../lib/mcpProfiles.ts";
@@ -29,7 +30,7 @@ import {
 } from "./common.ts";
 import { installEnvelopeValidator } from "./envelopeValidator.ts";
 import { registerAllMcpTools } from "./tools/index.ts";
-import type { McpServerLike, RegisteredMcpToolDefinition } from "./types.ts";
+import type { McpServerLike, McpToolHandler, RegisteredMcpToolDefinition } from "./types.ts";
 
 export { formatToolError } from "./response.ts";
 
@@ -66,18 +67,17 @@ export async function startMcpServer(options?: { profile?: McpProfile }): Promis
   });
 
   const selected = collectMcpToolDefinitions(profile);
+  const tools = new Map<string, RegisteredTool>();
   // Handlers already wrapped by registerMcpToolSpecs during collect — register as-is.
-  const registrar = server as unknown as {
-    registerTool: (
-      name: string,
-      config: RegisteredMcpToolDefinition["config"],
-      handler: unknown,
-    ) => void;
-  };
   for (const def of selected) {
-    registrar.registerTool(def.name, def.config, def.handler);
+    const tool = server.registerTool(
+      def.name,
+      { ...def.config, inputSchema: z.object(def.config.inputSchema ?? {}) },
+      def.handler as McpToolHandler,
+    );
+    tools.set(def.name, tool);
   }
-  installEnvelopeValidator(server);
+  installEnvelopeValidator(server, tools);
 
   const transport = new StdioServerTransport();
   await server.connect(transport);

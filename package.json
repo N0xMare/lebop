@@ -1,6 +1,6 @@
 {
   "name": "lebop",
-  "version": "0.0.9",
+  "version": "0.1.0",
   "description": "Agentic Linear CLI + MCP server for workspace explore/fetch, reviewed publish, guarded cache edits, and markdown plan workflows.",
   "type": "module",
   "license": "MIT",
@@ -54,14 +54,14 @@
     "bun": ">=1.4.0"
   },
   "devDependencies": {
-    "@biomejs/biome": "2.6.2",
-    "@types/bun": "^1.4.3",
+    "@biomejs/biome": "2.6.5",
+    "@types/bun": "^1.4.4",
     "typescript": "^7.0.2",
-    "vitest": "^5.0.5"
+    "vitest": "^5.1.0"
   },
   "dependencies": {
-    "@linear/sdk": "99.0.0",
-    "@modelcontextprotocol/sdk": "^1.32.1",
+    "@linear/sdk": "101.1.0",
+    "@modelcontextprotocol/server": "^2.4.0",
     "@toon-format/toon": "^4.4.0",
     "chalk": "^6.0.1",
     "commander": "^15.0.0",

@@ -62,12 +62,14 @@ expect(r.stderr).toContain("error[auth_error]:");
 
 ## Pattern: surface contracts
 
-CLI/MCP parity and high-risk behavior rules live in
-`src/lib/toolSurfaceManifest.ts` and `src/lib/toolBehaviorContracts.ts`.
-When adding a command or MCP tool, update the manifest and add focused local
-coverage for the contract it touches. The live surface harness then adds
-semantic assertions for release-critical operations instead of only proving
-that a command was invoked.
+CLI/MCP operation contracts are declared in `src/surface/` and registered on
+`SURFACE_OPERATIONS` in `src/surface/index.ts`. Public inventories in
+`src/lib/toolSurfaceManifest.ts` are derived from those contracts; do not
+hand-edit them. High-risk payload checks live in `src/lib/toolBehaviorContracts.ts`.
+When adding a command or MCP tool, extend the surface contract and add focused
+local coverage for its behavior. The live surface harness then adds semantic
+assertions for release-critical operations instead of only proving that a
+command was invoked.
 
 ## Why spawn the binary?
 

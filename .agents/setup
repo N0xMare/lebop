@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$repo_root"
+node_version="$(cat .node-version)"
+bun_version="1.4.4"
+actionlint_version="1.7.12"
+tools="$HOME/.local/share/lebop-orb"
+mkdir -p "$tools/bin"
+export PATH="$tools/bin:$PATH"
+temp="$(mktemp -d)"
+trap 'rm -rf "$temp"' EXIT
+
+case "$(uname -m)" in
+  x86_64) node_arch=x64; actionlint_arch=amd64 ;;
+  aarch64) node_arch=arm64; actionlint_arch=arm64 ;;
+  *) echo "Unsupported orb architecture" >&2; exit 1 ;;
+esac
+
+echo "[setup] Node $node_version"
+if [[ "$(node --version 2>/dev/null || true)" != "v$node_version" ]]; then
+  asset="node-v$node_version-linux-$node_arch.tar.gz"
+  curl -fsSL "https://nodejs.org/dist/v$node_version/$asset" -o "$temp/$asset"
+  curl -fsSL "https://nodejs.org/dist/v$node_version/SHASUMS256.txt" -o "$temp/checksums"
+  awk -v asset="$asset" '$2 == asset { print }' "$temp/checksums" > "$temp/selected.sha256"
+  test -s "$temp/selected.sha256"
+  (cd "$temp" && sha256sum -c selected.sha256)
+  mkdir -p "$tools/node"
+  tar -xzf "$temp/$asset" --strip-components=1 -C "$tools/node"
+  for command in node npm npx; do
+    ln -sf "$tools/node/bin/$command" "$tools/bin/$command"
+  done
+fi
+
+echo "[setup] Bun $bun_version"
+if [[ "$(bun --version 2>/dev/null || true)" != "$bun_version" ]]; then
+  curl -fsSL https://bun.com/install -o "$temp/install-bun.sh"
+  BUN_INSTALL="$tools/bun" bash "$temp/install-bun.sh" "bun-v$bun_version"
+  ln -sf "$tools/bun/bin/bun" "$tools/bin/bun"
+fi
+
+echo "[setup] actionlint $actionlint_version"
+if [[ "$(actionlint -version 2>/dev/null | head -n 1 || true)" != "$actionlint_version" ]]; then
+  asset="actionlint_${actionlint_version}_linux_${actionlint_arch}.tar.gz"
+  release="https://github.com/rhysd/actionlint/releases/download/v$actionlint_version"
+  curl -fsSL "$release/$asset" -o "$temp/$asset"
+  curl -fsSL "$release/actionlint_${actionlint_version}_checksums.txt" -o "$temp/checksums"
+  awk -v asset="$asset" '$2 == asset { print }' "$temp/checksums" > "$temp/selected.sha256"
+  test -s "$temp/selected.sha256"
+  (cd "$temp" && sha256sum -c selected.sha256)
+  tar -xzf "$temp/$asset" -C "$tools/bin" actionlint
+fi
+
+# Amp and supervised services start in separate login shells after setup.
+if ! grep -Fqx '# lebop orb toolchain' "$HOME/.bash_profile" 2>/dev/null; then
+  printf '\n# lebop orb toolchain\nexport PATH="$HOME/.local/share/lebop-orb/bin:$PATH"\n' >> "$HOME/.bash_profile"
+fi
+
+echo "[setup] Frozen dependencies"
+bun install --frozen-lockfile
+printf '[setup] Ready: Node %s, Bun %s, actionlint %s\n' "$(node --version)" "$(bun --version)" "$(actionlint -version | head -n 1)"

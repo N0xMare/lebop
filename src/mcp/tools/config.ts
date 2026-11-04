@@ -1,9 +1,10 @@
+import type { z } from "zod";
 import type { SurfaceOperationMetadata } from "../../surface/contracts.ts";
 import type { RegisteredMcpToolDefinition } from "../types.ts";
 
 export function mcpToolConfig(
   operation: SurfaceOperationMetadata,
-  inputSchema: Record<string, unknown>,
+  inputSchema: z.ZodRawShape,
 ): RegisteredMcpToolDefinition["config"] {
   if (!operation.mcp) {
     throw new Error(`Surface operation ${operation.id} has no MCP mapping`);

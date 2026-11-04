@@ -69,7 +69,7 @@ function escapeRegExp(value: string): string {
 describe("runtime version metadata", () => {
   it("uses package.json as the single runtime source", () => {
     expect(LEBOP_VERSION).toBe(packageJson.version);
-    expect(packageJson.version).toBe("0.0.9");
+    expect(packageJson.version).toBe("0.1.0");
   });
 
   it("CLI and MCP server do not hardcode independent runtime versions", () => {
@@ -345,6 +345,44 @@ describe("runtime version metadata", () => {
     }
   });
 
+  it.each([
+    {
+      name: "structured error",
+      body: JSON.stringify({
+        error: {
+          code: "auth_error",
+          message:
+            "Rejected lin_api_canary_fixture_secret for fixture@example.com\n::error::injected",
+          hint: "Check the sandbox key",
+        },
+      }),
+      diagnostic: "auth_error",
+    },
+    {
+      name: "non-JSON failure",
+      body: "Unexpected failure: lin_api_canary_fixture_secret fixture@example.com",
+      diagnostic: "no structured error",
+    },
+  ])("canary auth reports a sanitized $name and fails closed", ({ body, diagnostic }) => {
+    const result = runCanaryAuthStep(body, 1);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("canary auth login failed");
+    expect(result.stderr).toContain(diagnostic);
+    expect(`${result.stdout}${result.stderr}`).not.toContain("lin_api_canary_fixture_secret");
+    expect(`${result.stdout}${result.stderr}`).not.toContain("fixture@example.com");
+    expect(result.stderr).not.toMatch(/\n::error::injected/);
+  });
+
+  it("canary auth succeeds without logging login credentials or viewer details", () => {
+    const result = runCanaryAuthStep(
+      JSON.stringify({ viewer: { email: "fixture@example.com" } }),
+      0,
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toBe("");
+  });
+
   it("standalone action-ref checker rejects external uses without @ref", () => {
     const root = join(__dirname, "..");
     const temp = mkdtempSync(join(tmpdir(), "lebop-action-ref-check-"));
@@ -403,3 +441,39 @@ describe("runtime version metadata", () => {
     expect(project).not.toContain("lebop plan apply docs/examples/getting-started");
   });
 });
+
+function runCanaryAuthStep(body: string, exitCode: number) {
+  const workflow = readWorkflow(join(__dirname, ".."), "canary");
+  const script = workflowStep(workflowJob(workflow, "smoke"), "prep isolated LEBOP_HOME + auth")
+    .run as string;
+  const temp = mkdtempSync(join(tmpdir(), "lebop-canary-auth-"));
+  try {
+    mkdirSync(join(temp, "bin"));
+    writeFileSync(
+      join(temp, "bin", "lebop"),
+      `#!/usr/bin/env node
+if (process.argv[3] === "login") {
+  process.stdout.write(process.env.LEBOP_TEST_LOGIN_BODY);
+  process.exit(Number(process.env.LEBOP_TEST_LOGIN_EXIT));
+}
+process.stdout.write(JSON.stringify({workspaces: [{slug: "fixture"}]}));
+`,
+      { mode: 0o755 },
+    );
+    return spawnSync("bash", ["-c", script], {
+      cwd: temp,
+      encoding: "utf8",
+      timeout: 10_000,
+      env: {
+        ...process.env,
+        LEBOP_HOME: join(temp, "home"),
+        TMPDIR: temp,
+        LEBOP_SANDBOX_TOKEN: "lin_api_canary_fixture_secret",
+        LEBOP_TEST_LOGIN_BODY: body,
+        LEBOP_TEST_LOGIN_EXIT: String(exitCode),
+      },
+    });
+  } finally {
+    rmSync(temp, { recursive: true, force: true });
+  }
+}

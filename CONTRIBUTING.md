@@ -6,7 +6,7 @@ together.
 ## Local development
 
 lebop runs on **Bun**, not Node. The `bin/lebop` shebang is
-`#!/usr/bin/env bun`, the test runner targets bun, and the release
+`#!/usr/bin/env bun`, integration tests invoke the CLI through Bun, and the release
 workflow ships standalone bun-compiled binaries — there is no Node build.
 Install Bun (`curl -fsSL https://bun.sh/install | bash`), then:
 
@@ -22,8 +22,14 @@ bun run check:package  # npm package contents + install-script assumptions
 
 Working from a checkout needs Bun 1.4.0+ (`bun.lock` is lockfile format v2,
 which Bun 1.3 cannot read; CI pins 1.4.4). The vitest CLI and `check:package`
-are launched with Node, so the dev gates also need Node 22.12+ on `PATH`
-(vitest 5 requirement; GitHub-hosted runners ship Node 22).
+are launched with Node. Vitest 5 supports `^22.12.0 || ^24.0.0 || >=26.0.0`,
+not every release newer than 22.12. CI provisions Node **26.13.0** from
+`.node-version`; use that version locally for matching results.
+
+In Amp orbs, executable `.agents/setup` installs the pinned Node, Bun, and
+actionlint toolchains plus frozen dependencies. Repeated runs are safe. It
+does not authenticate to Linear or run live tests; those still require an
+explicit sandbox test run with `LEBOP_SANDBOX_TOKEN`.
 
 Those core gates must be green before opening a PR. CI also verifies GitHub
 Actions refs, runs `actionlint`, and builds a compiled binary smoke. If you

@@ -27,6 +27,12 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+
       - name: install latest public release
         env:
           LEBOP_INSTALL_DIR: ${{ runner.temp }}/lebop-public-install
@@ -69,6 +75,10 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: 1.4.4
@@ -96,9 +106,31 @@ jobs:
           }
           trap cleanup_tmp_auth EXIT
           tokenfile="$(mktemp)"
-          printf '%s' "$LEBOP_SANDBOX_TOKEN" > "$tokenfile"
-          ./bin/lebop auth login --token-file "$tokenfile" > /dev/null
           auth_json="$(mktemp)"
+          printf '%s' "$LEBOP_SANDBOX_TOKEN" > "$tokenfile"
+          if ! ./bin/lebop auth login --token-file "$tokenfile" > "$auth_json" 2>&1; then
+            node - "$auth_json" <<'NODE'
+          const fs = require("node:fs");
+          try {
+            const error = JSON.parse(fs.readFileSync(process.argv[2], "utf8")).error;
+            if (!error || typeof error !== "object") throw new Error("missing error");
+            const sanitize = (value) => {
+              if (typeof value !== "string") return undefined;
+              const token = process.env.LEBOP_SANDBOX_TOKEN;
+              return (token ? value.replaceAll(token, "[redacted-token]") : value)
+                .replace(/\blin_[A-Za-z0-9_-]+/g, "[redacted-token]")
+                .replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, "[redacted-email]")
+                .slice(0, 1200);
+            };
+            console.error("canary auth login failed: " + JSON.stringify({
+              code: sanitize(error.code), message: sanitize(error.message), hint: sanitize(error.hint),
+            }));
+          } catch {
+            console.error("canary auth login failed: no structured error; raw output withheld");
+          }
+          NODE
+            exit 1
+          fi
           ./bin/lebop auth list --json > "$auth_json"
           node - "$auth_json" <<'NODE'
           const fs = require("node:fs");

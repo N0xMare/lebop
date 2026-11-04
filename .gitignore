@@ -18,3 +18,6 @@ auth.json
 
 # Local planning / scratch docs. Visible in the worktree, not tracked.
 docs/local/
+
+# Thread-local orb portal registrations are not project configuration.
+.amp/portals/

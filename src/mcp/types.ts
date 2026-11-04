@@ -1,11 +1,12 @@
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/server";
+import type { z } from "zod";
 
 export interface RegisteredMcpToolDefinition {
   name: string;
   config: {
     title?: string;
     description?: string;
-    inputSchema?: Record<string, unknown>;
+    inputSchema?: z.ZodRawShape;
     annotations?: Record<string, unknown>;
   };
   handler: unknown;

@@ -6,7 +6,7 @@ under gitignored `docs/local/` only — they must not override this document for
 released/shipped behavior. If something here disagrees with the code, the
 **code wins** — open a PR fixing this doc.
 
-**Version: 0.0.9** — public product surface for this release (AXI density,
+**Version: 0.1.0** — public product surface for this release (AXI density,
 multi-workspace paths, progressive MCP, expanded Linear surface, content size
 policy). Mid-train design notes under `docs/local/` are not shipped.
 
@@ -71,7 +71,7 @@ declarative authoring).
 
 ## 3. Scope
 
-### In scope (v0.0.9)
+### In scope (v0.1.0)
 
 | Group | Commands |
 |---|---|
@@ -177,7 +177,7 @@ curl -fsSL https://raw.githubusercontent.com/N0xMare/lebop/main/scripts/install.
 The installer downloads the matching GitHub Releases binary for macOS/Linux
 x64/arm64, verifies it against `SHA256SUMS`, and writes it to
 `~/.local/bin/lebop` or `/usr/local/bin/lebop`. Pin a release with
-`LEBOP_VERSION=v0.0.9`.
+`LEBOP_VERSION=v0.1.0`.
 
 From source (Bun required):
 
@@ -204,7 +204,7 @@ sudo ln -sf "$HOME/.bun/bin/lebop" /usr/local/bin/lebop
 Verify:
 
 ```sh
-lebop --version       # 0.0.9
+lebop --version       # 0.1.0
 which lebop           # /opt/homebrew/bin/lebop (or /usr/local/bin/lebop)
 ```
 
@@ -1382,7 +1382,7 @@ SHA256 against `SHA256SUMS`, and installs to the release target:
 
 Source checkouts / `bun link` wrappers are **not** overwritten; the command
 updates the release install path so PATH picks up the new binary after a new
-shell. Pin with `--version v0.0.9` (or `0.0.9`). `--check` only reports
+shell. Pin with `--version v0.1.0` (or `0.1.0`). `--check` only reports
 whether an update is available. `--force` reinstalls even when already current.
 
 This updates **released tags** only — it cannot install unreleased main commits
@@ -1699,7 +1699,7 @@ surface fits. Then rewrite the plan files to reference the keepers'
 | Concept | Plan apply shares? |
 |---|---|
 | `~/.lebop/cache/` | **No.** Plan files live wherever the user puts them; they don't participate in `lebop status` / `lebop push`. |
-| `_server:` snapshot | **No.** Drift detection uses live remote fetch, not a cached snapshot. |
+| `_server:` snapshot | **Separate plan snapshot.** Plan frontmatter persists `_server.updated_at`; guarded updates compare it with a fresh remote `updatedAt`. It is not the cache's full metadata snapshot. |
 | `updatedAt` stale guard | **Yes.** Same mechanism on per-issue update. |
 | Linter (`lebop lint`) | **Yes.** Run on each body; `--strict` gates. |
 | Mutation plumbing | **Yes.** Plan apply composes `issueCreate` + `issueRelationCreate` calls; shares lib code. |
@@ -1991,7 +1991,7 @@ Facts that cost time on first encounter. **Check here before re-deriving.**
 
 ## 13. Release surface and validation
 
-The shipped surface in §3 is the public product surface for **v0.0.9**. This
+The shipped surface in §3 is the public product surface for **v0.1.0**. This
 section covers agent-oriented CLI + MCP tooling, reviewed publish, context
 materialization, cache/stale-guard workflows, and deliberately skipped
 interactive-only ergonomics (see §3 out-of-scope).
@@ -2136,7 +2136,7 @@ Cursor project config (`.cursor/mcp.json`) uses the same command shape:
   registration (like Linear's hosted MCP) is post-release.
 - **Layout**: `src/mcp/server.ts` is boot-only (stdio server + tool
   registration). Tool handlers live in modular `src/mcp/tools/*` and call
-  shared `lib/` / surface contracts. Uses `@modelcontextprotocol/sdk`.
+  shared `lib/` / surface contracts. Uses `@modelcontextprotocol/server`.
 - **Per-call workspace selection**: Linear remote tools accept an optional
   `workspace` arg, except local/auth helpers where a workspace override
   would be misleading (`lint_text`, `cache_gc`, `list_workspaces`,
@@ -2514,7 +2514,7 @@ These are deliberately future work:
 Runtime:
 
 - `@linear/sdk` — Linear's official TS SDK
-- `@modelcontextprotocol/sdk` — MCP server (stdio)
+- `@modelcontextprotocol/server` — MCP server (stdio)
 - `@toon-format/toon` — AXI TOON encoding for CLI machine output
 - `zod` — surface/MCP input schemas
 - `yaml` (eemeli/yaml) — preserves comments/anchors better than `js-yaml`
