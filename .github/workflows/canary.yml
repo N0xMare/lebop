@@ -81,7 +81,7 @@ jobs:
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
-          bun-version: 1.4.4
+          bun-version: 1.4.5
 
       - name: install deps
         run: bun install --frozen-lockfile
@@ -369,7 +369,8 @@ jobs:
             echo "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{\"name\":\"explore_linear_workspace\",\"arguments\":{\"path\":\"/projects\",\"team\":\"${LEBOP_CANARY_TEAM}\",\"limit\":1,\"workspace\":\"${LEBOP_CANARY_WORKSPACE}\"}}}"
             echo "{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"tools/call\",\"params\":{\"name\":\"fetch_linear_workspace\",\"arguments\":{\"target\":\"/issues/${issue_id}\",\"include\":[\"comments\",\"relations\",\"attachments\"],\"depth\":\"shallow\",\"limit\":2,\"to\":\"${mcp_context_dir}\",\"workspace\":\"${LEBOP_CANARY_WORKSPACE}\"}}}"
           # This smoke asserts the broad MCP inventory below; product default remains core.
-          ) | timeout 12 ./bin/lebop mcp --profile full > "$out"
+          # The runner keeps MCP stdin open until all replies arrive (12s deadline), then closes it.
+          ) | node scripts/mcp-stdio-smoke.mjs ./bin/lebop mcp --profile full > "$out"
           mcp_status=$?
           set -e
           if [ "$mcp_status" -ne 0 ]; then

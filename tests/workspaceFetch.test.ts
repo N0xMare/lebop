@@ -1862,6 +1862,33 @@ describe("fetchLinearWorkspace", () => {
     await rm(out, { recursive: true, force: true });
   });
 
+  it("refreshes a nested dossier, removes omitted generated files, and preserves user notes", async () => {
+    const out = await tempDir("lebop-workspace-refresh-");
+    try {
+      await fetchLinearWorkspace({ target: "/issues/TEAM-1", include: ["comments"], to: out });
+      await writeFile(join(out, "issues/notes.md"), "Keep my notes");
+      mocks.getIssue.mockResolvedValue({ ...fullIssue, description: "Updated issue body" });
+
+      const refreshed = await fetchLinearWorkspace({
+        target: "/issues/TEAM-1",
+        include: [],
+        to: out,
+      });
+
+      expect(await readFile(join(out, "issues/TEAM-1/issue.md"), "utf8")).toContain(
+        "Updated issue body",
+      );
+      await expect(readFile(join(out, "issues/TEAM-1/comments.md"), "utf8")).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      expect(await readFile(join(out, "issues/notes.md"), "utf8")).toBe("Keep my notes");
+      const manifest = JSON.parse(await readFile(refreshed.manifest_file, "utf8"));
+      expect(manifest.generated_files).not.toContain("issues/TEAM-1/comments.md");
+    } finally {
+      await rm(out, { recursive: true, force: true });
+    }
+  });
+
   it("refuses to write into a non-empty unrelated explicit directory", async () => {
     const out = await tempDir("lebop-workspace-dirty-");
     await writeFile(join(out, "notes.txt"), "do not overwrite");

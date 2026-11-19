@@ -1,4 +1,4 @@
-import { lstat, mkdir, readdir, readFile, rm } from "node:fs/promises";
+import { lstat, mkdir, readdir, readFile, rm, rmdir } from "node:fs/promises";
 import { basename, dirname, join, relative, resolve as resolvePath, sep } from "node:path";
 import { writeAtomic } from "./cache.ts";
 import { ValidationError } from "./errors.ts";
@@ -258,7 +258,7 @@ async function removeEmptyParents(dir: string, root: string): Promise<void> {
   while (current !== root && isWithinRoot(root, current)) {
     const entries = await readdir(current).catch(() => null);
     if (!entries || entries.length > 0) return;
-    await rm(current, { force: true });
+    await rmdir(current);
     current = dirname(current);
   }
 }

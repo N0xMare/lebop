@@ -31,10 +31,12 @@ const LIST_NOTIFICATIONS = /* GraphQL */ `
         type
         readAt
         createdAt
-        issue {
-          id
-          identifier
-          title
+        ... on IssueNotification {
+          issue {
+            id
+            identifier
+            title
+          }
         }
       }
     }

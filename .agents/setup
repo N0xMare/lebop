@@ -4,7 +4,7 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 node_version="$(cat .node-version)"
-bun_version="1.4.4"
+bun_version="1.4.5"
 actionlint_version="1.7.12"
 tools="$HOME/.local/share/lebop-orb"
 mkdir -p "$tools/bin"

@@ -269,14 +269,21 @@ const GET_AGENT_SESSION_QUERY = /* GraphQL */ `
       issue { id identifier title }
       creator { id name email }
       plan
-      externalLinks
+      externalLinks { label url }
       activities(first: 50) {
         nodes {
           id
           createdAt
           updatedAt
           ephemeral
-          content
+          content {
+            ... on AgentActivityThoughtContent { type body }
+            ... on AgentActivityActionContent { type action parameter result }
+            ... on AgentActivityResponseContent { type body }
+            ... on AgentActivityPromptContent { type body title }
+            ... on AgentActivityErrorContent { type body reasonCode }
+            ... on AgentActivityElicitationContent { type body }
+          }
         }
       }
     }

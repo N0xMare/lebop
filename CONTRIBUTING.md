@@ -21,7 +21,7 @@ bun run check:package  # npm package contents + install-script assumptions
 ```
 
 Working from a checkout needs Bun 1.4.0+ (`bun.lock` is lockfile format v2,
-which Bun 1.3 cannot read; CI pins 1.4.4). The vitest CLI and `check:package`
+which Bun 1.3 cannot read; CI pins 1.4.5). The vitest CLI and `check:package`
 are launched with Node. Vitest 5 supports `^22.12.0 || ^24.0.0 || >=26.0.0`,
 not every release newer than 22.12. CI provisions Node **26.13.0** from
 `.node-version`; use that version locally for matching results.
